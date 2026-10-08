@@ -367,20 +367,19 @@ function removeModel(name: string) {
       <!-- 右栏：供应商详情 -->
       <div v-if="currentProvider" class="provider-detail-panel">
         <div class="detail-header">
-          <div class="detail-name">{{ editForm.name }}</div>
+          <div class="detail-name">
+            {{ editForm.name }}
+            <a-tag class="kind-tag">{{ editForm.kind === "ollama" ? "Ollama" : "OpenAI 兼容" }}</a-tag>
+          </div>
           <div class="detail-description">
             {{ editForm.kind === "ollama" ? "本地 Ollama 服务，代码不出本机" : "OpenAI 兼容远程端点，代码片段将发送至第三方" }}
           </div>
         </div>
 
-        <!-- 名称 / 类型 -->
+        <!-- 名称 -->
         <div class="setting-group">
           <div class="setting-title">名称</div>
           <a-input v-model:value="editForm.name" size="small" style="width: 100%" />
-        </div>
-        <div class="setting-group">
-          <div class="setting-title">协议类型</div>
-          <a-select v-model:value="editForm.kind" size="small" style="width: 100%" :options="KIND_OPTIONS" />
         </div>
 
         <!-- API 端点 -->
@@ -702,6 +701,17 @@ function removeModel(name: string) {
   font-size: 17px;
   font-weight: 600;
   color: var(--text-primary);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.kind-tag {
+  font-size: 11px;
+  line-height: 1.5;
+  font-weight: 400;
+  color: var(--text-secondary);
+  background: var(--bg-input);
+  border: 1px solid var(--border-base);
 }
 .detail-description {
   font-size: 12px;
