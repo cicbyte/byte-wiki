@@ -76,10 +76,7 @@ onUnmounted(() => {
 // ===== 进入/切换项目 =====
 async function enterRepo() {
   loadFailed.value = false;
-  layout.setStatusItems([
-    { key: "view", text: wiki.currentRepo?.name ?? "项目" },
-    { key: "tab", text: tabLabel() },
-  ]);
+  layout.setStatusItems([{ key: "tab", text: tabLabel() }]);
   const info = await wiki.ensureRepo(repoId.value);
   if (!info) {
     loadFailed.value = true;
@@ -97,10 +94,7 @@ watch(
   () => [route.params.id, route.meta.tab],
   () => {
     if (route.path.startsWith("/repo/")) {
-      layout.setStatusItems([
-        { key: "view", text: wiki.currentRepo?.name ?? "项目" },
-        { key: "tab", text: tabLabel() },
-      ]);
+      layout.setStatusItems([{ key: "tab", text: tabLabel() }]);
     }
   },
 );

@@ -14,10 +14,13 @@
  *   color-mix(var(--bg-xxx), transparent var(--wp-panel-alpha,0%)) + backdrop-filter
  *   自行做面板级毛玻璃半透明（变量由 wallpaper store apply 注入）。
  */
-import { onMounted } from "vue";
+import { computed, onMounted } from "vue";
+import { useRoute } from "vue-router";
+import { FolderOutlined } from "@ant-design/icons-vue";
 import { useLayoutStore } from "@/stores/layout";
 import { useThemeStore } from "@/stores/theme";
 import { useWallpaperStore } from "@/stores/wallpaper";
+import { useWikiStore } from "@/stores/wiki";
 import Navbar from "./Navbar.vue";
 import Sidebar from "./Sidebar.vue";
 import MainContent from "./MainContent.vue";
@@ -25,6 +28,13 @@ import MainContent from "./MainContent.vue";
 const layout = useLayoutStore();
 const themeStore = useThemeStore();
 const wallpaper = useWallpaperStore();
+const wiki = useWikiStore();
+const route = useRoute();
+
+/** 项目空间模式：footer 显示当前仓库（菜单已去掉仓库分组） */
+const showRepoBadge = computed(
+  () => route.path.startsWith("/repo/") && !!wiki.currentRepo,
+);
 
 onMounted(() => {
   wallpaper.init();
@@ -58,6 +68,9 @@ onMounted(() => {
               ></span>
             </span>
           </template>
+          <span v-if="showRepoBadge" class="repo-badge" :title="wiki.currentRepo!.path">
+            <FolderOutlined /> {{ wiki.currentRepo!.name }}<em v-if="wiki.currentRepo!.branch">@{{ wiki.currentRepo!.branch }}</em>
+          </span>
           <span class="status-spacer"></span>
           <span class="theme-status">{{ themeStore.resolvedAppearance === 'dark' ? '深色' : '浅色' }}</span>
           <div
@@ -152,6 +165,24 @@ onMounted(() => {
 }
 .status-spacer {
   flex: 1;
+}
+/* 当前仓库（项目空间模式，footer 右侧） */
+.repo-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  color: var(--color-primary);
+  background: var(--color-primary-bg);
+  padding: 2px 10px;
+  border-radius: var(--radius-xs);
+  font-family: "JetBrains Mono", monospace;
+  max-width: 340px;
+  overflow: hidden;
+}
+.repo-badge em {
+  font-style: normal;
+  color: var(--text-secondary);
 }
 .theme-status {
   font-size: 11px;
