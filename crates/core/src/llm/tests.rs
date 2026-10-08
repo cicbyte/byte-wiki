@@ -21,6 +21,7 @@ fn llm_cfg(kind: &str, endpoint: &str) -> LlmConfig {
             embed_model: "mock-embed".into(),
         }],
         active_id: "test".into(),
+        presets_seeded: true,
     }
 }
 
@@ -230,6 +231,7 @@ async fn real_ollama_smoke() {
             embed_model: model,
         }],
         active_id: "real".into(),
+        presets_seeded: true,
     };
     let client = LlmClient::new(&cfg).unwrap();
     let text = client

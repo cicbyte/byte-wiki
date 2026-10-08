@@ -76,6 +76,7 @@ fn svc_with_llm(dir: &Path, base_url: &str) -> AppService {
             embed_model: "mock".into(),
         }],
         active_id: "test".into(),
+        presets_seeded: true,
     })
     .unwrap();
     svc
@@ -247,6 +248,7 @@ async fn real_generate_smoke() {
             embed_model: "nomic-embed-text".into(),
         }],
         active_id: "real".into(),
+        presets_seeded: true,
     })
     .unwrap();
     svc.open_repo(repo.to_str().unwrap()).unwrap();

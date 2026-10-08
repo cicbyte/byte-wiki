@@ -53,12 +53,15 @@ pub struct LlmProvider {
 /// 模型 Provider 配置（FR-09：多供应商，本地 Ollama 与远程 OpenAI 兼容可切换）
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LlmConfig {
-    /// 供应商列表（预置「Ollama 本地」与「OpenAI 兼容」）
+    /// 供应商列表（预置见 [`preset_providers`]）
     #[serde(default = "default_providers")]
     pub providers: Vec<LlmProvider>,
     /// 当前使用的供应商 id
     #[serde(default = "default_active_id")]
     pub active_id: String,
+    /// 预置供应商是否已补齐过（true 后用户删除的预置不再自动复活）
+    #[serde(default)]
+    pub presets_seeded: bool,
 }
 
 impl LlmConfig {
@@ -76,8 +79,8 @@ fn default_ollama_endpoint() -> String {
     "http://localhost:11434".into()
 }
 
-/// 预置供应商：Ollama 本地（默认使用）+ OpenAI 兼容占位（禁用）
-fn default_providers() -> Vec<LlmProvider> {
+/// 内置预置供应商定义（与 byte-voice 的数据库预置对齐 + OpenAI 兼容自定义模板）
+pub fn preset_providers() -> Vec<LlmProvider> {
     vec![
         LlmProvider {
             id: "ollama-local".into(),
@@ -91,6 +94,39 @@ fn default_providers() -> Vec<LlmProvider> {
             embed_model: default_embed_model(),
         },
         LlmProvider {
+            id: "cherry-studio".into(),
+            name: "Cherry Studio".into(),
+            kind: "openai".into(),
+            api_endpoint: "http://127.0.0.1:23333/v1".into(),
+            api_key: String::new(),
+            enabled: true,
+            models: vec!["LongCat-Flash-Chat".into()],
+            chat_model: "LongCat-Flash-Chat".into(),
+            embed_model: String::new(),
+        },
+        LlmProvider {
+            id: "deepseek".into(),
+            name: "DeepSeek".into(),
+            kind: "openai".into(),
+            api_endpoint: "https://api.deepseek.com".into(),
+            api_key: String::new(),
+            enabled: false,
+            models: vec!["deepseek-chat".into(), "deepseek-reasoner".into()],
+            chat_model: "deepseek-chat".into(),
+            embed_model: String::new(),
+        },
+        LlmProvider {
+            id: "mimo".into(),
+            name: "MiMo".into(),
+            kind: "openai".into(),
+            api_endpoint: "https://api.xiaomimimo.com/v1".into(),
+            api_key: String::new(),
+            enabled: false,
+            models: vec![],
+            chat_model: String::new(),
+            embed_model: String::new(),
+        },
+        LlmProvider {
             id: "openai-compat".into(),
             name: "OpenAI 兼容".into(),
             kind: "openai".into(),
@@ -102,6 +138,10 @@ fn default_providers() -> Vec<LlmProvider> {
             embed_model: String::new(),
         },
     ]
+}
+
+fn default_providers() -> Vec<LlmProvider> {
+    preset_providers()
 }
 
 fn default_active_id() -> String {
@@ -122,6 +162,7 @@ impl Default for LlmConfig {
         Self {
             providers: default_providers(),
             active_id: default_active_id(),
+            presets_seeded: false,
         }
     }
 }
@@ -221,5 +262,26 @@ impl Default for PreferencesConfig {
         Self {
             exclude_dirs: default_exclude_dirs(),
         }
+    }
+}
+
+#[cfg(test)]
+mod preset_tests {
+    use super::*;
+
+    #[test]
+    fn presets_cover_required_providers() {
+        let presets = preset_providers();
+        let ids: Vec<&str> = presets.iter().map(|p| p.id.as_str()).collect();
+        for expect in ["ollama-local", "cherry-studio", "deepseek", "mimo", "openai-compat"] {
+            assert!(ids.contains(&expect), "缺预置 {expect}");
+        }
+        // Cherry Studio 端点与默认模型对齐 byte-voice
+        let cherry = presets.iter().find(|p| p.id == "cherry-studio").unwrap();
+        assert_eq!(cherry.api_endpoint, "http://127.0.0.1:23333/v1");
+        assert_eq!(cherry.chat_model, "LongCat-Flash-Chat");
+        // DeepSeek 预置模型
+        let ds = presets.iter().find(|p| p.id == "deepseek").unwrap();
+        assert!(ds.models.iter().any(|m| m == "deepseek-reasoner"));
     }
 }

@@ -74,6 +74,7 @@ fn svc_with_embed(dir: &std::path::Path, base_url: &str) -> AppService {
             embed_model: "mock-embed".into(),
         }],
         active_id: "test".into(),
+        presets_seeded: true,
     })
     .unwrap();
     svc
@@ -310,6 +311,7 @@ async fn real_e2e_smoke() {
             embed_model: "nomic-embed-text:latest".into(),
         }],
         active_id: "real".into(),
+        presets_seeded: true,
     })
     .unwrap();
 
@@ -384,6 +386,7 @@ async fn real_incremental_smoke() {
             embed_model: "nomic-embed-text:latest".into(),
         }],
         active_id: "real".into(),
+        presets_seeded: true,
     })
     .unwrap();
 

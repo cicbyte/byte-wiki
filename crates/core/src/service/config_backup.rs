@@ -10,9 +10,22 @@ impl super::AppService {
         read_config(&self.data_root)
     }
 
-    /// 读取模型 Provider 配置
+    /// 读取模型 Provider 配置（首次访问自动补齐缺失的内置预置供应商）
     pub fn llm_config(&self) -> CoreResult<LlmConfig> {
-        Ok(self.config()?.llm)
+        let mut cfg = self.config()?.llm;
+        if !cfg.presets_seeded {
+            let before = cfg.providers.len();
+            for preset in crate::model::preset_providers() {
+                if !cfg.providers.iter().any(|p| p.id == preset.id) {
+                    cfg.providers.push(preset);
+                }
+            }
+            cfg.presets_seeded = true;
+            // 补齐后落盘（一次性；此后用户删除预置不再复活）
+            let _ = self.set_llm_config(cfg.clone());
+            tracing::info!("预置供应商已补齐：{} → {} 个", before, cfg.providers.len());
+        }
+        Ok(cfg)
     }
 
     /// 保存模型 Provider 配置（即时生效，生成/问答读取时现读）
@@ -278,4 +291,30 @@ fn replace_dir(src: &Path, dst: &Path) -> CoreResult<()> {
     }
     copy_dir_all(src, dst)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod seeding_tests {
+    use super::*;
+    use crate::model::preset_providers;
+
+    #[test]
+    fn llm_config_seeds_presets_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let svc = super::super::AppService::open_at(dir.path().join("app"), dir.path().join("data")).unwrap();
+
+        let cfg = svc.llm_config().unwrap();
+        // 全部预置补齐
+        for p in preset_providers() {
+            assert!(cfg.providers.iter().any(|x| x.id == p.id), "缺 {}", p.id);
+        }
+        assert!(cfg.presets_seeded);
+
+        // 用户删除一个预置后再读：不复活
+        let mut cfg2 = svc.llm_config().unwrap();
+        cfg2.providers.retain(|p| p.id != "mimo");
+        svc.set_llm_config(cfg2).unwrap();
+        let cfg3 = svc.llm_config().unwrap();
+        assert!(!cfg3.providers.iter().any(|p| p.id == "mimo"), "删除的预置不应复活");
+    }
 }
