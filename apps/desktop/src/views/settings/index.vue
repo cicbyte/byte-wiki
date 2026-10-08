@@ -69,16 +69,16 @@ onMounted(() => {
       </ul>
     </aside>
 
-    <!-- 右：分区内容 -->
-    <div class="settings-content">
+    <!-- 右：分区内容（模型分区为全出血布局：无 padding，两栏撑满） -->
+    <div class="settings-content" :class="{ 'content-full': activeTab === 'model' }">
+      <!-- 模型 -->
+      <ModelSection v-if="activeTab === 'model'" />
+
       <!-- 数据 -->
-      <StorageSection v-if="activeTab === 'storage'" />
+      <StorageSection v-else-if="activeTab === 'storage'" />
 
       <!-- 偏好 -->
       <PreferencesSection v-else-if="activeTab === 'preferences'" />
-
-      <!-- 模型 -->
-      <ModelSection v-else-if="activeTab === 'model'" />
 
       <!-- 外观 -->
       <section v-else-if="activeTab === 'appearance'" class="pane pane-appearance">
@@ -178,6 +178,13 @@ onMounted(() => {
   overflow-y: auto;
   padding: var(--spacing-lg) var(--spacing-xl);
   background: var(--bg-base);
+}
+/* 全出血模式（模型分区）：零 padding、不滚动（滚动交给右栏详情），两栏撑满 */
+.settings-content.content-full {
+  padding: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
 }
 .settings-content::-webkit-scrollbar {
   width: 8px;

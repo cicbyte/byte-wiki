@@ -331,9 +331,7 @@ function removeModel(name: string) {
 </script>
 
 <template>
-  <section class="pane model-pane">
-    <h2 class="pane-title">模型</h2>
-
+  <section class="model-pane">
     <div class="model-container">
       <!-- 左栏：供应商列表 -->
       <div class="provider-list-panel">
@@ -567,24 +565,18 @@ function removeModel(name: string) {
 <style scoped>
 .model-pane {
   display: flex;
-  flex-direction: column;
+  flex: 1;
   min-height: 0;
-}
-.pane-title {
-  font-size: 16px;
-  font-weight: 600;
-  color: var(--text-primary);
-  margin-bottom: var(--spacing-md);
+  min-width: 0;
 }
 
-/* 两栏容器 */
+/* 两栏容器（全出血：撑满设置内容区） */
 .model-container {
   display: flex;
   flex: 1;
-  min-height: 480px;
+  min-height: 0;
+  min-width: 0;
   overflow: hidden;
-  border: 1px solid var(--border-card);
-  border-radius: var(--radius-lg);
   background: var(--bg-card);
 }
 
