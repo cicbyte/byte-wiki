@@ -1,0 +1,120 @@
+{
+  "name": "byte-wiki-vscode",
+  "displayName": "Byte-Wiki",
+  "description": "在 VSCode 中插入 byte-wiki 的代码片段与代码模板",
+  "version": "0.2.1",
+  "publisher": "byte-wiki",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/cicbyte/byte-wiki.git"
+  },
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "categories": ["Snippets", "Other"],
+  "icon": "icon.png",
+  "main": "./dist/extension.js",
+  "activationEvents": ["onStartupFinished"],
+  "contributes": {
+    "commands": [
+      { "command": "byteWiki.insertAny", "title": "插入片段或模板", "category": "Byte-Wiki" },
+      { "command": "byteWiki.insertSnippet", "title": "插入片段", "category": "Byte-Wiki" },
+      { "command": "byteWiki.insertTemplate", "title": "插入模板", "category": "Byte-Wiki" },
+      { "command": "byteWiki.captureSelectionSnippet", "title": "存选中为片段", "category": "Byte-Wiki" },
+      { "command": "byteWiki.captureSelectionTemplate", "title": "存选中为模板", "category": "Byte-Wiki" },
+      { "command": "byteWiki.captureFileSnippet", "title": "存文件为片段", "category": "Byte-Wiki" },
+      { "command": "byteWiki.captureFileTemplate", "title": "存文件为模板", "category": "Byte-Wiki" },
+      { "command": "byteWiki.importFolder", "title": "导入为项目", "category": "Byte-Wiki" }
+    ],
+    "submenus": [
+      { "id": "byteWiki.context", "label": "Byte-Wiki" },
+      { "id": "byteWiki.explorer", "label": "Byte-Wiki" }
+    ],
+    "configuration": {
+      "title": "Byte-Wiki",
+      "properties": {
+        "byteWiki.mode": {
+          "type": "string",
+          "enum": ["auto", "cli", "http"],
+          "default": "auto",
+          "enumDescriptions": [
+            "自动：检测到 bs CLI 就用 CLI（零桌面端依赖），否则用 HTTP",
+            "强制 CLI：通过 bs 进程访问本地库（需 bs 在 PATH 或配置 cliPath）",
+            "强制 HTTP：通过桌面端 REST API（需开启 REST 服务）"
+          ],
+          "markdownDescription": "数据访问方式。`auto`（默认）= 检测到 bs CLI 就走 CLI（免开桌面端），否则回退 HTTP。"
+        },
+        "byteWiki.cliPath": {
+          "type": "string",
+          "default": "bs",
+          "markdownDescription": "`bs` CLI 可执行文件路径或命令名（默认 `bs`，假设在 PATH）。CLI/auto 模式使用。"
+        },
+        "byteWiki.baseUrl": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "byte-wiki REST API 地址，如 `http://localhost:3987/api/v1`。在桌面端「设置 → REST API」开启后复制。"
+        },
+        "byteWiki.apiKey": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "REST API Key（桌面端「设置 → REST API」生成）。⚠️ 即便本地访问也需填写（当前后端 `allow_local_no_key` 未生效）。"
+        },
+        "byteWiki.enableTriggers": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "是否在编辑器中启用片段/模板的 trigger 智能补全。"
+        },
+        "byteWiki.matchLanguage": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "补全是否按当前文档语言过滤候选。关闭则纯按 trigger/标题名称匹配（所有语言都作为候选，适合 markdown / 笔记等跨语言场景）。"
+        }
+      }
+    },
+    "menus": {
+      "editor/context": [
+        { "submenu": "byteWiki.context", "group": "byteWiki@1", "when": "editorTextFocus" }
+      ],
+      "byteWiki.context": [
+        { "command": "byteWiki.insertAny", "group": "01_insert@1", "when": "editorTextFocus" },
+        { "command": "byteWiki.insertSnippet", "group": "01_insert@2", "when": "editorTextFocus" },
+        { "command": "byteWiki.insertTemplate", "group": "01_insert@3", "when": "editorTextFocus" },
+        { "command": "byteWiki.captureSelectionSnippet", "group": "02_capture@1", "when": "editorHasSelection" },
+        { "command": "byteWiki.captureSelectionTemplate", "group": "02_capture@2", "when": "editorHasSelection" },
+        { "command": "byteWiki.importFolder", "group": "03_import@1", "when": "workbenchState" }
+      ],
+      "explorer/context": [
+        { "submenu": "byteWiki.explorer", "group": "byteWiki@1" }
+      ],
+      "byteWiki.explorer": [
+        { "command": "byteWiki.captureFileSnippet", "group": "01_capture@1", "when": "!explorerResourceIsFolder && resourceExtname != '.png' && resourceExtname != '.jpg' && resourceExtname != '.jpeg' && resourceExtname != '.gif' && resourceExtname != '.webp' && resourceExtname != '.bmp' && resourceExtname != '.ico' && resourceExtname != '.tiff' && resourceExtname != '.exe' && resourceExtname != '.dll' && resourceExtname != '.so' && resourceExtname != '.zip' && resourceExtname != '.gz' && resourceExtname != '.7z' && resourceExtname != '.rar' && resourceExtname != '.pdf' && resourceExtname != '.mp3' && resourceExtname != '.mp4' && resourceExtname != '.avi' && resourceExtname != '.mov' && resourceExtname != '.mkv'" },
+        { "command": "byteWiki.captureFileTemplate", "group": "01_capture@2", "when": "!explorerResourceIsFolder && resourceExtname != '.png' && resourceExtname != '.jpg' && resourceExtname != '.jpeg' && resourceExtname != '.gif' && resourceExtname != '.webp' && resourceExtname != '.bmp' && resourceExtname != '.ico' && resourceExtname != '.tiff' && resourceExtname != '.exe' && resourceExtname != '.dll' && resourceExtname != '.so' && resourceExtname != '.zip' && resourceExtname != '.gz' && resourceExtname != '.7z' && resourceExtname != '.rar' && resourceExtname != '.pdf' && resourceExtname != '.mp3' && resourceExtname != '.mp4' && resourceExtname != '.avi' && resourceExtname != '.mov' && resourceExtname != '.mkv'" },
+        { "command": "byteWiki.importFolder", "group": "02_import@1", "when": "explorerResourceIsFolder" }
+      ],
+      "commandPalette": [
+        { "command": "byteWiki.insertAny" },
+        { "command": "byteWiki.insertSnippet" },
+        { "command": "byteWiki.insertTemplate" },
+        { "command": "byteWiki.captureSelectionSnippet", "when": "editorHasSelection" },
+        { "command": "byteWiki.captureSelectionTemplate", "when": "editorHasSelection" },
+        { "command": "byteWiki.captureFileSnippet" },
+        { "command": "byteWiki.captureFileTemplate" },
+        { "command": "byteWiki.importFolder" }
+      ]
+    }
+  },
+  "scripts": {
+    "build": "node esbuild.js --production",
+    "dev": "node esbuild.js --watch",
+    "package": "vsce package",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.80.0",
+    "@vscode/vsce": "^2.30.0",
+    "esbuild": "^0.23.0",
+    "typescript": "^5.4.0"
+  }
+}

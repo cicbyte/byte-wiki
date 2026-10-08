@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>byte-wiki</title>
+    <script>
+      // 主题预热：同步、在 CSS 解析前执行，消除首帧 FOUC。
+      // 读 localStorage → 迁移 legacy themeId 结构 → 解析 mode → 注入基础层 CSS 变量 + 区域覆盖；
+      // 非 blue/custom 预设用户首帧用 blue 兜底色板，main.ts 接管后立即修正（几乎无感）。
+      (function () {
+        try {
+          var BLUE = {
+            dark: { primary:"#60a5fa", primaryBg:"rgba(96,165,250,0.15)", colorHover:"rgba(255,255,255,0.05)", primaryBorder:"rgba(96,165,250,0.4)", bgBase:"#0f172a", bgSurface:"#1e293b", bgInput:"#334155", bgElevated:"#273449", textPrimary:"#f1f5f9", textSecondary:"#94a3b8", textTertiary:"#64748b", borderBase:"#334155", borderLight:"#243049" },
+            light:{ primary:"#2563eb", primaryBg:"rgba(37,99,235,0.15)", colorHover:"rgba(15,23,42,0.04)", primaryBorder:"rgba(37,99,235,0.4)", bgBase:"#f8fafc", bgSurface:"#ffffff", bgInput:"#f1f5f9", bgElevated:"#f1f5f9", textPrimary:"#0f172a", textSecondary:"#475569", textTertiary:"#94a3b8", borderBase:"#cbd5e1", borderLight:"#e2e8f0" }
+          };
+          var raw = localStorage.getItem("byte-wiki-theme");
+          var s = raw ? JSON.parse(raw) : null;
+          // 旧 {themeId, mode} 结构 → preset 映射（custom 首帧用 blue 兜底，main.ts 迁移真实自定义色）
+          if (s && s.themeId) {
+            var m = { "calm-blue":"blue", "minimal-green":"emerald", "rust-amber":"amber", "custom":"custom" };
+            s = { preset: m[s.themeId] || "blue", mode: s.mode || "auto", custom: null, regions: { light:{}, dark:{} } };
+          }
+          if (!s || typeof s !== "object" || !s.preset) s = { preset: "blue", mode: "auto", custom: null, regions: { light:{}, dark:{} } };
+
+          var prefMode = s.mode;
+          var mode = prefMode === "light" || prefMode === "dark"
+            ? prefMode
+            : (window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+
+          var p = (s.preset === "custom" && s.custom && s.custom[mode]) ? s.custom[mode] : BLUE[mode];
+          var root = document.documentElement;
+          root.setAttribute("data-theme", mode);
+          var map = {
+            primary:"--color-primary", primaryBg:"--color-primary-bg", colorHover:"--color-hover", primaryBorder:"--color-primary-border",
+            bgBase:"--bg-base-orig", bgSurface:"--bg-surface-orig", bgInput:"--bg-input-orig", bgElevated:"--bg-elevated-orig",
+            textPrimary:"--text-primary", textSecondary:"--text-secondary", textTertiary:"--text-tertiary",
+            borderBase:"--border-base", borderLight:"--border-light"
+          };
+          Object.keys(map).forEach(function (k) { root.style.setProperty(map[k], p[k]); });
+          root.style.setProperty("--accent", p.primary);
+
+          // 区域语义层：仅注入用户覆盖项；未覆盖的由 :root var() 自动跟随基础层
+          var rmap = {
+            "header.bg":"--bg-header-orig", "header.text":"--text-header", "header.textSub":"--text-header-sub",
+            "sider.bg":"--bg-sider-orig", "sider.text":"--text-sider", "sider.textSub":"--text-sider-sub",
+            "footer.bg":"--bg-footer-orig", "footer.text":"--text-footer", "footer.textSub":"--text-footer-sub",
+            "content.bg":"--bg-content-orig", "content.text":"--text-content", "content.textSub":"--text-content-sub",
+            "card.bg":"--bg-card-orig", "card.text":"--text-card", "card.textSub":"--text-card-sub"
+          };
+          if (s.regions && s.regions[mode]) {
+            Object.keys(s.regions[mode]).forEach(function (k) {
+              if (rmap[k]) root.style.setProperty(rmap[k], s.regions[mode][k]);
+            });
+          }
+        } catch (e) { /* 静默，derivation.css + main.ts 兜底 */ }
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

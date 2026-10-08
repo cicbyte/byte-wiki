@@ -1,0 +1,41 @@
+[package]
+name = "byte-wiki-core"
+description = "byte-wiki 核心库：Repo Wiki 索引、生成、RAG 与数据层（CLI/Desktop 共享）"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[features]
+# MCP 服务器（CLI 和桌面端按需启用）
+mcp = ["dep:rmcp", "dep:schemars", "dep:axum", "dep:tokio", "dep:tokio-util"]
+
+[dependencies]
+anyhow.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+rusqlite.workspace = true
+rand = "0.9"
+walkdir = "2"
+chrono = { version = "0.4", features = ["serde"] }
+zip = "2"
+toml = "0.8"
+# 索引仓库时遵循 .gitignore（ripgrep 同源）
+ignore = "0.4"
+regex = "1"
+# LLM 接入（Ollama / OpenAI 兼容端点；调用方自带异步运行时）
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+
+# MCP（feature gate，启用 mcp feature 时才编译）
+rmcp = { workspace = true, optional = true }
+schemars = { workspace = true, optional = true }
+axum = { version = "0.8", features = ["macros"], optional = true }
+tokio = { workspace = true, optional = true }
+tokio-util = { version = "0.7", optional = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
+axum = { version = "0.8", features = ["macros"] }
+tempfile = "3"

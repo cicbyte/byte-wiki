@@ -1,0 +1,205 @@
+/* 全局基础样式。
+ * 注意：色彩/背景/文本/边框变量一律不在此定义，
+ *       它们由 themes/derivation.css 按 [data-theme] 派生。
+ *       此处只放与明暗无关的尺寸/间距/圆角/过渡变量 + reset。
+ */
+
+:root {
+  /* 布局尺寸 */
+  --navbar-height: 45px;
+  --statusbar-height: 48px;
+  --sidebar-width: 60px;
+  --sidebar-width-expanded: 200px;
+
+  /* 间距阶梯（4/8/16/24/32） */
+  --spacing-xs: 4px;
+  --spacing-sm: 8px;
+  --spacing-md: 16px;
+  --spacing-lg: 24px;
+  --spacing-xl: 32px;
+
+  /* 圆角 */
+  --radius-xs: 3px;
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+
+  /* 过渡 */
+  --transition-fast: 120ms ease;
+  --transition-normal: 200ms ease;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+}
+
+body {
+  font-family: "Inter", "PingFang SC", "Microsoft YaHei", sans-serif;
+  background: var(--bg-base);
+  color: var(--text-primary);
+  font-size: 14px;
+}
+
+/* 滚动条（暗色适配） */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border-base);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-primary);
+}
+
+/* ============ Ant Design 全局主题覆盖 ============
+ * Ant Design Vue 4.x 的 ConfigProvider 在主题切换时 CSS-in-JS 不完整更新，
+ * 且命令式 API（Modal.confirm / message）不走组件 context。
+ * 统一用 CSS 变量覆盖所有 antd 组件的色彩，确保跟随 --accent / --gray-* 主题。
+ */
+
+/* --- 输入框/选择器/日期：统一边框 + 背景，移除 focus 蓝色 --- */
+.ant-input,
+.ant-input:focus,
+.ant-input-focused,
+.ant-input-affix-wrapper,
+.ant-input-affix-wrapper:focus,
+.ant-input-affix-wrapper-focused,
+.ant-picker,
+.ant-picker-focused,
+.ant-select .ant-select-selector,
+.ant-select-focused .ant-select-selector,
+.ant-input-number,
+.ant-input-number-focused,
+textarea.ant-input,
+textarea.ant-input:focus {
+  border-color: var(--border-base) !important;
+  box-shadow: none !important;
+}
+
+.ant-input,
+.ant-input-affix-wrapper,
+.ant-input-number,
+.ant-picker,
+.ant-select .ant-select-selector {
+  background-color: var(--bg-input) !important;
+  color: var(--text-primary) !important;
+}
+
+/* --- 下拉菜单/右键菜单 --- */
+.ant-dropdown-menu,
+.ant-select-dropdown,
+.ant-cascader-menu {
+  background-color: var(--bg-elevated) !important;
+}
+.ant-dropdown-menu-item,
+.ant-select-item {
+  color: var(--text-secondary) !important;
+}
+.ant-dropdown-menu-item:hover,
+.ant-select-item-option-active {
+  background-color: var(--bg-input) !important;
+}
+.ant-dropdown-menu-item-selected,
+.ant-select-item-option-selected {
+  color: var(--color-primary) !important;
+  font-weight: 600;
+}
+.ant-dropdown-menu-item-danger {
+  color: var(--color-danger) !important;
+}
+
+/* --- 图片预览（全屏层）：置于自定义标题栏之上，避免与窗口控制按钮（最小化/关闭）重叠 --- */
+.ant-image-preview,
+.ant-image-preview-root {
+  z-index: 2000 !important;
+}
+/* 预览打开时隐藏整个应用根（标题栏的窗口按钮在 stacking 上总浮于预览层，
+   仅靠 z-index 无法盖住，故预览期间直接隐藏 .app-layout，预览层在 body 顶层不受影响） */
+body.asset-preview-open .app-layout {
+  visibility: hidden !important;
+}
+
+/* --- 弹窗 Modal --- */
+.ant-modal-content,
+.ant-modal-header {
+  background-color: var(--bg-card) !important;
+}
+.ant-modal-title,
+.ant-modal-close-icon {
+  color: var(--text-primary) !important;
+}
+.ant-modal-content {
+  border: 1px solid var(--border-card);
+}
+.ant-modal-footer {
+  border-top: 1px solid var(--border-light);
+}
+
+/* --- 标签 Tag --- */
+.ant-tag {
+  background-color: var(--bg-input) !important;
+  border-color: var(--border-light) !important;
+  color: var(--text-secondary) !important;
+}
+
+/* --- 按钮（非主按钮） --- */
+.ant-btn-default {
+  background-color: var(--bg-input) !important;
+  border-color: var(--border-base) !important;
+  color: var(--text-secondary) !important;
+}
+.ant-btn-default:hover {
+  border-color: var(--color-primary) !important;
+  color: var(--color-primary) !important;
+}
+
+/* --- 分页/表格/工具提示等 --- */
+.ant-tooltip-inner {
+  background-color: var(--bg-elevated) !important;
+  color: var(--text-primary) !important;
+}
+.ant-table {
+  background-color: var(--bg-surface) !important;
+  color: var(--text-primary) !important;
+}
+.ant-table-thead > tr > th {
+  background-color: var(--bg-elevated) !important;
+  border-color: var(--border-light) !important;
+  color: var(--text-secondary) !important;
+}
+.ant-table-tbody > tr > td {
+  border-color: var(--border-light) !important;
+}
+.ant-table-tbody > tr:hover > td {
+  background-color: var(--bg-elevated) !important;
+}
+
+/* --- 分隔线 --- */
+.ant-divider {
+  border-color: var(--border-light) !important;
+}
+
+/* --- 空状态 --- */
+.ant-empty-description {
+  color: var(--text-disabled) !important;
+}
+
+/* --- Switch 开关 --- */
+.ant-switch:not(.ant-switch-checked) {
+  background-color: var(--bg-elevated) !important;
+}
