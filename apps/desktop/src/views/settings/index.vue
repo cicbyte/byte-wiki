@@ -17,7 +17,7 @@ import {
   InfoCircleOutlined,
   QuestionCircleOutlined,
   SettingOutlined,
-  RobotOutlined,
+  ApiOutlined,
 } from "@ant-design/icons-vue";
 import AppearanceForm from "./components/AppearanceForm.vue";
 import WallpaperSection from "./components/WallpaperSection.vue";
@@ -36,7 +36,7 @@ const layout = useLayoutStore();
 const tabs = [
   { key: "storage", icon: DatabaseOutlined, label: "数据" },
   { key: "preferences", icon: SettingOutlined, label: "偏好" },
-  { key: "model", icon: RobotOutlined, label: "模型" },
+  { key: "model", icon: ApiOutlined, label: "模型" },
   { key: "appearance", icon: BgColorsOutlined, label: "外观" },
   { key: "help", icon: QuestionCircleOutlined, label: "帮助" },
   { key: "about", icon: InfoCircleOutlined, label: "关于" },

@@ -14,7 +14,8 @@ import {
   PlusOutlined,
   DeleteOutlined,
   SyncOutlined,
-  RobotOutlined,
+  ApiOutlined,
+  CloudServerOutlined,
 } from "@ant-design/icons-vue";
 import { api } from "@/api";
 import type { LlmConfig, LlmProvider } from "@/api/llm";
@@ -42,6 +43,9 @@ const KIND_OPTIONS = [
   { value: "ollama", label: "Ollama（本地，代码不出机）" },
   { value: "openai", label: "OpenAI 兼容（远程 API）" },
 ];
+
+/** 供应商图标：对齐 byte-voice 模型管理（ApiOutlined），远程 API = 云服务 */
+const iconOf = (kind: string) => (kind === "ollama" ? ApiOutlined : CloudServerOutlined);
 
 const providers = computed(() => config.value.providers);
 const currentProvider = computed(() =>
@@ -347,6 +351,9 @@ function removeModel(name: string) {
             :class="{ active: selectedId === p.id }"
             @click="selectProvider(p.id)"
           >
+            <span class="provider-icon" :class="{ dim: !p.enabled }">
+              <component :is="iconOf(p.kind)" />
+            </span>
             <div class="provider-info">
               <div class="provider-name">
                 {{ p.name }}
@@ -367,12 +374,17 @@ function removeModel(name: string) {
       <!-- 右栏：供应商详情 -->
       <div v-if="currentProvider" class="provider-detail-panel">
         <div class="detail-header">
-          <div class="detail-name">
-            {{ editForm.name }}
-            <a-tag class="kind-tag">{{ editForm.kind === "ollama" ? "Ollama" : "OpenAI 兼容" }}</a-tag>
-          </div>
-          <div class="detail-description">
-            {{ editForm.kind === "ollama" ? "本地 Ollama 服务，代码不出本机" : "OpenAI 兼容远程端点，代码片段将发送至第三方" }}
+          <span class="provider-icon large" :class="{ dim: !editForm.enabled }">
+            <component :is="iconOf(editForm.kind)" />
+          </span>
+          <div class="detail-header-info">
+            <div class="detail-name">
+              {{ editForm.name }}
+              <a-tag class="kind-tag">{{ editForm.kind === "ollama" ? "Ollama" : "OpenAI 兼容" }}</a-tag>
+            </div>
+            <div class="detail-description">
+              {{ editForm.kind === "ollama" ? "本地 Ollama 服务，代码不出本机" : "OpenAI 兼容远程端点，代码片段将发送至第三方" }}
+            </div>
           </div>
         </div>
 
@@ -489,7 +501,7 @@ function removeModel(name: string) {
         </div>
         <div class="setting-group detail-actions">
           <button v-if="!isActive" class="storage-btn primary" @click="setActive">
-            <RobotOutlined /> 设为当前使用
+            <ApiOutlined /> 设为当前使用
           </button>
           <span v-else class="in-use-hint">当前生成与问答使用此供应商</span>
           <button class="storage-btn danger-btn" @click="removeProvider">
@@ -500,7 +512,7 @@ function removeModel(name: string) {
 
       <!-- 空状态 -->
       <div v-else class="empty-state">
-        <RobotOutlined style="font-size: 32px; opacity: 0.3" />
+        <ApiOutlined style="font-size: 32px; opacity: 0.3" />
         <p>添加并选择一个供应商查看配置</p>
       </div>
     </div>
@@ -626,6 +638,27 @@ function removeModel(name: string) {
   border-left: 3px solid transparent;
   transition: all var(--transition-fast);
   margin-bottom: 2px;
+}
+/* 供应商图标：与菜单「模型」同源（本地=机器人，远程=云服务） */
+.provider-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-input);
+  color: var(--color-primary);
+  font-size: 14px;
+  flex-shrink: 0;
+}
+.provider-icon.dim {
+  color: var(--text-disabled);
+}
+.provider-icon.large {
+  width: 36px;
+  height: 36px;
+  font-size: 18px;
 }
 .provider-card:hover {
   background: var(--bg-elevated);
