@@ -194,6 +194,12 @@ async function doOpen(path: string) {
     message.success(`已打开仓库：${info.name}`);
     pathInput.value = "";
     indexSummary.value = null;
+    // 打开即加载既有文档清单（含克隆场景扫描回退）与滞后状态
+    await refreshDocs();
+    await refreshStaleness();
+    if (wikiDocs.value.length) {
+      message.info(`已加载既有 Wiki：${wikiDocs.value.length} 篇文档`);
+    }
   } catch (e: any) {
     message.error(typeof e === "string" ? e : "打开仓库失败");
   }
