@@ -18,6 +18,7 @@ import {
   SyncOutlined,
   ClusterOutlined,
   FileAddOutlined,
+  FileTextOutlined,
   MessageOutlined,
   BookOutlined,
   ArrowLeftOutlined,
@@ -333,6 +334,9 @@ const busy = computed(() => generating.value || updating.value);
               <button v-if="wikiDocs.length" class="storage-btn" @click="router.push(`/repo/${repoId}/docs`)">
                 浏览文档（{{ wikiDocs.length }}）
               </button>
+              <button class="storage-btn" @click="router.push('/')">
+                <ArrowLeftOutlined /> 项目列表
+              </button>
             </div>
 
             <!-- 生成进度 -->
@@ -444,8 +448,24 @@ const busy = computed(() => generating.value || updating.value);
       </div>
 
       <!-- ============ 问答 ============ -->
-      <div v-else-if="tab === 'chat'" class="chat-tab">
-        <ChatPanel :repo-path="wiki.currentRepo.path" @open-doc="openDocInDocs" />
+      <div v-else-if="tab === 'chat'" class="chat-wrap">
+        <div class="chat-toolbar">
+          <span class="browse-title">
+            {{ wiki.currentRepo.name }}
+            <em v-if="wiki.currentRepo.branch">@{{ wiki.currentRepo.branch }}</em>
+          </span>
+          <div class="browse-actions">
+            <button class="storage-btn" @click="router.push(`/repo/${repoId}/docs`)">
+              <FileTextOutlined /> 文档
+            </button>
+            <button class="storage-btn" @click="router.push('/')">
+              <ArrowLeftOutlined /> 项目列表
+            </button>
+          </div>
+        </div>
+        <div class="chat-tab">
+          <ChatPanel :repo-path="wiki.currentRepo.path" @open-doc="openDocInDocs" />
+        </div>
       </div>
 
       <!-- ============ 知识卡 ============ -->
@@ -454,6 +474,9 @@ const busy = computed(() => generating.value || updating.value);
           <div class="cards-actions">
             <button class="storage-btn primary" @click="cardModalOpen = true">
               <FileAddOutlined /> 新建知识卡
+            </button>
+            <button class="storage-btn" @click="router.push('/')">
+              <ArrowLeftOutlined /> 项目列表
             </button>
             <span class="hint">cards/ 为人工知识区：重新生成与增量更新不会覆盖，且可被问答检索</span>
           </div>
@@ -665,6 +688,21 @@ const busy = computed(() => generating.value || updating.value);
 }
 
 /* 问答 */
+.chat-wrap {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: var(--spacing-md);
+  gap: var(--spacing-md);
+}
+.chat-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-md);
+  flex-shrink: 0;
+}
 .chat-tab {
   flex: 1;
   min-height: 0;
@@ -672,7 +710,6 @@ const busy = computed(() => generating.value || updating.value);
   border: 1px solid var(--border-card);
   border-radius: var(--radius-lg);
   overflow: hidden;
-  margin: var(--spacing-md);
 }
 
 /* 知识卡 */
