@@ -20,19 +20,35 @@ import {
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useThemeStore } from "@/stores/theme";
 import { useLayoutStore } from "@/stores/layout";
+import { useWikiStore } from "@/stores/wiki";
 
 const route = useRoute();
 const router = useRouter();
 const themeStore = useThemeStore();
 const layout = useLayoutStore();
+const wiki = useWikiStore();
 const q = ref("");
 const appWindow = getCurrentWindow();
 
-/** 面包屑：分组 / 页名 两级（来自 route.meta.group + title） */
+/**
+ * 面包屑（可点层级）：
+ * - 项目空间：项目列表 → 仓库名（均可点返回 /）→ 当前页
+ * - 全局：分组 / 页名（route.meta）
+ */
 const breadcrumbItems = computed(() => {
-  const group = (route.meta.group as string) || "";
   const title = (route.meta.title as string) || "byte-wiki";
-  const items: { label: string }[] = [];
+  if (route.path.startsWith("/repo/")) {
+    const items: { label: string; to?: string }[] = [
+      { label: "项目列表", to: "/" },
+    ];
+    if (wiki.currentRepo) {
+      items.push({ label: wiki.currentRepo.name, to: "/" });
+    }
+    items.push({ label: title });
+    return items;
+  }
+  const group = (route.meta.group as string) || "";
+  const items: { label: string; to?: string }[] = [];
   if (group) items.push({ label: group });
   items.push({ label: title });
   return items;
@@ -57,7 +73,11 @@ const breadcrumbItems = computed(() => {
         <a-breadcrumb-item
           v-for="(item, idx) in breadcrumbItems"
           :key="idx"
-          :class="{ 'crumb-current': idx === breadcrumbItems.length - 1 }"
+          :class="{
+            'crumb-current': idx === breadcrumbItems.length - 1,
+            'crumb-link': !!item.to,
+          }"
+          @click="item.to && router.push(item.to)"
         >
           {{ item.label }}
         </a-breadcrumb-item>
@@ -198,6 +218,15 @@ const breadcrumbItems = computed(() => {
 .breadcrumb :deep(.crumb-current > .ant-breadcrumb-link) {
   color: var(--color-primary);
   font-weight: 600;
+}
+/* 可点上级：hover 主色 + 下划线提示可返回 */
+.breadcrumb :deep(.crumb-link > .ant-breadcrumb-link) {
+  cursor: pointer;
+  transition: color var(--transition-fast);
+}
+.breadcrumb :deep(.crumb-link > .ant-breadcrumb-link:hover) {
+  color: var(--color-primary);
+  text-decoration: underline;
 }
 .icon-btn {
   display: inline-flex;
