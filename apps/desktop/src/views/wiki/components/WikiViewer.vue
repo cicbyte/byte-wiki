@@ -75,6 +75,9 @@ function zoomBy(delta: number) {
 .wiki-viewer {
   display: flex;
   flex-direction: column;
+  flex: 1;
+  width: 100%;
+  min-width: 0;
   height: 100%;
   min-height: 0;
 }
