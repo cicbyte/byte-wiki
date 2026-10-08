@@ -64,11 +64,18 @@ fn make_repo(dir: &Path) -> std::path::PathBuf {
 fn svc_with_llm(dir: &Path, base_url: &str) -> AppService {
     let svc = AppService::open_at(dir.join("app"), dir.join("data")).unwrap();
     svc.set_llm_config(LlmConfig {
-        provider: "ollama".into(),
-        base_url: base_url.into(),
-        chat_model: "mock".into(),
-        embed_model: "mock".into(),
-        api_key: String::new(),
+        providers: vec![crate::model::LlmProvider {
+            id: "test".into(),
+            name: "测试供应商".into(),
+            kind: "ollama".into(),
+            api_endpoint: base_url.into(),
+            api_key: String::new(),
+            enabled: true,
+            models: vec![],
+            chat_model: "mock".into(),
+            embed_model: "mock".into(),
+        }],
+        active_id: "test".into(),
     })
     .unwrap();
     svc
@@ -228,11 +235,18 @@ async fn real_generate_smoke() {
     let repo = make_repo(dir.path());
     let svc = AppService::open_at(dir.path().join("app"), dir.path().join("data")).unwrap();
     svc.set_llm_config(LlmConfig {
-        provider: "ollama".into(),
-        base_url: "http://localhost:11434".into(),
-        chat_model: "openbmb/minicpm5:latest".into(),
-        embed_model: "nomic-embed-text".into(),
-        api_key: String::new(),
+        providers: vec![crate::model::LlmProvider {
+            id: "real".into(),
+            name: "Ollama 本地".into(),
+            kind: "ollama".into(),
+            api_endpoint: "http://localhost:11434".into(),
+            api_key: String::new(),
+            enabled: true,
+            models: vec![],
+            chat_model: "openbmb/minicpm5:latest".into(),
+            embed_model: "nomic-embed-text".into(),
+        }],
+        active_id: "real".into(),
     })
     .unwrap();
     svc.open_repo(repo.to_str().unwrap()).unwrap();

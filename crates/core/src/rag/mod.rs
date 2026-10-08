@@ -72,13 +72,13 @@ impl AppService {
         let chunked = chunks.len();
 
         // 2) 批量 embed
-        let cfg = self.llm_config()?;
-        if cfg.embed_model.trim().is_empty() {
+        let provider = self.active_llm()?;
+        if provider.embed_model.trim().is_empty() {
             return Err(CoreError::Other(anyhow::anyhow!(
                 "未配置 embedding 模型（设置 → 模型）"
             )));
         }
-        let client = LlmClient::new(&cfg)?;
+        let client = LlmClient::for_provider(&provider)?;
         let mut embedded = 0usize;
         let mut rows: Vec<(String, String, Vec<u8>, i64)> = Vec::with_capacity(chunks.len());
         for batch in chunks.chunks(EMBED_BATCH) {
@@ -118,8 +118,7 @@ impl AppService {
         let Some(repo) = self.db.get_repo_by_path(&canon)? else {
             return Err(CoreError::Other(anyhow::anyhow!("仓库未登记：{repo_path}")));
         };
-        let cfg = self.llm_config()?;
-        let client = LlmClient::new(&cfg)?;
+        let client = LlmClient::new(&self.llm_config()?)?;
         let q_vec = client
             .embed(&[query.to_string()])
             .await?
@@ -170,8 +169,7 @@ impl AppService {
             ctx.push_str(&piece);
         }
 
-        let cfg = self.llm_config()?;
-        let client = LlmClient::new(&cfg)?;
+        let client = LlmClient::new(&self.llm_config()?)?;
         let mut messages: Vec<crate::llm::ChatMessage> =
             vec![crate::llm::ChatMessage::system(CHAT_SYSTEM_PROMPT)];
         for (role, content) in history.iter().take(8) {

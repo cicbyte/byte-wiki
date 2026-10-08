@@ -6,7 +6,7 @@
 //!
 //! 流式实现用 `Response::chunk()` 逐块读取 + 行缓冲解析，无额外依赖。
 
-use crate::model::LlmConfig;
+use crate::model::{LlmConfig, LlmProvider};
 use crate::{CoreError, CoreResult};
 
 /// 对话消息（role: system / user / assistant）
@@ -46,17 +46,29 @@ pub struct ChatOutcome {
 /// LLM 客户端（只读配置，可复用；无内部状态）
 pub struct LlmClient {
     http: reqwest::Client,
-    cfg: LlmConfig,
+    cfg: LlmProvider,
 }
 
 impl LlmClient {
+    /// 按当前使用的供应商创建
     pub fn new(cfg: &LlmConfig) -> CoreResult<Self> {
+        let Some(p) = cfg.active() else {
+            return Err(CoreError::Other(anyhow::anyhow!(
+                "未找到当前使用的供应商（active_id={}）",
+                cfg.active_id
+            )));
+        };
+        Self::for_provider(p)
+    }
+
+    /// 按指定供应商创建
+    pub fn for_provider(p: &LlmProvider) -> CoreResult<Self> {
         let http = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(600))
             .connect_timeout(std::time::Duration::from_secs(10))
             .build()
             .map_err(|e| CoreError::Other(anyhow::anyhow!("HTTP 客户端创建失败：{e}")))?;
-        Ok(Self { http, cfg: cfg.clone() })
+        Ok(Self { http, cfg: p.clone() })
     }
 
     /// 非流式对话
@@ -70,7 +82,7 @@ impl LlmClient {
         messages: &[ChatMessage],
         opts: &ChatOptions,
     ) -> CoreResult<ChatOutcome> {
-        match self.cfg.provider.as_str() {
+        match self.cfg.kind.as_str() {
             "ollama" => self.ollama_chat(messages, opts).await,
             "openai" => self.openai_chat(messages, opts).await,
             other => Err(unknown_provider(other)),
@@ -84,7 +96,7 @@ impl LlmClient {
         opts: &ChatOptions,
         on_delta: &(dyn Fn(&str) + Send + Sync),
     ) -> CoreResult<ChatOutcome> {
-        match self.cfg.provider.as_str() {
+        match self.cfg.kind.as_str() {
             "ollama" => self.ollama_chat_stream(messages, opts, on_delta).await,
             "openai" => self.openai_chat_stream(messages, opts, on_delta).await,
             other => Err(unknown_provider(other)),
@@ -96,7 +108,7 @@ impl LlmClient {
         if texts.is_empty() {
             return Ok(vec![]);
         }
-        match self.cfg.provider.as_str() {
+        match self.cfg.kind.as_str() {
             "ollama" => self.ollama_embed(texts).await,
             "openai" => self.openai_embed(texts).await,
             other => Err(unknown_provider(other)),
@@ -299,12 +311,12 @@ impl LlmClient {
 
     /// ollama 端点（base_url 直拼）
     fn endpoint(&self, path: &str) -> String {
-        format!("{}{}", self.cfg.base_url.trim_end_matches('/'), path)
+        format!("{}{}", self.cfg.api_endpoint.trim_end_matches('/'), path)
     }
 
     /// openai 兼容端点（base_url 缺 /v1 时补上）
     fn endpoint_openai(&self, path: &str) -> String {
-        let base = self.cfg.base_url.trim_end_matches('/');
+        let base = self.cfg.api_endpoint.trim_end_matches('/');
         if base.ends_with("/v1") {
             format!("{base}{path}")
         } else {

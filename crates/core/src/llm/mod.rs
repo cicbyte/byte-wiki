@@ -10,7 +10,7 @@ mod tests;
 
 pub use client::{ChatMessage, ChatOptions, ChatOutcome, LlmClient};
 
-use crate::model::LlmConfig;
+use crate::model::{LlmConfig, LlmProvider};
 use crate::{CoreError, CoreResult};
 
 /// Provider 探测结果
@@ -20,13 +20,24 @@ pub struct ProbeResult {
     pub models: Vec<String>,
 }
 
-/// 探测 Provider 可达性
-///
-/// - ollama：`GET {base_url}/api/tags`
-/// - openai：`GET {base_url}/v1/models`（base_url 已含 /v1 时不重复拼）
+/// 探测供应商可达性（当前使用的 provider）
 pub async fn probe(cfg: &LlmConfig) -> CoreResult<ProbeResult> {
-    let base = cfg.base_url.trim_end_matches('/');
-    let url = match cfg.provider.as_str() {
+    let Some(p) = cfg.active() else {
+        return Err(CoreError::Other(anyhow::anyhow!(
+            "未找到当前使用的供应商（active_id={}）",
+            cfg.active_id
+        )));
+    };
+    probe_provider(p).await
+}
+
+/// 探测指定供应商可达性（设置页「检测」按钮）
+///
+/// - ollama：`GET {api_endpoint}/api/tags`
+/// - openai：`GET {api_endpoint}/v1/models`（endpoint 已含 /v1 时不重复拼）
+pub async fn probe_provider(p: &LlmProvider) -> CoreResult<ProbeResult> {
+    let base = p.api_endpoint.trim_end_matches('/');
+    let url = match p.kind.as_str() {
         "ollama" => format!("{base}/api/tags"),
         "openai" => {
             if base.ends_with("/v1") {
@@ -47,8 +58,8 @@ pub async fn probe(cfg: &LlmConfig) -> CoreResult<ProbeResult> {
         .build()
         .map_err(|e| CoreError::Other(anyhow::anyhow!("HTTP 客户端创建失败：{e}")))?;
     let mut req = client.get(&url);
-    if !cfg.api_key.is_empty() {
-        req = req.bearer_auth(&cfg.api_key);
+    if !p.api_key.is_empty() {
+        req = req.bearer_auth(&p.api_key);
     }
     let resp = req
         .send()

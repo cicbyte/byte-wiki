@@ -5,7 +5,7 @@
 
 pub mod config;
 
-pub use config::{ApiConfig, AppConfig, BackupConfig, LlmConfig, PreferencesConfig};
+pub use config::{ApiConfig, AppConfig, BackupConfig, LlmConfig, LlmProvider, PreferencesConfig};
 
 #[cfg(test)]
 mod tests {

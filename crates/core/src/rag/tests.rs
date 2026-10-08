@@ -2,7 +2,7 @@
 //! 分块、重建、检索排序、空库与降级路径。
 
 use super::*;
-use crate::model::LlmConfig;
+use crate::model::{LlmConfig, LlmProvider};
 use crate::service::AppService;
 
 use axum::routing::post;
@@ -62,11 +62,18 @@ fn make_repo_with_wiki(dir: &std::path::Path) -> std::path::PathBuf {
 fn svc_with_embed(dir: &std::path::Path, base_url: &str) -> AppService {
     let svc = AppService::open_at(dir.join("app"), dir.join("data")).unwrap();
     svc.set_llm_config(LlmConfig {
-        provider: "ollama".into(),
-        base_url: base_url.into(),
-        chat_model: "mock".into(),
-        embed_model: "mock-embed".into(),
-        api_key: String::new(),
+        providers: vec![LlmProvider {
+            id: "test".into(),
+            name: "测试供应商".into(),
+            kind: "ollama".into(),
+            api_endpoint: base_url.into(),
+            api_key: String::new(),
+            enabled: true,
+            models: vec![],
+            chat_model: "mock".into(),
+            embed_model: "mock-embed".into(),
+        }],
+        active_id: "test".into(),
     })
     .unwrap();
     svc
@@ -291,11 +298,18 @@ async fn real_e2e_smoke() {
     // 2) 服务 + 真实模型配置
     let svc = AppService::open_at(tmp.path().join("app"), tmp.path().join("data")).unwrap();
     svc.set_llm_config(LlmConfig {
-        provider: "ollama".into(),
-        base_url: "http://localhost:11434".into(),
-        chat_model: "qwen3.5:9b".into(),
-        embed_model: "nomic-embed-text:latest".into(),
-        api_key: String::new(),
+        providers: vec![LlmProvider {
+            id: "real".into(),
+            name: "Ollama 本地".into(),
+            kind: "ollama".into(),
+            api_endpoint: "http://localhost:11434".into(),
+            api_key: String::new(),
+            enabled: true,
+            models: vec![],
+            chat_model: "qwen3.5:9b".into(),
+            embed_model: "nomic-embed-text:latest".into(),
+        }],
+        active_id: "real".into(),
     })
     .unwrap();
 
@@ -358,11 +372,18 @@ async fn real_incremental_smoke() {
 
     let svc = AppService::open_at(tmp.path().join("app"), tmp.path().join("data")).unwrap();
     svc.set_llm_config(LlmConfig {
-        provider: "ollama".into(),
-        base_url: "http://localhost:11434".into(),
-        chat_model: "qwen3.5:9b".into(),
-        embed_model: "nomic-embed-text:latest".into(),
-        api_key: String::new(),
+        providers: vec![LlmProvider {
+            id: "real".into(),
+            name: "Ollama 本地".into(),
+            kind: "ollama".into(),
+            api_endpoint: "http://localhost:11434".into(),
+            api_key: String::new(),
+            enabled: true,
+            models: vec![],
+            chat_model: "qwen3.5:9b".into(),
+            embed_model: "nomic-embed-text:latest".into(),
+        }],
+        active_id: "real".into(),
     })
     .unwrap();
 

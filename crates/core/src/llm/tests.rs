@@ -4,7 +4,25 @@
 use std::net::SocketAddr;
 
 use crate::llm::client::{ChatMessage, LlmClient};
-use crate::model::LlmConfig;
+use crate::model::{LlmConfig, LlmProvider};
+
+/// 单供应商测试配置
+fn llm_cfg(kind: &str, endpoint: &str) -> LlmConfig {
+    LlmConfig {
+        providers: vec![LlmProvider {
+            id: "test".into(),
+            name: "测试供应商".into(),
+            kind: kind.into(),
+            api_endpoint: endpoint.into(),
+            api_key: "sk-test".into(),
+            enabled: true,
+            models: vec![],
+            chat_model: "mock-model".into(),
+            embed_model: "mock-embed".into(),
+        }],
+        active_id: "test".into(),
+    }
+}
 
 use axum::{
     http::StatusCode,
@@ -94,20 +112,12 @@ async fn mock_openai_embeddings(body: String) -> Json<serde_json::Value> {
     }))
 }
 
-fn cfg_for(base: &str, provider: &str) -> LlmConfig {
-    LlmConfig {
-        provider: provider.into(),
-        base_url: base.into(),
-        chat_model: "mock-model".into(),
-        embed_model: "mock-embed".into(),
-        api_key: "sk-test".into(),
-    }
-}
+
 
 #[tokio::test]
 async fn ollama_chat_non_stream() {
     let base = start_mock().await;
-    let client = LlmClient::new(&cfg_for(&base, "ollama")).unwrap();
+    let client = LlmClient::new(&llm_cfg("ollama", &base)).unwrap();
     let text = client
         .chat(&[ChatMessage::user("hi")], &Default::default())
         .await
@@ -118,7 +128,7 @@ async fn ollama_chat_non_stream() {
 #[tokio::test]
 async fn ollama_chat_stream_collects_deltas() {
     let base = start_mock().await;
-    let client = LlmClient::new(&cfg_for(&base, "ollama")).unwrap();
+    let client = LlmClient::new(&llm_cfg("ollama", &base)).unwrap();
     let deltas: std::sync::Mutex<Vec<String>> = Default::default();
     let out = client
         .chat_stream(
@@ -137,7 +147,7 @@ async fn ollama_chat_stream_collects_deltas() {
 #[tokio::test]
 async fn openai_chat_stream_sse() {
     let base = start_mock().await;
-    let client = LlmClient::new(&cfg_for(&base, "openai")).unwrap();
+    let client = LlmClient::new(&llm_cfg("openai", &base)).unwrap();
     let text = client
         .chat(&[ChatMessage::user("hi")], &Default::default())
         .await
@@ -162,27 +172,27 @@ async fn openai_chat_stream_sse() {
 #[tokio::test]
 async fn embed_both_providers() {
     let base = start_mock().await;
-    let ollama = LlmClient::new(&cfg_for(&base, "ollama")).unwrap();
+    let ollama = LlmClient::new(&llm_cfg("ollama", &base)).unwrap();
     let vecs = ollama.embed(&["a".into(), "b".into()]).await.unwrap();
     assert_eq!(vecs.len(), 2);
     assert_eq!(vecs[0], vec![0.1, 0.2, 0.3]);
 
-    let openai = LlmClient::new(&cfg_for(&base, "openai")).unwrap();
+    let openai = LlmClient::new(&llm_cfg("openai", &base)).unwrap();
     let vecs = openai.embed(&["x".into()]).await.unwrap();
     assert_eq!(vecs, vec![vec![0.4, 0.5]]);
 }
 
 #[tokio::test]
 async fn empty_embed_input_is_noop() {
-    let client = LlmClient::new(&cfg_for("http://127.0.0.1:1", "ollama")).unwrap();
+    let client = LlmClient::new(&llm_cfg("ollama", "http://127.0.0.1:1")).unwrap();
     assert!(client.embed(&[]).await.unwrap().is_empty());
 }
 
 #[tokio::test]
 async fn http_error_maps_to_message() {
     let base = start_mock().await;
-    let mut cfg = cfg_for(&base, "ollama");
-    cfg.base_url = format!("{base}/err");
+    let mut cfg = llm_cfg("ollama", &base);
+    cfg.providers[0].api_endpoint = format!("{base}/err");
     let client = LlmClient::new(&cfg).unwrap();
     let err = client
         .chat(&[ChatMessage::user("hi")], &Default::default())
@@ -193,7 +203,7 @@ async fn http_error_maps_to_message() {
 
 #[tokio::test]
 async fn unknown_provider_rejected() {
-    let client = LlmClient::new(&cfg_for("http://127.0.0.1:1", "anthropic")).unwrap();
+    let client = LlmClient::new(&llm_cfg("anthropic", "http://127.0.0.1:1")).unwrap();
     let err = client
         .chat(&[ChatMessage::user("hi")], &Default::default())
         .await
@@ -208,11 +218,18 @@ async fn unknown_provider_rejected() {
 async fn real_ollama_smoke() {
     let model = std::env::var("OLLAMA_SMOKE_MODEL").unwrap_or_else(|_| "openbmb/minicpm5:latest".into());
     let cfg = LlmConfig {
-        provider: "ollama".into(),
-        base_url: "http://localhost:11434".into(),
-        chat_model: model.clone(),
-        embed_model: model,
-        api_key: String::new(),
+        providers: vec![LlmProvider {
+            id: "real".into(),
+            name: "Ollama".into(),
+            kind: "ollama".into(),
+            api_endpoint: "http://localhost:11434".into(),
+            api_key: String::new(),
+            enabled: true,
+            models: vec![],
+            chat_model: model.clone(),
+            embed_model: model,
+        }],
+        active_id: "real".into(),
     };
     let client = LlmClient::new(&cfg).unwrap();
     let text = client

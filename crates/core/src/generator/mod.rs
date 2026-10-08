@@ -134,8 +134,8 @@ impl AppService {
         }
 
         // ---- 5）仅重生成受影响模块 ----
-        let cfg = self.llm_config()?;
-        let client = LlmClient::new(&cfg)?;
+        let provider = self.active_llm()?;
+        let client = LlmClient::for_provider(&provider)?;
         let mut tokens = (0u64, 0u64);
         let to_regenerate: Vec<&ModulePlan> = plan
             .modules
@@ -150,7 +150,7 @@ impl AppService {
                 total,
                 format!("更新模块文档：{}", module.name),
             ));
-            let (content, out) = self.generate_module_doc(&client, root, module, &cfg.chat_model).await?;
+            let (content, out) = self.generate_module_doc(&client, root, module, &provider.chat_model).await?;
             tokens.0 += out.prompt_tokens;
             tokens.1 += out.completion_tokens;
             docs.insert(module.name.clone(), content);
@@ -164,7 +164,7 @@ impl AppService {
 
         // ---- 7）组装 + 向量重建 ----
         on_event(ev("assembling", 0, 0, "写入 .bytewiki/"));
-        let output_dir = self.assemble_wiki(&canon, repo.id, &plan, &docs, &arch, &cfg.chat_model)?;
+        let output_dir = self.assemble_wiki(&canon, repo.id, &plan, &docs, &arch, &provider.chat_model)?;
         match self.rebuild_embeddings(&canon, &|m| on_event(ev("embedding", 0, 0, m))).await {
             Ok(s) => tracing::info!("增量更新后向量重建：{} 块", s.embedded),
             Err(e) => {
@@ -219,9 +219,9 @@ impl AppService {
         on_event(ev("planning", 0, 0, format!("规划文档结构：{} 个模块", summary.modules.len())));
         let plan = self.build_plan(repo.id, &summary)?;
 
-        // LLM 客户端（读当前配置）
-        let cfg = self.llm_config()?;
-        let client = LlmClient::new(&cfg)?;
+        // LLM 客户端（当前使用的供应商）
+        let provider = self.active_llm()?;
+        let client = LlmClient::for_provider(&provider)?;
 
         // ---- 阶段 3：逐模块生成（拓扑序：被依赖者先生成）----
         let mut tokens = (0u64, 0u64);
@@ -235,7 +235,7 @@ impl AppService {
                 format!("生成模块文档：{}", module.name),
             ));
             let (content, out) = self
-                .generate_module_doc(&client, root, &module, &cfg.chat_model)
+                .generate_module_doc(&client, root, &module, &provider.chat_model)
                 .await?;
             tokens.0 += out.prompt_tokens;
             tokens.1 += out.completion_tokens;
@@ -250,7 +250,7 @@ impl AppService {
 
         // ---- 阶段 4：组装落盘（全量成功后原子替换）----
         on_event(ev("assembling", 0, 0, "写入 .bytewiki/"));
-        let output_dir = self.assemble_wiki(&canon, repo.id, &plan, &docs, &arch, &cfg.chat_model)?;
+        let output_dir = self.assemble_wiki(&canon, repo.id, &plan, &docs, &arch, &provider.chat_model)?;
 
         // ---- 阶段 5：向量索引（best-effort：Provider 不可用时仅告警，不阻塞生成）----
         on_event(ev("embedding", 0, 0, "重建向量索引"));

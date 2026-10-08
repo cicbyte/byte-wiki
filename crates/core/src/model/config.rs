@@ -20,32 +20,92 @@ pub struct AppConfig {
     pub preferences: PreferencesConfig,
 }
 
-/// 模型 Provider 配置（FR-09：本地 Ollama 与远程 OpenAI 兼容 API 可切换）
+/// 模型供应商（参考 byte-voice：多供应商列表，单个生效）
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LlmConfig {
-    /// provider 类型：ollama / openai（OpenAI 兼容远程端点）
-    #[serde(default = "default_llm_provider")]
-    pub provider: String,
-    /// 服务基址（ollama 如 http://localhost:11434；openai 兼容如 https://host/v1）
-    #[serde(default = "default_llm_base_url")]
-    pub base_url: String,
-    /// 对话/生成模型
-    #[serde(default = "default_chat_model")]
-    pub chat_model: String,
-    /// embedding 模型（RAG 向量化）
-    #[serde(default = "default_embed_model")]
-    pub embed_model: String,
-    /// 远程模式 API Key（ollama 留空）
+pub struct LlmProvider {
+    /// 唯一 id（稳定标识，配置引用用）
+    pub id: String,
+    /// 显示名（如「Ollama 本地」「DeepSeek」）
+    pub name: String,
+    /// 协议类型：ollama / openai（OpenAI 兼容端点）
+    #[serde(default = "default_provider_kind")]
+    pub kind: String,
+    /// API 端点（ollama 默认 http://localhost:11434；openai 兼容如 https://host/v1）
+    #[serde(default = "default_ollama_endpoint")]
+    pub api_endpoint: String,
+    /// API 密钥（ollama 留空）
     #[serde(default)]
     pub api_key: String,
+    /// 是否启用（禁用后不可被设为当前使用）
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// 可用模型列表（手动添加或「获取模型」拉取）
+    #[serde(default)]
+    pub models: Vec<String>,
+    /// 默认对话/生成模型
+    #[serde(default)]
+    pub chat_model: String,
+    /// 默认 embedding 模型（RAG 向量化）
+    #[serde(default)]
+    pub embed_model: String,
 }
 
-fn default_llm_provider() -> String {
+/// 模型 Provider 配置（FR-09：多供应商，本地 Ollama 与远程 OpenAI 兼容可切换）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LlmConfig {
+    /// 供应商列表（预置「Ollama 本地」与「OpenAI 兼容」）
+    #[serde(default = "default_providers")]
+    pub providers: Vec<LlmProvider>,
+    /// 当前使用的供应商 id
+    #[serde(default = "default_active_id")]
+    pub active_id: String,
+}
+
+impl LlmConfig {
+    /// 当前使用的供应商（active_id 命中）
+    pub fn active(&self) -> Option<&LlmProvider> {
+        self.providers.iter().find(|p| p.id == self.active_id)
+    }
+}
+
+fn default_provider_kind() -> String {
     "ollama".into()
 }
 
-fn default_llm_base_url() -> String {
+fn default_ollama_endpoint() -> String {
     "http://localhost:11434".into()
+}
+
+/// 预置供应商：Ollama 本地（默认使用）+ OpenAI 兼容占位（禁用）
+fn default_providers() -> Vec<LlmProvider> {
+    vec![
+        LlmProvider {
+            id: "ollama-local".into(),
+            name: "Ollama 本地".into(),
+            kind: "ollama".into(),
+            api_endpoint: default_ollama_endpoint(),
+            api_key: String::new(),
+            enabled: true,
+            models: vec![],
+            chat_model: default_chat_model(),
+            embed_model: default_embed_model(),
+        },
+        LlmProvider {
+            id: "openai-compat".into(),
+            name: "OpenAI 兼容".into(),
+            kind: "openai".into(),
+            api_endpoint: String::new(),
+            api_key: String::new(),
+            enabled: false,
+            models: vec![],
+            chat_model: String::new(),
+            embed_model: String::new(),
+        },
+    ]
+}
+
+fn default_active_id() -> String {
+    "ollama-local".into()
 }
 
 fn default_chat_model() -> String {
@@ -60,11 +120,8 @@ fn default_embed_model() -> String {
 impl Default for LlmConfig {
     fn default() -> Self {
         Self {
-            provider: default_llm_provider(),
-            base_url: default_llm_base_url(),
-            chat_model: default_chat_model(),
-            embed_model: default_embed_model(),
-            api_key: String::new(),
+            providers: default_providers(),
+            active_id: default_active_id(),
         }
     }
 }

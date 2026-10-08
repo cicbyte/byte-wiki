@@ -22,6 +22,23 @@ impl super::AppService {
         write_config(&self.data_root, &full)
     }
 
+    /// 当前使用的供应商（未启用或缺失时报可读错误）
+    pub fn active_llm(&self) -> CoreResult<crate::model::LlmProvider> {
+        let cfg = self.llm_config()?;
+        let Some(p) = cfg.active() else {
+            return Err(CoreError::Other(anyhow::anyhow!(
+                "未配置当前使用的模型供应商（设置 → 模型）"
+            )));
+        };
+        if !p.enabled {
+            return Err(CoreError::Other(anyhow::anyhow!(
+                "当前供应商「{}」已被禁用（设置 → 模型）",
+                p.name
+            )));
+        }
+        Ok(p.clone())
+    }
+
     /// 导出备份：DB checkpoint + 整个 data/ → zip 或目录快照
     ///
     /// - `dest`：目标路径。压缩模式为 .zip 文件路径；非压缩模式为目录路径。
