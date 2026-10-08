@@ -8,20 +8,38 @@
  * 响应式状态（expanded / collapsedHover）由父组件持有并下发，
  * 修改通过 emit 上报；静态菜单数据从 lib/constants 直接导入。
  */
+import { computed } from "vue";
 import { CaretRightFilled } from "@ant-design/icons-vue";
 import {
-  menuGroups,
-  topItems,
-  labelOf,
-  groupOf,
+  menuGroups as globalGroups,
+  topItems as globalTopItems,
+  repoMenu,
+  labelOfItem,
 } from "../lib/constants";
 
-const props = defineProps<{
-  collapsed: boolean;
-  currentPath: string;
-  expanded: Set<string>;
-  collapsedHover: string | null;
-}>();
+const props = withDefaults(
+  defineProps<{
+    collapsed: boolean;
+    currentPath: string;
+    /** 项目空间模式：/repo/:id 前缀时由父组件传入仓库 id */
+    repoId?: string | null;
+    expanded: Set<string>;
+    collapsedHover: string | null;
+  }>(),
+  { repoId: null },
+);
+
+/** 双模式菜单：项目空间用项目菜单，否则全局菜单（响应式跟随路由） */
+const menu = computed(() =>
+  props.repoId ? repoMenu(props.repoId) : { topItems: globalTopItems, menuGroups: globalGroups },
+);
+const topItems = computed(() => menu.value.topItems);
+const menuGroups = computed(() => menu.value.menuGroups);
+
+/** 高亮：精确匹配当前路由 */
+function isActive(key: string) {
+  return props.currentPath === key;
+}
 
 const emit = defineEmits<{
   (e: "toggle-group", key: string): void;
@@ -42,11 +60,11 @@ function isExpanded(key: string) {
         v-for="item in topItems"
         :key="item.key"
         class="nav-item top-item"
-        :class="{ active: currentPath === item.key }"
+        :class="{ active: isActive(item.key) }"
         @click="emit('navigate', item.key)"
       >
         <component :is="item.icon" class="nav-icon" />
-        <span class="nav-label">{{ labelOf[item.key] }}</span>
+        <span class="nav-label">{{ labelOfItem(item) }}</span>
       </div>
     </template>
     <template v-else>
@@ -54,8 +72,8 @@ function isExpanded(key: string) {
         v-for="item in topItems"
         :key="item.key"
         class="nav-item top-item-collapsed"
-        :class="{ active: currentPath === item.key }"
-        :title="labelOf[item.key]"
+        :class="{ active: isActive(item.key) }"
+        :title="labelOfItem(item)"
         @click="emit('navigate', item.key)"
       >
         <component :is="item.icon" class="nav-icon" />
@@ -73,7 +91,7 @@ function isExpanded(key: string) {
       >
         <div
           class="nav-item group-head"
-          :class="{ 'has-active': groupOf(currentPath) === group.key }"
+          :class="{ 'has-active': group.children.some((c) => isActive(c.key)) }"
           @click="emit('toggle-group', group.key)"
         >
           <component :is="group.icon" class="nav-icon" />
@@ -85,11 +103,11 @@ function isExpanded(key: string) {
               v-for="child in group.children"
               :key="child.key"
               class="nav-item flyout-item"
-              :class="{ active: currentPath === child.key }"
+              :class="{ active: isActive(child.key) }"
               @click="emit('navigate', child.key)"
             >
               <component :is="child.icon" class="nav-icon" />
-              <span class="nav-label">{{ labelOf[child.key] }}</span>
+              <span class="nav-label">{{ labelOfItem(child) }}</span>
             </div>
           </div>
         </transition>
@@ -99,7 +117,7 @@ function isExpanded(key: string) {
       <div v-else class="nav-group">
         <div
           class="nav-group-head"
-          :class="{ 'has-active': groupOf(currentPath) === group.key }"
+          :class="{ 'has-active': group.children.some((c) => isActive(c.key)) }"
           @click="emit('toggle-group', group.key)"
         >
           <component :is="group.icon" class="group-head-icon" />
@@ -112,11 +130,11 @@ function isExpanded(key: string) {
               v-for="child in group.children"
               :key="child.key"
               class="nav-item child"
-              :class="{ active: currentPath === child.key }"
+              :class="{ active: isActive(child.key) }"
               @click="emit('navigate', child.key)"
             >
               <component :is="child.icon" class="nav-icon" />
-              <span class="nav-label">{{ labelOf[child.key] }}</span>
+              <span class="nav-label">{{ labelOfItem(child) }}</span>
             </div>
           </div>
         </transition>

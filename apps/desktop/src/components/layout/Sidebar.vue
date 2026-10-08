@@ -9,7 +9,7 @@
  * 本文件为组合入口：持有响应式状态（expanded / collapsedHover），
  * 通过 props 下发子组件、emit 回收变更；静态菜单数据见 ./lib/constants。
  */
-import { ref } from "vue";
+import { computed, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { useLayoutStore } from "@/stores/layout";
 import { useMenuExpansion } from "./lib/useMenuExpansion";
@@ -23,6 +23,12 @@ const layout = useLayoutStore();
 
 const { expanded, toggleGroup } = useMenuExpansion();
 const collapsedHover = ref<string | null>(null);
+
+/** 项目空间模式：当前路由 /repo/:id 时提取仓库 id（左侧菜单切换为项目专属菜单） */
+const repoId = computed(() => {
+  const m = route.path.match(/^\/repo\/(\d+)/);
+  return m ? m[1] : null;
+});
 
 function navigate(key: string) {
   router.push(key);
@@ -38,6 +44,7 @@ function navigate(key: string) {
     <SidebarNav
       :collapsed="layout.sidebarCollapsed"
       :current-path="route.path"
+      :repo-id="repoId"
       :expanded="expanded"
       :collapsed-hover="collapsedHover"
       @toggle-group="toggleGroup"

@@ -1,7 +1,7 @@
 /**
- * Wiki 仓库状态：当前打开的仓库 + 最近列表
+ * Wiki 仓库状态：当前项目 + 项目列表
  *
- * 遵循现有 Pinia store 模式；当前仓库不持久化（每次启动重新打开/从最近列表恢复）。
+ * 两层 IA：项目列表（/）→ 项目空间（/repo/:id）。进入项目由 ensureRepo 定位。
  */
 import { defineStore } from "pinia";
 import { ref } from "vue";
@@ -13,9 +13,9 @@ export const useWikiStore = defineStore("wiki", () => {
   const recentRepos = ref<RepoInfo[]>([]);
   const opening = ref(false);
 
-  async function refreshRecent() {
+  async function refreshRecent(limit = 50) {
     try {
-      recentRepos.value = await api.recentRepos(10);
+      recentRepos.value = await api.recentRepos(limit);
     } catch {
       recentRepos.value = [];
     }
@@ -34,9 +34,24 @@ export const useWikiStore = defineStore("wiki", () => {
     }
   }
 
+  /** 项目空间进入：按 id 定位仓库并设为当前（列表缺失时刷新；仓库已失效返回 null） */
+  async function ensureRepo(id: number): Promise<RepoInfo | null> {
+    if (currentRepo.value?.id === id) return currentRepo.value;
+    if (!recentRepos.value.some((r) => r.id === id)) {
+      await refreshRecent();
+    }
+    const hit = recentRepos.value.find((r) => r.id === id);
+    if (!hit) return null;
+    try {
+      return await openRepo(hit.path);
+    } catch {
+      return null;
+    }
+  }
+
   function closeRepo() {
     currentRepo.value = null;
   }
 
-  return { currentRepo, recentRepos, opening, openRepo, closeRepo, refreshRecent };
+  return { currentRepo, recentRepos, opening, openRepo, ensureRepo, closeRepo, refreshRecent };
 });

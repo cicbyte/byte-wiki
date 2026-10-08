@@ -1,11 +1,41 @@
 import { createRouter, createWebHashHistory } from "vue-router";
 
+/**
+ * 两层 IA：
+ * - 全局层：项目列表（/）、服务、系统
+ * - 项目层：/repo/:id（总览）、/docs 文档、/chat 问答、/cards 知识卡
+ *   —— 进入项目后 Sidebar 切换为项目专属菜单（components/layout/lib/constants.repoMenu）
+ */
 const routes = [
   {
     path: "/",
-    name: "wiki",
-    component: () => import("@/views/wiki/index.vue"),
-    meta: { title: "仓库 Wiki", fullsize: true },
+    name: "repo-list",
+    component: () => import("@/views/wiki/RepoList.vue"),
+    meta: { title: "项目列表", fullsize: true },
+  },
+  {
+    path: "/repo/:id",
+    name: "repo-overview",
+    component: () => import("@/views/repo/RepoSpace.vue"),
+    meta: { title: "总览", tab: "overview", fullsize: true },
+  },
+  {
+    path: "/repo/:id/docs",
+    name: "repo-docs",
+    component: () => import("@/views/repo/RepoSpace.vue"),
+    meta: { title: "文档", tab: "docs", fullsize: true },
+  },
+  {
+    path: "/repo/:id/chat",
+    name: "repo-chat",
+    component: () => import("@/views/repo/RepoSpace.vue"),
+    meta: { title: "问答", tab: "chat", fullsize: true },
+  },
+  {
+    path: "/repo/:id/cards",
+    name: "repo-cards",
+    component: () => import("@/views/repo/RepoSpace.vue"),
+    meta: { title: "知识卡", tab: "cards", fullsize: true },
   },
   {
     path: "/mcp-service",
