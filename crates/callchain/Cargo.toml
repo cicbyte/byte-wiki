@@ -30,7 +30,6 @@ regex = "1"
 # 遍历遵循 .gitignore（与 core indexer 同源）
 ignore = "0.4"
 clap = { version = "4", features = ["derive", "color"] }
-webbrowser = "1"
 
 [dev-dependencies]
 tempfile = "3"

@@ -1,5 +1,6 @@
-//! byte-callchain CLI：多语言（Python/JS/TS/Go/Java/Rust）AST 调用链提取 + 交互式 HTML 渲染。
-//! standalone 入口：服务无 app 的流水线场景，任意目录可跑（不要求 .git）。
+//! byte-callchain CLI：多语言（Python/JS/TS/Go/Java/Rust）AST 调用链提取。
+//! standalone 入口：任意目录可跑（不要求 .git），仅输出 callgraph.json（默认带 source）。
+//! HTML 导出已退役：渲染统一由桌面端原生承担，既有流水线的 HTML 需求走 Python 版工具。
 
 use anyhow::Result;
 use clap::Parser as ClapParser;
@@ -9,15 +10,15 @@ use std::path::PathBuf;
 #[command(
     name = "byte-callchain",
     version,
-    about = "多语言调用链提取（tree-sitter）：函数级调用图 + 交互式 HTML"
+    about = "多语言调用链提取（tree-sitter）：函数级调用图 JSON"
 )]
 struct Args {
     /// 源码目录（默认当前目录）
     src: Option<PathBuf>,
-    /// 输出目录（默认 ./callchain-out）
+    /// 输出目录（默认 ./callchain-out），产物为 callgraph.json
     #[arg(short, long, default_value = "callchain-out")]
     out: PathBuf,
-    /// 页面标题（默认取源码目录名）
+    /// 图标题（写入 JSON 的 title 字段，默认取源码目录名）
     #[arg(long)]
     title: Option<String>,
     /// 额外入口的 qualname 正则（路由装饰器自动识别）
@@ -26,12 +27,9 @@ struct Args {
     /// 额外排除目录名（可多次；内置表已含 node_modules/.git/.bytewiki 等）
     #[arg(long = "exclude")]
     excludes: Vec<String>,
-    /// 不内嵌函数源码（默认内嵌；HTML 详情面板依赖它）
+    /// 不内嵌函数源码（默认内嵌）
     #[arg(long)]
     no_source: bool,
-    /// 生成后不自动打开浏览器
-    #[arg(long)]
-    no_open: bool,
 }
 
 fn main() -> Result<()> {
@@ -65,9 +63,6 @@ fn main() -> Result<()> {
     let mut graph = byte_wiki_callchain::extract(&root, &opts, &|_| {})?;
     graph["title"] = serde_json::json!(title);
 
-    let out_dir = args.out;
-    byte_wiki_callchain::render(&graph, &title, &out_dir)?;
-
     // 统计输出
     let n_nodes = graph["nodes"].as_array().map(|a| a.len()).unwrap_or(0);
     let n_edges = graph["edges"].as_array().map(|a| a.len()).unwrap_or(0);
@@ -86,18 +81,14 @@ fn main() -> Result<()> {
             v.into_iter().map(|(k, c)| format!("{k}×{c}")).collect()
         })
         .unwrap_or_default();
+    std::fs::create_dir_all(&args.out)?;
+    let json_path = args.out.join("callgraph.json");
+    std::fs::write(&json_path, serde_json::to_string_pretty(&graph)?)?;
     println!(
         "[OK] 函数 {n_nodes} · 调用边 {n_edges} · 入口 {n_entry} · 语言 {} · 耗时 {:?}",
         langs.join(" "),
         t0.elapsed()
     );
-    let json_path = out_dir.join("callgraph.json");
-    std::fs::write(&json_path, serde_json::to_string_pretty(&graph)?)?;
-    println!("[OK] 输出: {} / callchain.html", json_path.display());
-
-    if !args.no_open {
-        let url = out_dir.join("callchain.html").canonicalize()?;
-        let _ = webbrowser::open(url.as_os_str().to_string_lossy().as_ref());
-    }
+    println!("[OK] 输出: {}", json_path.display());
     Ok(())
 }

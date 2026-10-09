@@ -2,7 +2,8 @@
 //!
 //! 产品定位（dev-docs v2）：Wiki → 代码的桥，byte-wiki 核心能力。
 //! 本 crate 是纯解析引擎（无 DB/无配置），core 无条件依赖它；
-//! `byte-callchain` bin 服务无 app 的流水线场景（HTML 三件套导出）。
+//! `byte-callchain` bin 服务无 app 的流水线场景（任意目录提取 JSON；
+//! HTML 导出已退役——渲染统一由桌面端原生承担，Python 版工具承担既有流水线）。
 //!
 //! 解析策略（尽力而为，tree-sitter 无符号表，动态分派只能启发式）：
 //!   1) local    —— 裸调用：同文件内同名定义（较可信）
@@ -601,26 +602,6 @@ pub fn extract(
         "modules": Value::Object(modules),
         "langs": lang_files,
     }))
-}
-
-// ----------------------------------------------------------------------------
-// 渲染三件套（standalone bin 导出用；app 管线不走这里——产物只有 JSON）
-// ----------------------------------------------------------------------------
-
-const HTML_TPL: &str = include_str!("../assets/callchain.html");
-const APP_JS: &str = include_str!("../assets/callchain_app.js");
-
-pub fn render(graph: &Value, title: &str, out_dir: &Path) -> Result<()> {
-    std::fs::create_dir_all(out_dir)?;
-    let payload = serde_json::to_string(graph)?;
-    let html = HTML_TPL.replace("__TITLE__", title);
-    std::fs::write(out_dir.join("callchain.html"), html)?;
-    std::fs::write(out_dir.join("callchain_app.js"), format!("{APP_JS}\n"))?;
-    std::fs::write(
-        out_dir.join("callchain_data.js"),
-        format!("const DATA = {payload};\n"),
-    )?;
-    Ok(())
 }
 
 // ----------------------------------------------------------------------------

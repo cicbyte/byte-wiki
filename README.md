@@ -35,7 +35,7 @@ cargo run -p bs -- --help
 # callchain <repo>：函数级调用链（产物落 <repo>/.bytewiki/graphs/callchain/）
 # mcp / api：MCP 与 REST 服务（骨架）
 
-cargo run -p byte-wiki-callchain -- <src>   # standalone：任意目录 + 交互式 HTML 三件套
+cargo run -p byte-wiki-callchain -- <src>   # standalone：任意目录提取调用图 JSON
 ```
 
 ## `.bytewiki/` 目录结构
