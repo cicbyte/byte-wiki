@@ -133,9 +133,14 @@ function zoomBy(delta: number) {
 }
 /* 图谱模式：允许横向平移查看大图 */
 .viewer-body.graph {
-  padding: var(--spacing-sm);
+  padding: var(--spacing-md);
 }
 .md-host {
   max-width: 100%;
+}
+/* 深色模式下 md-editor-v3 自带纯黑背景（--md-bk-color:#000）且 preview 内边距为 0，
+   会在卡片内形成一个文本贴边的黑框 —— 置透明使其融入卡片背景（与浅色模式一致） */
+.wiki-viewer :deep(.md-editor) {
+  background-color: transparent;
 }
 </style>

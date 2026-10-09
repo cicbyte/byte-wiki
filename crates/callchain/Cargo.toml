@@ -1,0 +1,36 @@
+[package]
+name = "byte-wiki-callchain"
+description = "多语言调用链提取（tree-sitter）：函数级调用图 + 交互式 HTML 渲染"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[lib]
+name = "byte_wiki_callchain"
+path = "src/lib.rs"
+
+[[bin]]
+name = "byte-callchain"
+path = "src/main.rs"
+
+[dependencies]
+tree-sitter.workspace = true
+tree-sitter-language.workspace = true
+tree-sitter-python.workspace = true
+tree-sitter-javascript.workspace = true
+tree-sitter-typescript.workspace = true
+tree-sitter-go.workspace = true
+tree-sitter-java.workspace = true
+tree-sitter-rust.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+regex = "1"
+# 遍历遵循 .gitignore（与 core indexer 同源）
+ignore = "0.4"
+clap = { version = "4", features = ["derive", "color"] }
+webbrowser = "1"
+
+[dev-dependencies]
+tempfile = "3"

@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/core", "apps/cli", "apps/desktop/src-tauri"]
+members = ["crates/core", "crates/callchain", "apps/cli", "apps/desktop/src-tauri"]
 
 [workspace.package]
 version = "0.1.0"
@@ -10,6 +10,15 @@ license = "MIT"
 repository = "https://github.com/cicbyte/byte-wiki"
 
 [workspace.dependencies]
+# === 调用链解析（callchain crate 用）===
+tree-sitter = "0.25"
+tree-sitter-language = "0.1"
+tree-sitter-python = "0.23"
+tree-sitter-javascript = "0.23"
+tree-sitter-typescript = "0.23"
+tree-sitter-go = "0.23"
+tree-sitter-java = "0.23"
+tree-sitter-rust = "0.23"
 # === core 共享依赖 ===
 anyhow = "1"
 thiserror = "2"
@@ -33,7 +42,8 @@ rmcp = { version = "2.2", features = [
 schemars = "1"
 
 [profile.release]
-opt-level = "z"      # 体积优先（PRD 目标 <30MB）
+opt-level = "z"      # 体积优先；<30MB 目标已放宽（callchain 为核心能力，接受 tree-sitter 体积增量），
+                     # 是否保留 "z" 待大仓解析性能实测后定（见 dev-docs/callchain v2 决策表）
 lto = true
 codegen-units = 1
 strip = true

@@ -177,6 +177,22 @@ impl Database {
         Ok(())
     }
 
+    /// 登记或刷新单条生成区文档（source=generated）——调用链等独立管线的产物，
+    /// 不参与 wiki 重新生成的整体替换，单独 upsert
+    pub fn upsert_generated_doc(&self, repo_id: i64, kind: &str, path: &str, title: &str) -> CoreResult<()> {
+        let conn = self.lock()?;
+        conn.execute(
+            "INSERT INTO wiki_docs(repo_id, kind, path, title, updated_at, source)
+             VALUES(?1, ?2, ?3, ?4, ?5, 'generated')
+             ON CONFLICT(repo_id, path) DO UPDATE SET
+                kind = excluded.kind,
+                title = excluded.title,
+                updated_at = excluded.updated_at",
+            params![repo_id, kind, path, title, crate::db::now_iso()],
+        )?;
+        Ok(())
+    }
+
     /// 删除单条文档登记
     pub fn delete_wiki_doc(&self, repo_id: i64, path: &str) -> CoreResult<()> {
         let conn = self.lock()?;

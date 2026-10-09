@@ -30,6 +30,8 @@ enum Commands {
     Backup(cmd::BackupArgs),
     /// 从备份恢复（覆盖当前数据）
     Restore(cmd::RestoreArgs),
+    /// 生成函数级调用链（tree-sitter 多语言，产物随仓库共享）
+    Callchain(cmd::CallchainArgs),
     /// 运行 MCP 服务器（供 Claude Desktop / Cursor 等 AI 工具检索）
     #[command(name = "mcp")]
     Mcp(cmd::McpArgs),
@@ -55,6 +57,7 @@ fn main() -> anyhow::Result<()> {
         match command {
             Commands::Backup(a) => cmd::run_backup(a, cli.json).await,
             Commands::Restore(a) => cmd::run_restore(a, cli.json).await,
+            Commands::Callchain(a) => cmd::run_callchain(a, cli.json).await,
             Commands::Mcp(a) => cmd::run_mcp(a).await,
             Commands::Api(a) => {
                 cmd::run_api(cmd::ApiArgs { action: a }).await

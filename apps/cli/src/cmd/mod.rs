@@ -4,10 +4,14 @@
 //! 使 `main.rs` 的引用路径（`cmd::BackupArgs`、`cmd::run_backup` 等）保持不变。
 
 mod backup;
+mod callchain;
 mod server;
 
 // ---- 备份 / 恢复 ----
 pub use backup::{BackupArgs, RestoreArgs, run_backup, run_restore};
+
+// ---- 调用链 ----
+pub use callchain::{CallchainArgs, run_callchain};
 
 // ---- MCP / REST API 服务 ----
 // McpAction / Transport 是 McpArgs 的内部字段类型（server 模块内已用），main 不直接引用，故不重导出

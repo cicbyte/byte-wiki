@@ -67,8 +67,8 @@ develop-eggs/
 downloads/
 eggs/
 .eggs/
-lib/
-lib64/
+/lib/
+/lib64/
 parts/
 sdist/
 var/
@@ -114,3 +114,6 @@ env.bak/
 venv.bak/
 
 .claude/
+.bytewiki/
+.zcode/
+.bc/

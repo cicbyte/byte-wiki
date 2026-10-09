@@ -432,6 +432,7 @@ impl AppService {
             let title = name
                 .trim_end_matches(".md")
                 .trim_end_matches(".mmd")
+                .trim_end_matches(".json")
                 .to_string();
             let kind = if rel.starts_with("modules/") {
                 "module"
@@ -515,6 +516,11 @@ impl AppService {
         move_dir(&staging.join("modules"), &wiki.join("modules"))?;
         let old_graphs = wiki.join("graphs");
         if old_graphs.exists() {
+            // 保留调用链产物：graphs/callchain/ 由调用链管线独立拥有，不属于依赖图重生成范围
+            let cc = old_graphs.join("callchain");
+            if cc.is_dir() {
+                std::fs::rename(&cc, staging.join("graphs").join("callchain"))?;
+            }
             std::fs::remove_dir_all(&old_graphs)?;
         }
         move_dir(&staging.join("graphs"), &wiki.join("graphs"))?;
@@ -533,6 +539,14 @@ impl AppService {
                 "graphs/dependency.mmd".into(),
                 "graph".into(),
                 "模块依赖图谱".into(),
+            ));
+        }
+        // 调用链产物在整体替换后仍存在（上方已保留），重新补登避免登记丢失
+        if wiki.join(&crate::callchain::CALLGRAPH_DOC_PATH).is_file() {
+            doc_rows.push((
+                crate::callchain::CALLGRAPH_DOC_PATH.into(),
+                "graph".into(),
+                "调用链图谱".into(),
             ));
         }
         doc_rows.extend(plan.modules.iter().map(|m| {

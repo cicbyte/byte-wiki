@@ -6,6 +6,7 @@
 
 - **一键生成 Wiki**（FR-01/02）：选择本地 Git 仓库，自动完成 索引 → 规划 → 逐模块文档（拓扑序）→ 顶层架构 → 组装写入仓库内 `.bytewiki/` 目录
 - **结构化浏览**（FR-03/04）：架构 / 模块 / 图谱三分区树形导航；Mermaid 模块依赖图由真实代码引用生成（非 LLM 臆测），支持缩放
+- **函数级调用链**：tree-sitter 多语言（Py/JS/TS/Go/Java/Rust）提取函数调用图，项目空间「调用链」tab 原生浏览——入口执行流聚焦、双向调用跳转、点函数 Monaco 定位打开源码；产物 `callgraph.json` 随仓库共享
 - **RAG 问答**（FR-05）：基于 Wiki 文档与代码分块的向量检索，流式输出、回答带出处、多轮对话
 - **模型可配置**（FR-09）：默认本地 Ollama，可切换 OpenAI 兼容远程端点（设置 → 模型，支持连接测试）
 - **随仓库共享**（FR-08）：Wiki 是纯 Markdown + Mermaid 文本，提交 `.bytewiki/` 即团队共享；克隆后打开仓库直接加载，零 LLM 成本
@@ -31,7 +32,10 @@ npm run tauri build  # 打包
 ```bash
 cargo run -p bs -- --help
 # backup / restore：数据目录备份恢复
+# callchain <repo>：函数级调用链（产物落 <repo>/.bytewiki/graphs/callchain/）
 # mcp / api：MCP 与 REST 服务（骨架）
+
+cargo run -p byte-wiki-callchain -- <src>   # standalone：任意目录 + 交互式 HTML 三件套
 ```
 
 ## `.bytewiki/` 目录结构

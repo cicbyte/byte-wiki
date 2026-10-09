@@ -6,6 +6,7 @@ pub mod config;
 pub mod llm;
 pub mod repo;
 pub mod generate;
+pub mod callchain;
 pub mod watch;
 pub mod cards;
 pub mod servers;

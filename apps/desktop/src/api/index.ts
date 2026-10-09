@@ -16,6 +16,7 @@ import { systemApi } from "./system";
 import { llmApi } from "./llm";
 import { repoApi } from "./repo";
 import { generateApi } from "./generate";
+import { callchainApi } from "./callchain";
 import { watchApi, cardsApi } from "./watch";
 
 export const api = {
@@ -29,6 +30,7 @@ export const api = {
   ...llmApi,
   ...repoApi,
   ...generateApi,
+  ...callchainApi,
   ...watchApi,
   ...cardsApi,
 };

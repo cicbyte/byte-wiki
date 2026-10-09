@@ -17,6 +17,8 @@ serde.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
 rusqlite.workspace = true
+# 函数级调用链引擎（依赖反转：core 无条件依赖，定位见 dev-docs v2）
+byte-wiki-callchain = { path = "../callchain" }
 rand = "0.9"
 walkdir = "2"
 chrono = { version = "0.4", features = ["serde"] }

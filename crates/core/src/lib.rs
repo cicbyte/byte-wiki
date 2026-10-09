@@ -6,6 +6,7 @@
 //! 共同复用本 crate 暴露的 [`service::AppService`]。
 
 pub mod cards;
+pub mod callchain;
 pub mod db;
 pub mod error;
 pub mod generator;

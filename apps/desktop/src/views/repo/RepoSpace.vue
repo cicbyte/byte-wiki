@@ -34,6 +34,7 @@ import EmptyState from "@/components/common/EmptyState.vue";
 import WikiTree from "@/views/wiki/components/WikiTree.vue";
 import WikiViewer from "@/views/wiki/components/WikiViewer.vue";
 import ChatPanel from "@/views/wiki/components/ChatPanel.vue";
+import CallGraphPanel from "@/views/wiki/components/CallGraphPanel.vue";
 
 const route = useRoute();
 const router = useRouter();
@@ -441,6 +442,11 @@ const busy = computed(() => generating.value || updating.value);
         </div>
       </div>
 
+      <!-- ============ 调用链 ============ -->
+      <div v-else-if="tab === 'callgraph'" class="callgraph-pane">
+        <CallGraphPanel :repo-path="wiki.currentRepo.path" />
+      </div>
+
       <!-- ============ 问答 ============ -->
       <div v-else-if="tab === 'chat'" class="chat-wrap">
         <div class="chat-toolbar">
@@ -679,6 +685,15 @@ const busy = computed(() => generating.value || updating.value);
   border-radius: var(--radius-lg);
   overflow: hidden;
   display: flex;
+}
+
+/* 调用链 */
+.callgraph-pane {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: var(--spacing-md);
 }
 
 /* 问答 */

@@ -185,6 +185,10 @@ const tree = computed(() => {
 .help-md {
   padding: 0 20px;
 }
+/* 深色模式下 md-editor-v3 自带纯黑背景（--md-bk-color:#000），置透明融入卡片背景 */
+.help-detail :deep(.md-editor) {
+  background-color: transparent;
+}
 .help-empty {
   padding: 40px;
   text-align: center;

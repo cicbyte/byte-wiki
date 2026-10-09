@@ -53,6 +53,9 @@ pub fn run() {
             commands::generate::read_wiki_doc,
             commands::generate::repo_chat,
             commands::generate::rebuild_embeddings,
+            // 调用链（函数级视图）
+            commands::callchain::generate_callchain,
+            commands::callchain::read_repo_file,
             // 变更检测 + 知识卡（M2）
             commands::watch::check_staleness,
             commands::cards::create_card,
