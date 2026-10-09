@@ -10,16 +10,34 @@
  * 坐标固化（层级布局是动态的，筛选/聚焦触发整图重排会拖死大图）、
  * 搜索 250ms 防抖、fit/focus 去 animation。
  */
-import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import { message } from "ant-design-vue";
-import { SearchOutlined, ReloadOutlined, AimOutlined, CodeOutlined } from "@ant-design/icons-vue";
+import {
+  SearchOutlined,
+  ReloadOutlined,
+  AimOutlined,
+  CodeOutlined,
+  DoubleLeftOutlined,
+  DoubleRightOutlined,
+  CaretRightOutlined,
+} from "@ant-design/icons-vue";
 import { DataSet, Network } from "vis-network/standalone";
 import { api } from "@/api";
 import type { CallgraphData, CallGraphNode, CallgraphEdge } from "@/api/callchain";
+import { useThemeStore } from "@/stores/theme";
 import EmptyState from "@/components/common/EmptyState.vue";
 import SnippetEditor from "@/components/editor/SnippetEditor.vue";
 
 const props = defineProps<{ repoPath: string }>();
+
+const themeStore = useThemeStore();
+
+/** 画布配色跟随主题（固定色在浅色主题下不可读） */
+const canvasColors = computed(() =>
+  themeStore.isDark
+    ? { font: "#dbe4f5", edge: "#3a4767", edgeFont: "#8496b8" }
+    : { font: "#33415e", edge: "#c3cde4", edgeFont: "#8a97b8" },
+);
 
 /** 模块配色（与资产同表：色相间隔大，色弱可辨） */
 const PALETTE = [
@@ -38,6 +56,11 @@ const search = ref("");
 const moduleFilter = ref("");
 const viewFilter = ref<"" | "entry" | "hub">("");
 const entrySearch = ref("");
+const verbFilter = ref(""); // "" = 全部动词
+/** 入口面板折叠（收起为细轨，画布全宽；localStorage 记忆） */
+const panelCollapsed = ref(localStorage.getItem("bw:cg-entries-collapsed") === "1");
+/** 展开的入口分组（module key；自定义入口用 CUSTOM_KEY） */
+const expandedGroups = ref<Set<string>>(new Set());
 const selectedId = ref<string | null>(null);
 const focusNote = ref("");
 const sourceState = reactive({
@@ -80,19 +103,127 @@ const moduleOptions = computed(() =>
 const legend = computed(() => modulesList.value.slice(0, 12));
 const legendMore = computed(() => Math.max(0, modulesList.value.length - 12));
 
-/** 入口面板：路由入口在前，自定义入口在后 */
-const entryGroups = computed(() => {
+// ===== 入口面板：按模块分组 + 方法徽标单行化 + 动词筛选 =====
+
+/** 单条入口的展示模型：verb 从路由标签首段解析（"GET /x" → GET；"GF a.B" → GF；无路由 → ""） */
+interface EntryItem {
+  node: CallGraphNode;
+  verb: string;
+  label: string;
+}
+
+/** 自定义入口（约定入口，无路由标签）的分组 key */
+const CUSTOM_KEY = "__custom__";
+/** 组内排序：动词惯例序，无动词的排最后 */
+const VERB_ORDER = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS", "ANY", "GF", ""];
+
+function parseEntry(n: CallGraphNode): EntryItem {
+  const r0 = n.routes[0] ?? "";
+  if (!r0) return { node: n, verb: "", label: n.qualname.split(".").pop() || n.qualname };
+  if (r0.startsWith("GF ")) return { node: n, verb: "GF", label: r0.slice(3) };
+  const sp = r0.indexOf(" ");
+  return sp > 0
+    ? { node: n, verb: r0.slice(0, sp), label: r0.slice(sp + 1) }
+    : { node: n, verb: r0, label: n.qualname.split(".").pop() || n.qualname };
+}
+
+/** 搜索 + 动词筛选后的入口集合 */
+const filteredEntries = computed<EntryItem[]>(() => {
   const d = data.value;
   if (!d) return [];
   const kw = entrySearch.value.trim().toLowerCase();
-  const match = (n: CallGraphNode) =>
-    !kw || (n.qualname + " " + n.routes.join(" ")).toLowerCase().includes(kw);
-  const routes = d.nodes.filter((n) => n.is_entry && n.routes.length && match(n));
-  const customs = d.nodes.filter((n) => n.is_entry && !n.routes.length && match(n));
-  const groups: { label: string; items: CallGraphNode[] }[] = [];
-  if (routes.length) groups.push({ label: `路由入口 (${routes.length})`, items: routes });
-  if (customs.length) groups.push({ label: `自定义入口 (${customs.length})`, items: customs });
+  const vf = verbFilter.value;
+  return d.nodes
+    .filter((n) => n.is_entry)
+    .map(parseEntry)
+    .filter(
+      (it) =>
+        (!vf || it.verb === vf) &&
+        (!kw ||
+          (it.node.qualname + " " + (it.node.routes[0] ?? "") + " " + it.node.module)
+            .toLowerCase()
+            .includes(kw)),
+    );
+});
+
+/** 动词筛选（动词 → 入口数） */
+const verbChips = computed<[string, number][]>(() => {
+  const counts = new Map<string, number>();
+  for (const n of data.value?.nodes ?? []) {
+    if (!n.is_entry) continue;
+    const { verb } = parseEntry(n);
+    if (verb) counts.set(verb, (counts.get(verb) ?? 0) + 1);
+  }
+  return [...counts.entries()].sort((a, b) => b[1] - a[1]);
+});
+
+/** 动词下拉选项（与工具栏 a-select 形态一致，控件不混搭） */
+const verbOptions = computed(() => [
+  { label: "全部动词", value: "" },
+  ...verbChips.value.map(([v, c]) => ({ label: `${v}（${c}）`, value: v })),
+]);
+
+/** 分组：路由入口按模块聚簇（自然对应 controller/文件），自定义入口垫底 */
+const entryGroups = computed<{ key: string; label: string; tooltip: string; items: EntryItem[] }[]>(() => {
+  const byKey = new Map<string, EntryItem[]>();
+  for (const it of filteredEntries.value) {
+    const key = it.node.routes.length ? it.node.module : CUSTOM_KEY;
+    (byKey.get(key) ?? byKey.set(key, []).get(key)!).push(it);
+  }
+  const groups = [...byKey.entries()].map(([key, items]) => {
+    items.sort(
+      (a, b) =>
+        VERB_ORDER.indexOf(a.verb) - VERB_ORDER.indexOf(b.verb) || a.label.localeCompare(b.label),
+    );
+    if (key === CUSTOM_KEY) {
+      return { key, label: "自定义入口", tooltip: "fn main / #[command] / @Scheduled 等约定入口", items };
+    }
+    // 组名取路径末两段（前缀太长挤压），完整路径进 tooltip
+    const segs = key.split("/");
+    const label = segs.length > 1 ? segs.slice(-2).join("/") : key;
+    return { key, label, tooltip: key, items };
+  });
+  groups.sort((a, b) => (a.key === CUSTOM_KEY ? 1 : b.key === CUSTOM_KEY ? -1 : a.label.localeCompare(b.label)));
   return groups;
+});
+
+const entryCount = computed(() => (data.value?.nodes ?? []).filter((n) => n.is_entry).length);
+
+function verbClass(verb: string): string {
+  return verb ? `m-${verb.toLowerCase()}` : "m-none";
+}
+
+function toggleGroup(key: string) {
+  const next = new Set(expandedGroups.value);
+  if (next.has(key)) next.delete(key);
+  else next.add(key);
+  expandedGroups.value = next;
+}
+
+function togglePanel() {
+  panelCollapsed.value = !panelCollapsed.value;
+  localStorage.setItem("bw:cg-entries-collapsed", panelCollapsed.value ? "1" : "0");
+}
+
+/** 主题切换 → 重建画布（节点/边固定色在明暗主题下互换，重建即套用新配色） */
+watch(
+  () => themeStore.isDark,
+  () => {
+    if (data.value && !missing.value) buildGraph();
+  },
+);
+
+/** 选中入口节点时自动展开其所在分组 */
+watch(selectedId, (id) => {
+  if (!id) return;
+  const n = nodeById.get(id);
+  if (!n || !n.is_entry) return;
+  const key = n.routes.length ? n.module : CUSTOM_KEY;
+  if (!expandedGroups.value.has(key)) {
+    const next = new Set(expandedGroups.value);
+    next.add(key);
+    expandedGroups.value = next;
+  }
 });
 
 const selected = computed(() => (selectedId.value ? nodeById.get(selectedId.value) ?? null : null));
@@ -135,17 +266,26 @@ function buildGraph() {
   modulesList.value = Object.keys(d.modules).sort();
   modColor.value = new Map(modulesList.value.map((m, i) => [m, PALETTE[i % PALETTE.length]]));
 
+  // 入口分组默认展开前 3 组（按全量入口的模块分组，不受筛选影响；自定义入口垫底）
+  const entryMods = new Set<string>();
+  for (const n of d.nodes) {
+    if (n.is_entry) entryMods.add(n.routes.length ? n.module : CUSTOM_KEY);
+  }
+  const groupKeys = [...entryMods].filter((k) => k !== CUSTOM_KEY).sort();
+  if (entryMods.has(CUSTOM_KEY)) groupKeys.push(CUSTOM_KEY);
+  expandedGroups.value = new Set(groupKeys.slice(0, 3));
+
   const nodesArr = d.nodes.map((n) => ({
     id: n.id,
     label: n.qualname.length > 34 ? n.qualname.slice(0, 33) + "…" : n.qualname,
     title: `${n.module}\n${n.file}:${n.lineno}`,
     color: {
       background: modColor.value.get(n.module),
-      border: n.is_entry ? "#ffcf7d" : modColor.value.get(n.module),
+      border: n.is_entry ? "#e8a33d" : modColor.value.get(n.module),
       highlight: { background: "#ffffff", border: "#5aa2ff" },
     },
     shape: n.is_entry ? "diamond" : n.routes.length ? "box" : "ellipse",
-    font: { color: "#dbe4f5", size: 11 },
+    font: { color: canvasColors.value.font, size: 12 },
     borderWidth: n.is_entry ? 2 : 1,
   }));
   const edgesArr = d.edges.map((e, i) => ({
@@ -155,8 +295,8 @@ function buildGraph() {
     arrows: "to",
     dashes: e.kind === "heuristic",
     label: e.kind === "heuristic" ? "~" : "",
-    color: { color: "#3a4767", highlight: "#ffcf7d", hover: "#5aa2ff" },
-    font: { size: 9, color: "#8496b8" },
+    color: { color: canvasColors.value.edge, highlight: "#e8a33d", hover: "#5aa2ff" },
+    font: { size: 10, color: canvasColors.value.edgeFont },
   }));
 
   vnodes = new DataSet(nodesArr);
@@ -346,13 +486,6 @@ async function openSource(n: CallGraphNode) {
     sourceState.loading = false;
   }
 }
-
-function labelOf(n: CallGraphNode): string {
-  return n.qualname.split(".").pop() || n.qualname;
-}
-function subOf(n: CallGraphNode): string {
-  return n.routes[0] || n.module.split("/").pop() || n.module;
-}
 </script>
 
 <template>
@@ -404,30 +537,57 @@ function subOf(n: CallGraphNode): string {
 
     <!-- 主体三栏 -->
     <div class="cg-main">
-      <!-- 入口面板 -->
-      <aside class="cg-entries">
-        <div class="cg-entries-head">
-          <span>入口（点击看执行流）</span>
+      <!-- 入口面板（可折叠：收起为细轨，画布全宽） -->
+      <aside class="cg-entries" :class="{ collapsed: panelCollapsed }">
+        <!-- 折叠态：细轨只留展开按钮 -->
+        <div v-if="panelCollapsed" class="cg-entries-rail">
+          <button class="cg-rail-btn" title="展开入口面板" @click="togglePanel">
+            <DoubleRightOutlined />
+          </button>
         </div>
-        <a-input v-model:value="entrySearch" placeholder="过滤入口…" size="small" allow-clear />
-        <div class="cg-entry-list">
-          <template v-for="g in entryGroups" :key="g.label">
-            <div class="cg-entry-group">{{ g.label }}</div>
-            <div
-              v-for="n in g.items"
-              :key="n.id"
-              class="cg-entry-item"
-              :class="{ custom: !n.routes.length, active: n.id === selectedId }"
-              @click="focusFromEntry(n.id)"
-            >
-              <b>{{ labelOf(n) }}</b>
-              <span>{{ subOf(n) }}</span>
-            </div>
-          </template>
-          <div v-if="!entryGroups.length" class="cg-entry-empty">
-            {{ data ? "无入口（路由装饰器自动识别，或语言无此概念）" : "" }}
+
+        <!-- 展开态 -->
+        <template v-else>
+          <div class="cg-entries-head">
+            <span>入口（{{ entryCount }}）</span>
+            <button class="cg-fold-btn" title="收起入口面板" @click="togglePanel">
+              <DoubleLeftOutlined />
+            </button>
           </div>
-        </div>
+          <a-input v-model:value="entrySearch" placeholder="搜索 路径 / 函数 / 模块…" size="small" allow-clear />
+          <a-select
+            v-if="verbChips.length > 1"
+            v-model:value="verbFilter"
+            :options="verbOptions"
+            size="small"
+            style="width: 100%"
+          />
+          <div class="cg-entry-list">
+            <div v-for="g in entryGroups" :key="g.key" class="cg-entry-groupwrap">
+              <div class="cg-entry-group" :title="g.tooltip" @click="toggleGroup(g.key)">
+                <CaretRightOutlined class="cg-group-caret" :class="{ open: expandedGroups.has(g.key) }" />
+                <span class="cg-group-label">{{ g.label }}</span>
+                <span class="cg-group-count">{{ g.items.length }}</span>
+              </div>
+              <div v-show="expandedGroups.has(g.key)" class="cg-entry-children">
+                <div
+                  v-for="it in g.items"
+                  :key="it.node.id"
+                  class="cg-entry-item"
+                  :class="{ active: it.node.id === selectedId }"
+                  :title="`${it.node.qualname}\n${it.node.routes[0] ?? '(约定入口)'}\n${it.node.file}`"
+                  @click="focusFromEntry(it.node.id)"
+                >
+                  <span v-if="it.verb" class="cg-verb" :class="verbClass(it.verb)">{{ it.verb }}</span>
+                  <span class="cg-entry-path">{{ it.label }}</span>
+                </div>
+              </div>
+            </div>
+            <div v-if="!entryGroups.length" class="cg-entry-empty">
+              {{ data ? (entrySearch || verbFilter ? "无匹配入口" : "无入口（框架路由自动识别）") : "" }}
+            </div>
+          </div>
+        </template>
       </aside>
 
       <!-- 画布 -->
@@ -609,65 +769,169 @@ function subOf(n: CallGraphNode): string {
   display: flex;
   gap: var(--spacing-sm);
 }
+/* 入口面板（可折叠）——字号/圆角/间距对齐全局令牌（正文 13-14px） */
 .cg-entries {
-  width: 230px;
+  width: 248px;
   flex-shrink: 0;
   background: var(--bg-card);
   border: 1px solid var(--border-card);
   border-radius: var(--radius-lg);
-  padding: 10px;
+  padding: 12px;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 10px;
   overflow: hidden;
+  transition: width var(--transition-normal);
+}
+.cg-entries.collapsed {
+  width: 36px;
+  padding: 8px 4px;
+  align-items: center;
 }
 .cg-entries-head {
-  font-size: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12.5px;
   font-weight: 600;
-  color: var(--text-tertiary);
+  color: var(--text-secondary);
 }
+.cg-fold-btn,
+.cg-rail-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: none;
+  background: transparent;
+  color: var(--text-tertiary);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+.cg-fold-btn:hover,
+.cg-rail-btn:hover {
+  background: var(--bg-elevated);
+  color: var(--color-primary);
+}
+/* 折叠细轨（仅图标） */
+.cg-entries-rail {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  flex: 1;
+}
+.cg-rail-btn {
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--border-base);
+  border-radius: var(--radius-md);
+}
+/* 分组列表 */
 .cg-entry-list {
   flex: 1;
   overflow-y: auto;
+  margin: 0 -4px;
+  padding: 0 4px;
+}
+.cg-entry-groupwrap {
+  margin-bottom: 2px;
 }
 .cg-entry-group {
-  font-size: 11px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 4px;
+  font-size: 12px;
+  font-weight: 600;
   color: var(--text-tertiary);
-  margin: 10px 0 4px;
-  border-bottom: 1px dashed var(--border-light);
-  padding-bottom: 2px;
-}
-.cg-entry-item {
-  padding: 6px 8px;
   border-radius: var(--radius-sm);
   cursor: pointer;
-  border: 1px solid transparent;
+  user-select: none;
+  transition: all var(--transition-fast);
+}
+.cg-entry-group:hover {
+  color: var(--text-secondary);
+}
+.cg-group-caret {
+  font-size: 10px;
+  transition: transform var(--transition-fast);
+  opacity: 0.7;
+}
+.cg-group-caret.open {
+  transform: rotate(90deg);
+}
+.cg-group-label {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cg-group-count {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--text-disabled);
+  flex-shrink: 0;
+}
+/* 子项：文件树式左发丝线，结构感来自层级而非色块 */
+.cg-entry-children {
+  margin-left: 9px;
+  padding-left: 8px;
+  border-left: 1px solid var(--border-light);
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.cg-entry-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 6px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
   transition: all var(--transition-fast);
 }
 .cg-entry-item:hover {
   background: var(--bg-elevated);
-  border-color: var(--color-primary-border);
 }
 .cg-entry-item.active {
   background: var(--color-primary-bg);
-  border-color: var(--color-primary-border);
 }
-.cg-entry-item b {
-  display: block;
-  font-size: 12.5px;
+.cg-entry-item.active .cg-entry-path {
+  color: var(--color-primary);
   font-weight: 600;
-  word-break: break-all;
-  color: var(--text-primary);
 }
-.cg-entry-item span {
+/* 动词：纯色文字（无底无框），低饱和双主题可读 */
+.cg-verb {
+  flex-shrink: 0;
+  min-width: 48px;
   font-size: 11px;
-  color: #7dd8e8;
+  font-weight: 600;
+  font-family: "JetBrains Mono", monospace;
 }
-.cg-entry-item.custom span {
-  color: #ffcf7d;
+.m-get { color: #3d9a6f; }
+.m-post { color: #4b8fd6; }
+.m-put { color: #bd8a1e; }
+.m-delete { color: #d24a4e; }
+.m-patch { color: #8f74e0; }
+.m-head,
+.m-options { color: #3a9fae; }
+.m-any,
+.m-gf { color: #75839f; }
+.m-none { display: none; }
+.cg-entry-path {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .cg-entry-empty {
-  font-size: 12px;
+  font-size: 12.5px;
   color: var(--text-tertiary);
   padding: 12px 4px;
   line-height: 1.6;

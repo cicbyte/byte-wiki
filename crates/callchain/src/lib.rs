@@ -126,7 +126,21 @@ struct FuncRec {
     start_row: usize, // 0-based
     end_row: usize,
     routes: Vec<String>,
+    /// 语言/框架约定的入口（fn main、#[command]、@Scheduled 等）：标入口但不进「路由入口」分组
+    entry_hint: bool,
+    /// go/GoFrame：handler 签名中的 `*XxxReq` 类型名（用于反查 Req struct tag 的路由元数据）
+    req_type: Option<String>,
     calls: Vec<(String, Option<String>, usize)>, // (被调名, 接收者文本, 1-based 行号)
+}
+
+/// 路由注册调用（框架在运行时把处理函数挂到路由——跨函数边界的入口来源），
+/// 如 js `router.get("/p", h)`、go gin `r.GET("/p", h)`、rust `.route("/p", get(h))`
+#[derive(Debug, Clone)]
+struct RouteReg {
+    label: String,   // "GET /api/x"（GoFrame Bind 无 path 时占位 "GF xxx"，解析时经 Req tag 反查升级）
+    handler: String, // 注册处引用的函数名（解析时取末段标识符）
+    /// 引用带容器时的限定提示（`controller.Auth.Login` → "Auth.Login"），解析优先于裸名
+    qual_hint: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -135,6 +149,9 @@ struct FileRec {
     file: String,
     lang: &'static str,
     funcs: Vec<FuncRec>,
+    registrations: Vec<RouteReg>,
+    /// go/GoFrame：本文件 Req struct 的路由元数据 (struct名, path, method)
+    req_tags: Vec<(String, String, String)>,
     source_lines: Vec<String>,
 }
 
@@ -193,16 +210,128 @@ fn callee_of(node: Node, src: &str) -> Option<(String, Option<String>)> {
     }
 }
 
-/// python 装饰器中的 Flask/FastAPI 路由识别（宽松：命中常见动词即算）
-fn routes_from_deco(deco: &str) -> Vec<String> {
-    const VERBS: [&str; 6] = [".route(", ".get(", ".post(", ".put(", ".delete(", ".patch("];
-    if VERBS.iter().any(|v| deco.contains(v)) {
-        let first = deco.lines().next().unwrap_or(deco).trim();
-        let label: String = first.chars().take(48).collect();
-        vec![label.to_string()]
-    } else {
-        vec![]
+/// 去掉字符串字面量的引号
+fn unquote(t: &str) -> String {
+    t.trim()
+        .trim_start_matches(['"', '\''])
+        .trim_end_matches(['"', '\''])
+        .to_string()
+}
+
+/// 文本中首个带引号字符串（路径提取用）
+fn first_quoted(s: &str) -> Option<String> {
+    for (i, c) in s.char_indices() {
+        if c == '"' || c == '\'' {
+            let rest = &s[i + 1..];
+            let end = rest.find(c)?;
+            return Some(rest[..end].to_string());
+        }
     }
+    None
+}
+
+/// HTTP 动词名归一（注册调用/注解通用；HandleFunc/Handle/Any 等全方法受理归为 ANY）
+fn http_verb(name: &str) -> Option<&'static str> {
+    Some(match name.to_ascii_uppercase().as_str() {
+        "GET" => "GET",
+        "POST" => "POST",
+        "PUT" => "PUT",
+        "DELETE" => "DELETE",
+        "PATCH" => "PATCH",
+        "HEAD" => "HEAD",
+        "OPTIONS" => "OPTIONS",
+        "ANY" | "ALL" | "HANDLE" | "HANDLEFUNC" => "ANY",
+        _ => return None,
+    })
+}
+
+/// python 装饰器中的 Flask/FastAPI 路由识别，标签美化 `METHOD /path`
+/// （`.route(` 的方法看 methods= 实参，缺省 GET；解析失败回退装饰器首行截断）
+fn routes_from_deco(deco: &str) -> Vec<String> {
+    const VERBS: [&str; 8] = [
+        ".route(", ".api_route(", ".get(", ".post(", ".put(", ".delete(", ".patch(", ".head(",
+    ];
+    let Some(hit) = VERBS.iter().find(|v| deco.contains(*v)) else {
+        return vec![];
+    };
+    let path = first_quoted(deco).unwrap_or_default();
+    let verb = if *hit == ".route(" || *hit == ".api_route(" {
+        deco.find("methods")
+            .and_then(|i| first_quoted(&deco[i..]))
+            .map(|m| m.to_ascii_uppercase())
+            .unwrap_or_else(|| "GET".into())
+    } else {
+        hit.trim_start_matches('.').trim_end_matches('(').to_ascii_uppercase()
+    };
+    if path.is_empty() && verb.is_empty() {
+        let first = deco.lines().next().unwrap_or(deco).trim();
+        return vec![first.chars().take(48).collect()];
+    }
+    vec![format!("{verb} {path}").trim().to_string()]
+}
+
+/// NestJS 方法装饰器 `@Get(':id')` → `GET :id`（无路径则仅动词）
+fn routes_from_nest_decorator(deco: &str) -> Vec<String> {
+    let name = deco.trim_start_matches('@');
+    let head = name.split('(').next().unwrap_or("").trim();
+    let Some(verb) = http_verb(head) else {
+        return vec![];
+    };
+    let path = first_quoted(deco).unwrap_or_default();
+    vec![if path.is_empty() { verb.to_string() } else { format!("{verb} {path}") }]
+}
+
+/// java Spring 系注解：@GetMapping("/x") 等映射注解 → 路由标签；
+/// @Scheduled / @*Listener → 仅入口标记（非路由）。返回 (routes, entry_hint)
+fn routes_from_java_annotations(node: Node, src: &str) -> (Vec<String>, bool) {
+    let mut routes = Vec::new();
+    let mut hint = false;
+    let mut cur = node.walk();
+    let found = node.children(&mut cur).any(|c| {
+        if c.kind() != "modifiers" {
+            return false;
+        }
+        let mut m = c.walk();
+        for a in c.children(&mut m) {
+            if a.kind() != "annotation" {
+                continue;
+            }
+            let name = a
+                .child_by_field_name("name")
+                .map(|n| text_of(n, src))
+                .unwrap_or("");
+            let path = a
+                .child_by_field_name("arguments")
+                .map(|arg| {
+                    let mut w = arg.walk();
+                    let p = arg
+                        .children(&mut w)
+                        .find(|x| x.kind() == "string_literal")
+                        .map(|x| unquote(text_of(x, src)))
+                        .unwrap_or_default();
+                    drop(w);
+                    p
+                })
+                .unwrap_or_default();
+            let verb = match name {
+                "GetMapping" => Some("GET"),
+                "PostMapping" => Some("POST"),
+                "PutMapping" => Some("PUT"),
+                "DeleteMapping" => Some("DELETE"),
+                "PatchMapping" => Some("PATCH"),
+                "RequestMapping" => Some("ANY"),
+                _ => None,
+            };
+            if let Some(v) = verb {
+                routes.push(if path.is_empty() { v.to_string() } else { format!("{v} {path}") });
+            } else if name == "Scheduled" || name.ends_with("Listener") {
+                hint = true;
+            }
+        }
+        false
+    });
+    let _ = found;
+    (routes, hint)
 }
 
 /// 装饰器/async 的识别是语法层探测（各 grammar 表示不一）：
@@ -234,7 +363,52 @@ fn visit(
 
     if conf.func_kinds.contains(&kind) {
         if let Some(name) = def_name(node, src) {
-            let routes: Vec<String> = decorations.iter().flat_map(|d| routes_from_deco(d)).collect();
+            // 框架入口识别（按语言组装 routes 与 entry_hint）
+            let mut routes: Vec<String> =
+                decorations.iter().flat_map(|d| routes_from_deco(d)).collect();
+            let mut entry_hint = false;
+            if conf.name == "java" {
+                let (ann_routes, ann_hint) = routes_from_java_annotations(node, src);
+                routes.extend(ann_routes);
+                entry_hint |= ann_hint;
+            }
+            if conf.name == "javascript" || conf.name == "typescript" {
+                // NestJS 方法装饰器
+                if let Some(d) = node.child_by_field_name("decorator") {
+                    routes.extend(routes_from_nest_decorator(text_of(d, src)));
+                }
+            }
+            if conf.name == "rust" {
+                // 紧邻的 attribute（#[tauri::command] 等）→ 入口标记
+                let mut prev = node.prev_sibling();
+                while let Some(p) = prev {
+                    if p.kind() != "attribute_item" {
+                        break;
+                    }
+                    if text_of(p, src).contains("command") {
+                        entry_hint = true;
+                    }
+                    prev = p.prev_sibling();
+                }
+            }
+            // 语言约定：go/rust 的 main 即进程入口
+            if (conf.name == "go" || conf.name == "rust") && name == "main" {
+                entry_hint = true;
+            }
+            // go/GoFrame：handler 签名中的 `*XxxReq` 类型名（跨文件反查 Req struct tag 路由元数据）
+            let req_type = if conf.name == "go" {
+                node.child_by_field_name("parameters")
+                    .map(|p| text_of(p, src))
+                    .and_then(|t| {
+                        t.split(|c: char| c == ',' || c.is_whitespace())
+                            .map(|tok| tok.trim_matches(|c: char| !c.is_alphanumeric() && c != '.'))
+                            .filter(|tok| tok.ends_with("Req") && tok.len() > 3)
+                            .next()
+                            .map(|tok| tok.rsplit('.').next().unwrap_or(tok).to_string())
+                    })
+            } else {
+                None
+            };
             // go 方法：接收者类型作容器前缀（`func (s *Svc) Transform` → Svc.Transform）
             let recv_type = node
                 .child_by_field_name("receiver")
@@ -262,6 +436,8 @@ fn visit(
                 start_row: node.start_position().row,
                 end_row: node.end_position().row,
                 routes,
+                entry_hint,
+                req_type,
                 calls: Vec::new(),
             };
             let idx = funcs.len();
@@ -381,14 +557,252 @@ fn extract_file(path: &Path, root: &Path, conf: &LangConf) -> Option<FileRec> {
             }
         }
     }
+    // Next.js App Router 文件约定：route.ts/route.js 内导出的 HTTP 动词函数即入口
+    let base = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    if (conf.name == "typescript" || conf.name == "javascript")
+        && matches!(base, "route.ts" | "route.tsx" | "route.js")
+    {
+        // module 形如 "app/api/items/route" / "src/app/api/items/route" → URL 路径剥掉 app/ 前缀
+        let dir: String = module.rsplit_once('/').map(|(d, _)| d.to_string()).unwrap_or_default();
+        let url_path = format!(
+            "/{}",
+            dir.split("app/").last().unwrap_or(&dir)
+        );
+        for f in deduped.iter_mut() {
+            if ["GET", "POST", "PUT", "DELETE", "PATCH"].contains(&f.name.as_str()) {
+                f.routes.push(format!("{} {url_path}", f.name));
+            }
+        }
+    }
+    // 注册式路由采集（Express/gin/HandleFunc/axum/GoFrame Bind 等）
+    let mut registrations = Vec::new();
+    collect_registrations(tree.root_node(), &src, conf, &mut registrations);
+    // go/GoFrame：Req struct tag 路由元数据
+    let mut req_tags = Vec::new();
+    if conf.name == "go" {
+        collect_go_req_tags(tree.root_node(), &src, &mut req_tags);
+    }
     Some(FileRec {
         module,
         file: path.strip_prefix(root).ok()?.to_string_lossy().replace('\\', "/"),
         lang: conf.name,
         funcs: deduped,
+        registrations,
+        req_tags,
         source_lines: src.lines().map(|l| l.to_string()).collect(),
     })
 }
+
+// ----------------------------------------------------------------------------
+// 注册式路由采集：框架运行时挂路由（跨函数边界的入口来源）
+// ----------------------------------------------------------------------------
+
+/// 调用实参中取「首个字符串 + 首个处理函数引用」（如 `("/p", handler)`）
+fn string_then_handler(args: Node, src: &str) -> Option<(String, String)> {
+    let mut path: Option<String> = None;
+    let mut handler: Option<String> = None;
+    let mut cur = args.walk();
+    for a in args.children(&mut cur) {
+        if !a.is_named() {
+            continue;
+        }
+        match a.kind() {
+            "string" | "interpreted_string_literal" | "string_literal" if path.is_none() => {
+                path = Some(unquote(text_of(a, src)));
+            }
+            "identifier" | "member_expression" | "selector_expression" | "field_expression"
+            | "path_expression" | "scoped_identifier" if handler.is_none() => {
+                let t = text_of(a, src);
+                let last = t.rsplit(['.', ':']).next().unwrap_or("").to_string();
+                if !last.is_empty() {
+                    handler = Some(last);
+                }
+            }
+            _ => {}
+        }
+    }
+    Some((path?, handler?))
+}
+
+/// 从路由注册调用提取注册列表（GoFrame Bind 一次可注册多个 handler）。
+/// js/ts：`router.get("/p", h)`（Express/Koa/Fastify 风格）
+/// go：`r.GET("/p", h)`（gin/echo/fiber）、`mux.HandleFunc("/p", h)`（net/http）、
+///     `group.Bind(controller.Auth.Login, ...)`（GoFrame，path/method 在 Req struct tag）
+/// rust：`.route("/p", get(h))`（axum）
+fn registration_of(node: Node, src: &str, conf: &LangConf) -> Vec<RouteReg> {
+    let (Some(args), Some(f)) = (node.child_by_field_name("arguments"), node.child_by_field_name("function")) else {
+        return vec![];
+    };
+    match conf.name {
+        "javascript" | "typescript" => {
+            if f.kind() != "member_expression" {
+                return vec![];
+            }
+            let prop = f
+                .child_by_field_name("property")
+                .map(|n| text_of(n, src))
+                .unwrap_or("");
+            let verb = match http_verb(prop) {
+                Some(v) => v,
+                None => return vec![],
+            };
+            match string_then_handler(args, src) {
+                Some((path, handler)) => vec![RouteReg { label: format!("{verb} {path}"), handler, qual_hint: None }],
+                None => vec![],
+            }
+        }
+        "go" => {
+            if f.kind() != "selector_expression" {
+                return vec![];
+            }
+            let field_name = f
+                .child_by_field_name("field")
+                .map(|n| text_of(n, src))
+                .unwrap_or("");
+            // GoFrame：group.Bind(h.A.B, c.D.E, ...) —— 实参全是 handler 引用，
+            // path/method 在 handler 签名 *XxxReq 对应 struct 的 g.Meta tag（解析阶段反查升级标签）
+            if field_name == "Bind" {
+                let mut out = Vec::new();
+                let mut cur = args.walk();
+                for a in args.children(&mut cur) {
+                    if !a.is_named() || !matches!(a.kind(), "identifier" | "selector_expression" | "field_expression" | "parenthesized_expression") {
+                        continue;
+                    }
+                    let t = text_of(a, src).replace('(', "").replace(')', "").trim().to_string();
+                    let segs: Vec<&str> = t.split('.').collect();
+                    let Some(last) = segs.last().copied().filter(|s| !s.is_empty()) else {
+                        continue;
+                    };
+                    if !last.chars().all(|c| c.is_alphanumeric() || c == '_') {
+                        continue;
+                    }
+                    let qual_hint = if segs.len() >= 2 {
+                        Some(format!("{}.{}", segs[segs.len() - 2], last))
+                    } else {
+                        None
+                    };
+                    out.push(RouteReg { label: format!("GF {t}"), handler: last.to_string(), qual_hint });
+                }
+                return out;
+            }
+            match http_verb(field_name).zip(string_then_handler(args, src)) {
+                Some((verb, (path, handler))) => vec![RouteReg { label: format!("{verb} {path}"), handler, qual_hint: None }],
+                None => vec![],
+            }
+        }
+        "rust" => {
+            // axum：.route("/p", get(h)) —— path 是首个字符串实参，动词在内层调用名
+            let route_field = f
+                .child_by_field_name("field")
+                .map(|n| text_of(n, src))
+                .unwrap_or("");
+            if f.kind() != "field_expression" || route_field != "route" {
+                return vec![];
+            }
+            let mut path: Option<String> = None;
+            let mut handler: Option<String> = None;
+            let mut verb: Option<&'static str> = None;
+            let mut cur = args.walk();
+            for a in args.children(&mut cur) {
+                if !a.is_named() {
+                    continue;
+                }
+                if a.kind() == "string_literal" && path.is_none() {
+                    path = Some(unquote(text_of(a, src)));
+                } else if a.kind() == "call_expression" && handler.is_none() {
+                    let cf = match a.child_by_field_name("function") {
+                        Some(c) if c.kind() == "identifier" => c,
+                        _ => continue,
+                    };
+                    let v = match http_verb(text_of(cf, src)) {
+                        Some(v) => v,
+                        None => continue,
+                    };
+                    if let Some(hargs) = a.child_by_field_name("arguments") {
+                        let mut w = hargs.walk();
+                        let mut got: Option<String> = None;
+                        for ha in hargs.children(&mut w) {
+                            if matches!(
+                                ha.kind(),
+                                "identifier" | "path_expression" | "field_expression" | "scoped_identifier"
+                            ) {
+                                let t = text_of(ha, src);
+                                let last = t.rsplit(['.', ':']).next().unwrap_or("").to_string();
+                                if !last.is_empty() {
+                                    got = Some(last);
+                                }
+                                break;
+                            }
+                        }
+                        drop(w);
+                        if let Some(h) = got {
+                            handler = Some(h);
+                            verb = Some(v);
+                        }
+                    }
+                }
+            }
+            match (verb, path, handler) {
+                (Some(v), Some(p), Some(h)) => vec![RouteReg { label: format!("{v} {p}"), handler: h, qual_hint: None }],
+                _ => vec![],
+            }
+        }
+        _ => vec![],
+    }
+}
+
+/// 全树递归采集路由注册（独立轻量扫描，不复用 visit 的函数语义）
+fn collect_registrations(node: Node, src: &str, conf: &LangConf, out: &mut Vec<RouteReg>) {
+    if conf.call_kinds.contains(&node.kind()) {
+        out.extend(registration_of(node, src, conf));
+    }
+    let mut cur = node.walk();
+    for child in node.children(&mut cur) {
+        collect_registrations(child, src, conf, out);
+    }
+}
+
+/// go/GoFrame：Req struct 的 g.Meta tag 路由元数据收集
+/// （`type XxxReq struct { g.Meta \`path:"/x" method:"get"\` }`）
+fn collect_go_req_tags(node: Node, src: &str, out: &mut Vec<(String, String, String)>) {
+    if node.kind() == "type_declaration" {
+        let mut cur = node.walk();
+        for spec in node.children(&mut cur) {
+            if spec.kind() != "type_spec" {
+                continue;
+            }
+            let Some(name) = spec.child_by_field_name("name").map(|n| text_of(n, src).to_string()) else {
+                continue;
+            };
+            let Some(ty) = spec.child_by_field_name("type") else { continue };
+            if ty.kind() != "struct_type" {
+                continue;
+            }
+            let body_text = text_of(ty, src);
+            if !body_text.contains("path:\"") {
+                continue;
+            }
+            let path = body_text
+                .find("path:")
+                .and_then(|i| first_quoted(&body_text[i..]))
+                .unwrap_or_default();
+            let method = body_text
+                .find("method:")
+                .and_then(|i| first_quoted(&body_text[i..]))
+                .map(|m| m.to_ascii_uppercase())
+                .unwrap_or_else(|| "ANY".into());
+            if !path.is_empty() {
+                out.push((name, path, method));
+            }
+        }
+    }
+    let mut cur = node.walk();
+    for child in node.children(&mut cur) {
+        collect_go_req_tags(child, src, out);
+    }
+}
+
+
 
 // ----------------------------------------------------------------------------
 // 建图（与 Python 版同 schema 的 JSON；source 为可选字段）
@@ -468,17 +882,82 @@ pub fn extract(
     }
     on_progress(paths.len());
 
-    // 全局与模块内名字索引
-    let mut global_idx: HashMap<&str, Vec<(usize, usize)>> = HashMap::new(); // name -> [(file_i, func_i)]
-    let mut local_idx: HashMap<(usize, &str), Vec<usize>> = HashMap::new();
+    // 全局与模块内名字索引（持 String 键：后续注册解析要可变回写 files，
+    // 索引不能借住 files 的 &str）
+    let mut global_idx: HashMap<String, Vec<(usize, usize)>> = HashMap::new(); // name -> [(file_i, func_i)]
+    let mut local_idx: HashMap<(usize, String), Vec<usize>> = HashMap::new();
     for (fi, f) in files.iter().enumerate() {
         for (gi, g) in f.funcs.iter().enumerate() {
-            global_idx.entry(g.name.as_str()).or_default().push((fi, gi));
+            global_idx.entry(g.name.clone()).or_default().push((fi, gi));
             local_idx
-                .entry((fi, g.name.as_str()))
+                .entry((fi, g.name.clone()))
                 .or_default()
                 .push(gi);
         }
+    }
+
+    // go/GoFrame：Req struct tag 全局表（struct名 → method path），注册解析时跨文件反查
+    let mut req_tags: HashMap<String, (String, String)> = HashMap::new();
+    for f in &files {
+        for (name, path, method) in &f.req_tags {
+            req_tags
+                .entry(name.clone())
+                .or_insert_with(|| (method.clone(), path.clone()));
+        }
+    }
+
+    // 注册式路由解析：qual_hint（容器.方法）全局唯一优先，其次本文件同名（全部），
+    // 再次全局唯一裸名；GoFrame 占位标签（"GF xxx"）经 handler 的 *XxxReq 反查 tag 升级
+    let mut route_hits: Vec<(usize, usize, String)> = Vec::new();
+    for (fi, f) in files.iter().enumerate() {
+        for reg in &f.registrations {
+            if reg.handler.is_empty() {
+                continue;
+            }
+            let by_hint: Option<Vec<(usize, usize)>> = reg.qual_hint.as_ref().map(|hint| {
+                files
+                    .iter()
+                    .enumerate()
+                    .flat_map(|(fj, ff)| {
+                        ff.funcs
+                            .iter()
+                            .enumerate()
+                            .filter(|(_, g)| &g.qualname == hint)
+                            .map(move |(gj, _)| (fj, gj))
+                    })
+                    .collect()
+            });
+            let resolved = if let Some(hits) = by_hint {
+                (hits.len() == 1).then_some(hits)
+            } else {
+                None
+            }
+            .or_else(|| {
+                local_idx
+                    .get(&(fi, reg.handler.clone()))
+                    .map(|gis| gis.iter().map(|&gi| (fi, gi)).collect())
+            })
+            .or_else(|| {
+                global_idx.get(&reg.handler).and_then(|cands| {
+                    (cands.len() == 1).then(|| vec![cands[0]])
+                })
+            });
+            let Some(targets) = resolved else { continue };
+            for (tfi, tgi) in targets {
+                let mut label = reg.label.clone();
+                if label.starts_with("GF ") {
+                    if let Some(rt) = &files[tfi].funcs[tgi].req_type {
+                        if let Some((method, path)) = req_tags.get(rt) {
+                            label = format!("{method} {path}");
+                        }
+                    }
+                }
+                route_hits.push((tfi, tgi, label));
+            }
+        }
+    }
+    for (fi, gi, label) in route_hits {
+        files[fi].funcs[gi].routes.push(label);
     }
 
     let mut nodes = Vec::new();
@@ -493,7 +972,7 @@ pub fn extract(
                 .as_ref()
                 .map(|re| re.is_match(&g.qualname) || re.is_match(&id))
                 .unwrap_or(false);
-            let is_entry = !g.routes.is_empty() || matched;
+            let is_entry = !g.routes.is_empty() || g.entry_hint || matched;
             let mut node = json!({
                 "id": id,
                 "module": f.module,
@@ -526,7 +1005,7 @@ pub fn extract(
                 let mut targets: Vec<(String, &str)> = Vec::new();
                 if recv.is_none() {
                     // 裸调用：local（同文件同名）→ heuristic（全局唯一）→ 丢弃
-                    if let Some(gis) = local_idx.get(&(fi, callee.as_str())) {
+                    if let Some(gis) = local_idx.get(&(fi, callee.clone())) {
                         for t in gis {
                             targets.push((format!("{}::{}", f.module, f.funcs[*t].qualname), "local"));
                         }
@@ -861,5 +1340,180 @@ fn consume(v: i32) {}
         let g = extract(&root, &ExtractOptions { entry_regex: Some(re), ..Default::default() }, &|_| {}).unwrap();
         assert_eq!(find_node(&g, "worker_main")["is_entry"], true);
         assert_eq!(find_node(&g, "other")["is_entry"], false);
+    }
+
+    // ===== 框架入口适配 =====
+
+    #[test]
+    fn python_route_label_pretty() {
+        let (_d, root) = tmp_repo(&[(
+            "a.py",
+            "@app.get(\"/users\")\ndef list_users():\n    pass\n\n@bp.route(\"/task/create\", methods=[\"POST\"])\ndef create_task():\n    pass\n",
+        )]);
+        let g = extract_default(&root);
+        let n = find_node(&g, "list_users");
+        assert_eq!(n["routes"][0], "GET /users");
+        let n = find_node(&g, "create_task");
+        assert_eq!(n["routes"][0], "POST /task/create");
+    }
+
+    #[test]
+    fn js_express_registration() {
+        let (_d, root) = tmp_repo(&[(
+            "server.js",
+            r#"
+const router = require("express").Router();
+
+router.get("/users", listUsers);
+router.post("/users/:id", updateUser);
+router.delete("/users/:id", function inlineHandler(req, res) {});
+
+function listUsers(req, res) {}
+function updateUser(req, res) {}
+"#,
+        )]);
+        let g = extract_default(&root);
+        let n = find_node(&g, "listUsers");
+        assert_eq!(n["is_entry"], true, "router.get 回调引用应标入口");
+        assert_eq!(n["routes"][0], "GET /users");
+        assert_eq!(find_node(&g, "updateUser")["routes"][0], "POST /users/:id");
+        // 匿名内联函数注册不产生入口（无具名 handler 可解析）
+        assert!(!g["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|x| x["qualname"] == "inlineHandler" && x["is_entry"] == true));
+    }
+
+    #[test]
+    fn go_gin_and_nethttp_registration() {
+        let (_d, root) = tmp_repo(&[(
+            "main.go",
+            r#"
+package main
+
+func setup(r *gin.Engine) {
+	r.GET("/ping", pingHandler)
+	http.HandleFunc("/health", healthHandler)
+}
+
+func pingHandler(c *gin.Context) {}
+func healthHandler(w http.ResponseWriter, r *http.Request) {}
+"#,
+        )]);
+        let g = extract_default(&root);
+        assert_eq!(find_node(&g, "pingHandler")["routes"][0], "GET /ping");
+        assert_eq!(find_node(&g, "healthHandler")["routes"][0], "ANY /health");
+        assert_eq!(find_node(&g, "pingHandler")["is_entry"], true);
+    }
+
+    #[test]
+    fn go_rust_main_convention() {
+        let (_d, root) = tmp_repo(&[
+            ("m.go", "package main\n\nfunc main() {\n\tsetup()\n}\n\nfunc setup() {}\n"),
+            ("m.rs", "fn main() {\n    run();\n}\n\nfn run() {}\n"),
+        ]);
+        let g = extract_default(&root);
+        let go_main = find_node(&g, "main"); // go: module m 的 main
+        assert_eq!(go_main["module"], "m");
+        assert_eq!(go_main["is_entry"], true, "go fn main 约定入口");
+        assert!(go_main["routes"].as_array().unwrap().is_empty(), "约定入口不进路由分组");
+        let rust_main = g["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|n| n["module"] == "m" && n["file"] == "m.rs")
+            .unwrap();
+        assert_eq!(rust_main["is_entry"], true, "rust fn main 约定入口");
+    }
+
+    #[test]
+    fn rust_axum_registration_and_command_attr() {
+        let (_d, root) = tmp_repo(&[(
+            "app.rs",
+            r#"
+fn routes() -> Router {
+    Router::new()
+        .route("/health", get(health))
+        .route("/tasks", post(create_task))
+}
+
+async fn health() -> &'static str { "ok" }
+async fn create_task() {}
+
+#[tauri::command]
+fn load_config() -> u32 { 1 }
+"#,
+        )]);
+        let g = extract_default(&root);
+        assert_eq!(find_node(&g, "health")["routes"][0], "GET /health");
+        assert_eq!(find_node(&g, "create_task")["routes"][0], "POST /tasks");
+        let cmd = find_node(&g, "load_config");
+        assert_eq!(cmd["is_entry"], true, "#[tauri::command] 标入口");
+        assert!(cmd["routes"].as_array().unwrap().is_empty(), "command 属自定义入口而非路由");
+    }
+
+    #[test]
+    fn java_spring_annotations() {
+        let (_d, root) = tmp_repo(&[(
+            "UserController.java",
+            r#"
+@RestController
+public class UserController {
+    @GetMapping("/users")
+    public List<User> listUsers() {
+        return repo.findAll();
+    }
+
+    @Scheduled(fixedRate = 5000)
+    public void syncJob() {}
+}
+"#,
+        )]);
+        let g = extract_default(&root);
+        let n = find_node(&g, "UserController.listUsers");
+        assert_eq!(n["routes"][0], "GET /users");
+        assert_eq!(n["is_entry"], true);
+        let job = find_node(&g, "UserController.syncJob");
+        assert_eq!(job["is_entry"], true, "@Scheduled 标入口");
+        assert!(job["routes"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn nextjs_route_file_convention() {
+        let (_d, root) = tmp_repo(&[(
+            "src/app/api/items/route.ts",
+            "export async function GET() {\n    return list();\n}\n\nexport async function POST(req: Request) {}\n",
+        )]);
+        let g = extract_default(&root);
+        let n = find_node(&g, "GET");
+        assert_eq!(n["is_entry"], true);
+        assert_eq!(n["routes"][0], "GET /api/items", "剥掉 src/app 前缀后的 URL 路径");
+    }
+
+    #[test]
+    fn goframe_bind_with_req_tag() {
+        // 三文件跨文件解析：Req struct tag（api 包）← controller 方法签名 *XxxReq ← router Bind 引用
+        let (_d, root) = tmp_repo(&[
+            (
+                "api/setting.go",
+                "package api\n\ntype GetProfileReq struct {\n\tg.Meta `path:\"/account/profile\" method:\"get\"`\n}\n",
+            ),
+            (
+                "controller/setting.go",
+                "package controller\n\ntype Setting struct{}\n\nfunc (s *Setting) GetProfile(ctx context.Context, req *GetProfileReq) error {\n\treturn nil\n}\n",
+            ),
+            (
+                "router/router.go",
+                "package router\n\nfunc BindController(group *ghttp.RouterGroup) {\n\tgroup.Bind(\n\t\tcontroller.Setting.GetProfile,\n\t)\n}\n",
+            ),
+        ]);
+        let g = extract_default(&root);
+        let n = find_node(&g, "Setting.GetProfile");
+        assert_eq!(n["is_entry"], true, "Bind 引用经 qual_hint 解析到 controller 方法");
+        assert_eq!(
+            n["routes"][0], "GET /account/profile",
+            "handler 签名 *GetProfileReq 反查 tag 升级标签"
+        );
     }
 }
