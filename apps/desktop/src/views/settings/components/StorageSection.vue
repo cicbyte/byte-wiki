@@ -108,10 +108,10 @@ async function importBackup() {
       <div class="section-head">数据目录</div>
       <div class="dir-row">
         <span class="field-value mono dir-path">{{ dataDir }}</span>
-        <button class="storage-btn" @click="openDataDir" title="在文件管理器中打开">
+        <button class="btn" @click="openDataDir" title="在文件管理器中打开">
           <FolderViewOutlined /> 打开目录
         </button>
-        <button class="storage-btn" @click="chooseDataDir" title="选择其他数据目录">
+        <button class="btn" @click="chooseDataDir" title="选择其他数据目录">
           <FolderOpenOutlined /> 更改目录
         </button>
       </div>
@@ -124,10 +124,10 @@ async function importBackup() {
     <div class="storage-section">
       <div class="section-head">备份与恢复</div>
       <div class="backup-actions">
-        <button class="storage-btn primary" :disabled="backing" @click="exportBackup">
+        <button class="btn primary" :disabled="backing" @click="exportBackup">
           <DownloadOutlined /> {{ backing ? "导出中…" : "导出备份" }}
         </button>
-        <button class="storage-btn" :disabled="restoring" @click="importBackup">
+        <button class="btn" :disabled="restoring" @click="importBackup">
           <UploadOutlined /> {{ restoring ? "恢复中…" : "导入备份" }}
         </button>
       </div>
@@ -189,38 +189,6 @@ async function importBackup() {
 .backup-actions {
   display: flex;
   gap: var(--spacing-sm);
-}
-.storage-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  height: 32px;
-  padding: 0 14px;
-  border: 1px solid var(--border-base);
-  background: var(--bg-surface);
-  color: var(--text-secondary);
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-  font-size: 13px;
-  transition: all var(--transition-fast);
-}
-.storage-btn:hover:not(:disabled) {
-  border-color: var(--color-primary-border);
-  color: var(--color-primary);
-}
-.storage-btn.primary {
-  border-color: var(--color-primary);
-  background: var(--color-primary);
-  color: #fff;
-}
-.storage-btn.primary:hover:not(:disabled) {
-  background: var(--color-primary-hover);
-  border-color: var(--color-primary-hover);
-  color: #fff;
-}
-.storage-btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
 }
 
 .field-row {

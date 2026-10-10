@@ -407,7 +407,7 @@ function removeModel(name: string) {
               size="small"
               style="flex: 1"
             />
-            <button class="storage-btn check-btn" :class="{ ok: connectResult?.ok }" :disabled="checking" @click="handleCheckConnectivity">
+            <button class="btn check-btn" :class="{ ok: connectResult?.ok }" :disabled="checking" @click="handleCheckConnectivity">
               <CheckCircleFilled v-if="connectResult?.ok" style="color: #52c41a" />
               <CloseCircleOutlined v-else-if="connectResult && !connectResult.ok" style="color: #ff4d4f" />
               {{ checking ? "检测中…" : "检测" }}
@@ -450,10 +450,10 @@ function removeModel(name: string) {
             <span>模型列表</span>
             <a-tag>{{ editForm.models.length }}</a-tag>
             <div style="flex: 1" />
-            <button class="storage-btn mini-btn" :disabled="fetching" @click="showFetchModels">
+            <button class="btn mini-btn" :disabled="fetching" @click="showFetchModels">
               <SyncOutlined /> {{ fetching ? "获取中…" : "获取模型" }}
             </button>
-            <button class="storage-btn mini-btn" style="margin-left: 4px" @click="addModelVisible = true; addModelText = ''">
+            <button class="btn mini-btn" style="margin-left: 4px" @click="addModelVisible = true; addModelText = ''">
               <PlusOutlined /> 添加
             </button>
           </div>
@@ -488,11 +488,11 @@ function removeModel(name: string) {
           </div>
         </div>
         <div class="setting-group detail-actions">
-          <button v-if="!isActive" class="storage-btn primary" @click="setActive">
+          <button v-if="!isActive" class="btn primary" @click="setActive">
             <ApiOutlined /> 设为当前使用
           </button>
           <span v-else class="in-use-hint">当前生成与问答使用此供应商</span>
-          <button class="storage-btn danger-btn" @click="removeProvider">
+          <button class="btn danger-btn" @click="removeProvider">
             <DeleteOutlined /> 删除
           </button>
         </div>
@@ -904,37 +904,4 @@ function removeModel(name: string) {
   margin: 0;
 }
 
-/* 复用设置页按钮规范 */
-.storage-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  height: 32px;
-  padding: 0 14px;
-  border: 1px solid var(--border-base);
-  background: var(--bg-surface);
-  color: var(--text-secondary);
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-  font-size: 13px;
-  transition: all var(--transition-fast);
-}
-.storage-btn:hover:not(:disabled) {
-  border-color: var(--color-primary-border);
-  color: var(--color-primary);
-}
-.storage-btn.primary {
-  border-color: var(--color-primary);
-  background: var(--color-primary);
-  color: #fff;
-}
-.storage-btn.primary:hover:not(:disabled) {
-  background: var(--color-primary-hover);
-  border-color: var(--color-primary-hover);
-  color: #fff;
-}
-.storage-btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
 </style>

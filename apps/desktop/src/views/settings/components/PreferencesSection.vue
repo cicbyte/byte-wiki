@@ -56,10 +56,10 @@ function resetExcludeDirs() {
         已预置常见依赖、构建产物与 IDE 配置目录。CLI 可用 <code>--exclude</code> 临时覆盖。
       </p>
       <div class="backup-actions">
-        <button class="storage-btn primary" @click="saveExcludeDirs">
+        <button class="btn primary" @click="saveExcludeDirs">
           保存
         </button>
-        <button class="storage-btn" @click="resetExcludeDirs">
+        <button class="btn" @click="resetExcludeDirs">
           重置为默认
         </button>
       </div>
@@ -91,38 +91,6 @@ function resetExcludeDirs() {
 .backup-actions {
   display: flex;
   gap: var(--spacing-sm);
-}
-.storage-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  height: 32px;
-  padding: 0 14px;
-  border: 1px solid var(--border-base);
-  background: var(--bg-surface);
-  color: var(--text-secondary);
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-  font-size: 13px;
-  transition: all var(--transition-fast);
-}
-.storage-btn:hover:not(:disabled) {
-  border-color: var(--color-primary-border);
-  color: var(--color-primary);
-}
-.storage-btn.primary {
-  border-color: var(--color-primary);
-  background: var(--color-primary);
-  color: #fff;
-}
-.storage-btn.primary:hover:not(:disabled) {
-  background: var(--color-primary-hover);
-  border-color: var(--color-primary-hover);
-  color: #fff;
-}
-.storage-btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
 }
 
 .hint {

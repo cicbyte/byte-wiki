@@ -75,10 +75,10 @@ function fmtTime(iso: string | null): string {
             class="path-input"
             @keydown.enter="openFromInput"
           />
-          <button class="storage-btn primary" :disabled="wiki.opening || !pathInput.trim()" @click="openFromInput">
+          <button class="btn primary" :disabled="wiki.opening || !pathInput.trim()" @click="openFromInput">
             {{ wiki.opening ? "打开中…" : "打开" }}
           </button>
-          <button class="storage-btn" :disabled="wiki.opening" @click="pickAndOpen">
+          <button class="btn" :disabled="wiki.opening" @click="pickAndOpen">
             <FolderOpenOutlined />
             浏览…
           </button>
@@ -211,37 +211,4 @@ function fmtTime(iso: string | null): string {
   flex-shrink: 0;
 }
 
-/* 复用设置页按钮规范 */
-.storage-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  height: 32px;
-  padding: 0 14px;
-  border: 1px solid var(--border-base);
-  background: var(--bg-surface);
-  color: var(--text-secondary);
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-  font-size: 13px;
-  transition: all var(--transition-fast);
-}
-.storage-btn:hover:not(:disabled) {
-  border-color: var(--color-primary-border);
-  color: var(--color-primary);
-}
-.storage-btn.primary {
-  border-color: var(--color-primary);
-  background: var(--color-primary);
-  color: #fff;
-}
-.storage-btn.primary:hover:not(:disabled) {
-  background: var(--color-primary-hover);
-  border-color: var(--color-primary-hover);
-  color: #fff;
-}
-.storage-btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
 </style>

@@ -263,7 +263,7 @@ const busy = computed(() => generating.value || updating.value);
         hint="路径可能已被移动或删除，请返回项目列表重新打开"
       />
       <div class="failed-actions">
-        <button class="storage-btn" @click="router.push('/')">
+        <button class="btn" @click="router.push('/')">
           <ArrowLeftOutlined /> 返回项目列表
         </button>
       </div>
@@ -307,29 +307,29 @@ const busy = computed(() => generating.value || updating.value);
             <div class="overview-actions">
               <button
                 v-if="staleReport && staleReport.stale"
-                class="storage-btn stale-btn"
+                class="btn warn"
                 :disabled="busy"
                 @click="runUpdate"
               >
                 <SyncOutlined :spin="updating" />
                 {{ updating ? "更新中…" : `更新（${staleReport.changes.length} 变更）` }}
               </button>
-              <button class="storage-btn primary" :disabled="busy" @click="runGenerate">
+              <button class="btn primary" :disabled="busy" @click="runGenerate">
                 <ThunderboltOutlined />
                 {{ generating ? "生成中…" : "一键生成 Wiki" }}
               </button>
-              <button class="storage-btn" :disabled="indexing || busy" @click="runIndex">
+              <button class="btn" :disabled="indexing || busy" @click="runIndex">
                 <DatabaseOutlined />
                 {{ indexing ? "索引中…" : "仅索引" }}
               </button>
-              <button class="storage-btn" :disabled="rebuilding" @click="rebuildEmbeddings">
+              <button class="btn" :disabled="rebuilding" @click="rebuildEmbeddings">
                 <ClusterOutlined />
                 {{ rebuilding ? "重建索引中…" : "重建向量索引" }}
               </button>
-              <button v-if="wikiDocs.length" class="storage-btn" @click="router.push(`/repo/${repoId}/docs`)">
+              <button v-if="wikiDocs.length" class="btn" @click="router.push(`/repo/${repoId}/docs`)">
                 浏览文档（{{ wikiDocs.length }}）
               </button>
-              <button class="storage-btn" @click="router.push('/')">
+              <button class="btn" @click="router.push('/')">
                 <ArrowLeftOutlined /> 项目列表
               </button>
             </div>
@@ -389,28 +389,28 @@ const busy = computed(() => generating.value || updating.value);
           <div class="browse-actions">
             <button
               v-if="staleReport && staleReport.stale"
-              class="storage-btn stale-btn"
+              class="btn warn"
               :disabled="busy"
               @click="runUpdate"
             >
               <SyncOutlined :spin="updating" />
               {{ updating ? "更新中…" : `更新（${staleReport.changes.length}）` }}
             </button>
-            <button class="storage-btn" :disabled="busy" @click="runGenerate">
+            <button class="btn" :disabled="busy" @click="runGenerate">
               <ThunderboltOutlined />
               {{ generating ? "生成中…" : "重新生成" }}
             </button>
-            <button class="storage-btn" :disabled="rebuilding" @click="rebuildEmbeddings">
+            <button class="btn" :disabled="rebuilding" @click="rebuildEmbeddings">
               <ClusterOutlined />
               {{ rebuilding ? "重建索引中…" : "重建索引" }}
             </button>
-            <button class="storage-btn" @click="router.push(`/repo/${repoId}/chat`)">
+            <button class="btn" @click="router.push(`/repo/${repoId}/chat`)">
               <MessageOutlined /> 问答
             </button>
-            <button class="storage-btn" @click="cardModalOpen = true">
+            <button class="btn" @click="cardModalOpen = true">
               <FileAddOutlined /> 知识卡
             </button>
-            <button class="storage-btn" @click="router.push('/')">
+            <button class="btn" @click="router.push('/')">
               <ArrowLeftOutlined /> 项目列表
             </button>
           </div>
@@ -455,10 +455,10 @@ const busy = computed(() => generating.value || updating.value);
             <em v-if="wiki.currentRepo.branch">@{{ wiki.currentRepo.branch }}</em>
           </span>
           <div class="browse-actions">
-            <button class="storage-btn" @click="router.push(`/repo/${repoId}/docs`)">
+            <button class="btn" @click="router.push(`/repo/${repoId}/docs`)">
               <FileTextOutlined /> 文档
             </button>
-            <button class="storage-btn" @click="router.push('/')">
+            <button class="btn" @click="router.push('/')">
               <ArrowLeftOutlined /> 项目列表
             </button>
           </div>
@@ -472,10 +472,10 @@ const busy = computed(() => generating.value || updating.value);
       <div v-else-if="tab === 'cards'" class="pane-scroll">
         <Panel title="知识卡" :icon="BookOutlined" :count="cards.length">
           <div class="cards-actions">
-            <button class="storage-btn primary" @click="cardModalOpen = true">
+            <button class="btn primary" @click="cardModalOpen = true">
               <FileAddOutlined /> 新建知识卡
             </button>
-            <button class="storage-btn" @click="router.push('/')">
+            <button class="btn" @click="router.push('/')">
               <ArrowLeftOutlined /> 项目列表
             </button>
             <span class="hint">cards/ 为人工知识区：重新生成与增量更新不会覆盖，且可被问答检索</span>
@@ -832,41 +832,4 @@ const busy = computed(() => generating.value || updating.value);
   line-height: 1.6;
 }
 
-/* 复用设置页按钮规范 */
-.storage-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  height: 32px;
-  padding: 0 14px;
-  border: 1px solid var(--border-base);
-  background: var(--bg-surface);
-  color: var(--text-secondary);
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-  font-size: 13px;
-  transition: all var(--transition-fast);
-}
-.storage-btn:hover:not(:disabled) {
-  border-color: var(--color-primary-border);
-  color: var(--color-primary);
-}
-.storage-btn.primary {
-  border-color: var(--color-primary);
-  background: var(--color-primary);
-  color: #fff;
-}
-.storage-btn.primary:hover:not(:disabled) {
-  background: var(--color-primary-hover);
-  border-color: var(--color-primary-hover);
-  color: #fff;
-}
-.storage-btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-.storage-btn.stale-btn {
-  border-color: #ea8a3c;
-  color: #ea8a3c;
-}
 </style>

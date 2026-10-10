@@ -12,12 +12,24 @@
  *
  * 悬浮面板三档阴影 / 导航层次 / hero 变量按明暗静态定义（不随预设注入，随 [data-theme] 切换）。
  */
+/* ===== 按钮专用 token（按明暗定值，不跟随预设色——见 global.css .btn.primary 注释） ===== */
+:root {
+  --btn-ink: var(--text-primary); /* 默认钮 hover 着色：兜底跟随文字色 */
+  --btn-primary-bg: #2e3134;      /* 主钮底：暗色下比面板亮一档 */
+  --btn-primary-ink: #f4f4f2;     /* 主钮字：亮于底，白上白免疫 */
+}
+[data-theme="light"] {
+  --btn-ink: #3a3d42;
+  --btn-primary-bg: #2a2c30;      /* 主钮底：浅色下为深墨块 */
+  --btn-primary-ink: #fafaf8;     /* 主钮字：纸白 */
+}
+
 :root {
   /* ===== 基础 bg 原始值兜底（纸墨 dark；token apply 注入实际值到此） ===== */
-  --bg-base-orig: #191a1c;
-  --bg-surface-orig: #232527;
-  --bg-elevated-orig: #282a2c;
-  --bg-input-orig: #2d2f31;
+  --bg-base-orig: #16171a;
+  --bg-surface-orig: #212327;
+  --bg-elevated-orig: #33363b;
+  --bg-input-orig: #2b2d31;
 
   /* ===== 基础非 bg 兜底（纸墨 dark） ===== */
   --color-primary: #f2f2f0;
@@ -25,12 +37,12 @@
   --color-hover: rgba(255, 255, 255, 0.05);
   --text-primary: #ececee;
   --text-secondary: #a3a6aa;
-  --text-tertiary: #74777c;
-  --border-base: #3a3c3f;
-  --border-light: #2d2f31;
+  --text-tertiary: #787b80;
+  --border-base: #45484d;
+  --border-light: #33363b;
 
   /* ===== 扩展层（状态色等，不参与预设色调） ===== */
-  --text-disabled: #4b4e53;
+  --text-disabled: #50535a;
   --color-primary-hover: #ffffff;
   --color-primary-active: #d9d9d6;
   --color-primary-border: rgba(242, 242, 240, 0.4);

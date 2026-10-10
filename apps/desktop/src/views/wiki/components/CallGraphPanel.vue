@@ -345,8 +345,6 @@ async function loadData() {
 function buildGraph() {
   const d = data.value;
   if (!d || !canvasEl.value) return;
-  network?.destroy();
-  network = null;
   nodeById = new Map(d.nodes.map((n) => [n.id, n]));
   outEdges = new Map();
   inEdges = new Map();
@@ -397,36 +395,58 @@ function buildGraph() {
 
   vnodes = new DataSet(nodesArr);
   vedges = new DataSet(edgesArr);
-  network = new Network(canvasEl.value, { nodes: vnodes, edges: vedges }, {
-    layout: { hierarchical: { enabled: true, direction: "UD", sortMethod: "directed", levelSeparation: 110, nodeSpacing: 90 } },
+
+  const attachEvents = (net: Network) => {
+    net.on("click", (params: any) => {
+      if (params.nodes.length) {
+        selectedId.value = params.nodes[0];
+      }
+    });
+    net.on("doubleClick", (params: any) => {
+      if (params.nodes.length) focusChain(params.nodes[0]);
+    });
+    // 右键菜单（vis 事件名是老 vis.js 遗留的 oncontext）
+    net.on("oncontext", openCtxMenu);
+  };
+  const buildOptions = (hierarchical: boolean) => ({
+    layout: {
+      hierarchical: hierarchical
+        ? { enabled: true, direction: "UD", sortMethod: "directed", levelSeparation: 110, nodeSpacing: 90 }
+        : { enabled: false },
+    },
     physics: { enabled: false },
     interaction: { hover: true, keyboard: true, multiselect: true },
     edges: { smooth: { enabled: true, type: "cubicBezier", roundness: 0.5 } },
   });
 
-  // 坐标固化：初次分层布局完成后关闭 hierarchical 并回写坐标——
-  // 否则之后每次筛选/聚焦的 hidden 批量更新都触发整图重排，大图直接拖死渲染进程
+  // 第一段：hierarchical 初次布局
+  network?.destroy();
+  network = new Network(canvasEl.value, { nodes: vnodes, edges: vedges }, buildOptions(true));
+  attachEvents(network);
+
+  // 第二段（坐标固化）：初次布局完成后取坐标种入 DataSet，
+  // 销毁并以 hierarchical:false 重建——出生即固化。不再用「运行时 setOptions 关
+  // hierarchical」的方案：该路径在 vis-network 10 上不可靠（失败即层级布局保持
+  // 动态，之后每次 hidden 批量更新都会触发 setupHierarchicalLayout 整图重排）。
+  let frozen = false;
   freezeTimer = setTimeout(() => {
-    if (!network || !vnodes) return;
+    const net = network;
+    const nodes = vnodes;
+    const edges = vedges;
+    if (!net || !nodes || !edges || frozen) return;
+    frozen = true;
     try {
-      const pos = network.getPositions();
-      network.setOptions({ layout: { hierarchical: { enabled: false } } });
-      vnodes.update(Object.keys(pos).map((id) => ({ id, x: pos[id].x, y: pos[id].y })));
-    } catch {
-      /* 固化失败维持原行为 */
+      const pos = net.getPositions();
+      net.destroy();
+      nodes.update(Object.keys(pos).map((id) => ({ id, x: pos[id].x, y: pos[id].y })));
+      network = new Network(canvasEl.value!, { nodes, edges }, buildOptions(false));
+      attachEvents(network);
+      network.fit({ animation: false });
+    } catch (e) {
+      // 固化失败维持层级动态布局（可用但筛选会重排），不再静默吞掉
+      console.warn("[CallGraph] 坐标固化失败，层级布局保持动态", e);
     }
   }, 600);
-
-  network.on("click", (params: any) => {
-    if (params.nodes.length) {
-      selectedId.value = params.nodes[0];
-    }
-  });
-  network.on("doubleClick", (params: any) => {
-    if (params.nodes.length) focusChain(params.nodes[0]);
-  });
-  // 右键菜单（vis 事件名是老 vis.js 遗留的 oncontext）
-  network.on("oncontext", openCtxMenu);
 }
 
 // ===== 筛选 / 聚焦 =====
@@ -730,7 +750,7 @@ let srcDecorations: { clear(): void } | null = null;
     <!-- 工具栏（沉浸态隐藏） -->
     <div v-show="!immersive" class="cg-toolbar">
       <div class="cg-toolbar-left">
-        <button class="cg-btn primary" :disabled="generating" @click="generate">
+        <button class="btn primary" :disabled="generating" @click="generate">
           <ReloadOutlined :spin="generating" />
           {{ generating ? "生成中…" : data ? "重新生成" : "生成调用链" }}
         </button>
@@ -738,7 +758,6 @@ let srcDecorations: { clear(): void } | null = null;
           函数 {{ stats.nodes }} · 调用边 {{ stats.edges }} · 模块 {{ stats.modules }} · 入口 {{ stats.entries }}
         </span>
         <span v-if="generating && progressText" class="cg-progress">{{ progressText }}</span>
-        <span v-if="focusNote" class="cg-focus-note"><AimOutlined /> {{ focusNote }}</span>
       </div>
       <div class="cg-toolbar-right">
         <a-input
@@ -768,8 +787,8 @@ let srcDecorations: { clear(): void } | null = null;
           style="width: 150px"
           @change="applyFilter"
         />
-        <button class="cg-btn" @click="resetView">重置视图</button>
-        <button class="cg-btn" title="画布全屏（Esc 退出）" @click="toggleCanvasFullscreen">
+        <button class="btn" @click="resetView">重置视图</button>
+        <button class="btn" title="画布全屏（Esc 退出）" @click="toggleCanvasFullscreen">
           <ExpandOutlined /> 全屏
         </button>
       </div>
@@ -847,6 +866,10 @@ let srcDecorations: { clear(): void } | null = null;
 
       <!-- 画布 -->
       <div ref="canvasBox" class="cg-canvas">
+        <!-- 聚焦/隔离提示：浮动芯片，点击即重置视图（不占工具栏空间，避免挤断筛选控件） -->
+        <button v-if="focusNote" class="cg-focus-chip" title="点击恢复全图" @click="resetView">
+          <AimOutlined /> {{ focusNote }}
+        </button>
         <!-- 沉浸态浮动退出按钮 -->
         <button v-if="immersive" class="cg-exit-fs" title="退出全屏（Esc）" @click="exitImmersive">
           <ShrinkOutlined /> 退出全屏
@@ -894,7 +917,7 @@ let srcDecorations: { clear(): void } | null = null;
             text="尚未生成调用链"
             hint="tree-sitter 多语言提取函数级调用图，产物随仓库共享（.bytewiki/graphs/callchain/）"
           />
-          <button class="cg-btn primary" :disabled="generating" @click="generate">
+          <button class="btn primary" :disabled="generating" @click="generate">
             <ReloadOutlined :spin="generating" /> {{ generating ? "生成中…" : "生成调用链" }}
           </button>
         </div>
@@ -923,28 +946,41 @@ let srcDecorations: { clear(): void } | null = null;
       <aside v-show="!immersive" class="cg-detail" :style="{ width: detailWidth + 'px' }">
         <template v-if="selected">
           <div class="cg-card">
-            <h3>{{ selected.qualname }}</h3>
-            <div class="cg-meta">📦 {{ selected.module }}</div>
-            <div class="cg-meta cg-meta-file">
-              📄 {{ selected.file }}:{{ selected.lineno }}-{{ selected.end_lineno }}
-              <span v-if="selected.async"> · async</span>
+            <div class="cg-detail-title">
+              <h3 :title="selected.id">{{ selected.qualname }}</h3>
+              <span v-if="selected.async" class="cg-async-badge">async</span>
             </div>
-            <div class="cg-meta">入度 {{ selected.callers }} · 出度 {{ selected.callees }}</div>
-            <div class="cg-tags">
+            <dl class="cg-meta-list">
+              <div class="cg-meta-row">
+                <dt>模块</dt>
+                <dd :title="selected.module">{{ selected.module }}</dd>
+              </div>
+              <div class="cg-meta-row">
+                <dt>位置</dt>
+                <dd class="cg-meta-mono" :title="selected.file">
+                  {{ selected.file }}:{{ selected.lineno }}-{{ selected.end_lineno }}
+                </dd>
+              </div>
+              <div class="cg-meta-row">
+                <dt>入度 / 出度</dt>
+                <dd>{{ selected.callers }} / {{ selected.callees }}</dd>
+              </div>
+            </dl>
+            <div v-if="selected.routes.length" class="cg-tags">
               <span v-for="r in selected.routes" :key="r" class="cg-tag route">{{ r }}</span>
-              <span v-if="selected.is_entry" class="cg-tag entry">入口</span>
             </div>
+            <span v-if="selected.is_entry" class="cg-tag entry">入口</span>
             <div class="cg-source-actions">
-              <button class="cg-btn source-btn primary" @click="openFunction(selected)">
+              <button class="btn sm primary" @click="openFunction(selected)">
                 <FunctionOutlined /> 打开函数
               </button>
-              <button class="cg-btn source-btn" @click="openSource(selected)">
+              <button class="btn sm" @click="openSource(selected)">
                 <FileOutlined /> 整个文件
               </button>
             </div>
           </div>
           <div class="cg-card">
-            <h3>被谁调用（{{ callersOf.length }}）</h3>
+            <h3 class="cg-card-title">被谁调用（{{ callersOf.length }}）</h3>
             <div v-if="!callersOf.length" class="cg-empty-inline">无（入口/未被调用）</div>
             <div
               v-for="(e, i) in callersOf"
@@ -952,12 +988,12 @@ let srcDecorations: { clear(): void } | null = null;
               class="cg-edge-link"
               @click="jumpTo(e.src)"
             >
-              ← {{ nodeById.get(e.src)?.qualname ?? e.src }}
+              <span class="cg-edge-name">← {{ nodeById.get(e.src)?.qualname ?? e.src }}</span>
               <em>{{ nodeById.get(e.src)?.module }} :{{ e.line }}</em>
             </div>
           </div>
           <div class="cg-card">
-            <h3>调用了谁（{{ calleesOf.length }}）</h3>
+            <h3 class="cg-card-title">调用了谁（{{ calleesOf.length }}）</h3>
             <div v-if="!calleesOf.length" class="cg-empty-inline">无（叶子函数）</div>
             <div
               v-for="(e, i) in calleesOf"
@@ -965,7 +1001,7 @@ let srcDecorations: { clear(): void } | null = null;
               class="cg-edge-link"
               @click="jumpTo(e.dst)"
             >
-              → {{ nodeById.get(e.dst)?.qualname ?? e.dst }}
+              <span class="cg-edge-name">→ {{ nodeById.get(e.dst)?.qualname ?? e.dst }}</span>
               <em>{{ nodeById.get(e.dst)?.module }} :{{ e.line }}{{ e.kind === "heuristic" ? " ~" : "" }}</em>
             </div>
           </div>
@@ -1024,6 +1060,15 @@ let srcDecorations: { clear(): void } | null = null;
   gap: var(--spacing-sm);
   flex-wrap: wrap;
 }
+.cg-toolbar-left {
+  flex: 1;
+  min-width: 0;
+}
+.cg-toolbar-left .cg-stats {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .cg-stats {
   font-size: 12px;
   color: var(--text-tertiary);
@@ -1039,37 +1084,6 @@ let srcDecorations: { clear(): void } | null = null;
   display: inline-flex;
   align-items: center;
   gap: 4px;
-}
-.cg-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  height: 32px;
-  padding: 0 14px;
-  border: 1px solid var(--border-base);
-  background: var(--bg-surface);
-  color: var(--text-secondary);
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-  font-size: 13px;
-  transition: all var(--transition-fast);
-}
-.cg-btn:hover:not(:disabled) {
-  border-color: var(--color-primary-border);
-  color: var(--color-primary);
-}
-.cg-btn.primary {
-  border-color: var(--color-primary);
-  background: var(--color-primary);
-  color: #fff;
-}
-.cg-btn.primary:hover:not(:disabled) {
-  background: var(--color-primary-hover);
-  color: #fff;
-}
-.cg-btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
 }
 
 /* 主体三栏 */
@@ -1349,6 +1363,36 @@ let srcDecorations: { clear(): void } | null = null;
   margin: 4px 6px;
 }
 
+/* 聚焦/隔离提示芯片（画布左上角，点击重置；与退出全屏按钮同视觉语言） */
+.cg-focus-chip {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  z-index: 10;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 60%;
+  height: 30px;
+  padding: 0 12px;
+  border: 1px solid var(--border-base);
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  font-size: 12.5px;
+  opacity: 0.85;
+  transition: all var(--transition-fast);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cg-focus-chip:hover {
+  opacity: 1;
+  color: var(--color-primary);
+  border-color: var(--color-primary-border);
+}
+
 /* 沉浸态浮动退出按钮（半透明贴角，hover 实心） */
 .cg-exit-fs {
   position: absolute;
@@ -1439,80 +1483,90 @@ let srcDecorations: { clear(): void } | null = null;
 .cg-card {
   border: 1px solid var(--border-light);
   border-radius: var(--radius-md);
-  padding: 10px 12px;
+  padding: 12px;
   margin-bottom: 10px;
   background: var(--bg-surface);
 }
-.cg-card h3 {
-  margin: 0 0 6px;
+.cg-detail-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.cg-detail-title h3 {
+  margin: 0;
   font-size: 14px;
   word-break: break-all;
   color: var(--text-primary);
+  min-width: 0;
 }
-.cg-meta {
+.cg-async-badge {
+  flex-shrink: 0;
+  font-size: 10.5px;
+  font-weight: 600;
+  font-family: "JetBrains Mono", monospace;
+  color: #4b8fd6;
+  background: rgba(97, 175, 254, 0.13);
+  border: 1px solid rgba(97, 175, 254, 0.45);
+  border-radius: var(--radius-sm);
+  padding: 0 5px;
+  line-height: 17px;
+}
+/* 元信息：标签-值行（替代资产直搬的 emoji 行） */
+.cg-meta-list {
+  margin: 10px 0 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.cg-meta-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+}
+.cg-meta-row dt {
+  flex-shrink: 0;
+  width: 64px;
+  font-size: 11.5px;
   color: var(--text-tertiary);
-  font-size: 12px;
-  margin-bottom: 3px;
+}
+.cg-meta-row dd {
+  margin: 0;
+  min-width: 0;
+  font-size: 12.5px;
+  color: var(--text-primary);
   word-break: break-all;
 }
-.cg-meta-file {
-  cursor: pointer;
+.cg-meta-mono {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 12px;
+}
+.cg-card-title {
+  margin: 0 0 6px;
+  font-size: 13px;
+  color: var(--text-secondary);
 }
 .cg-tags {
-  margin-top: 6px;
+  margin-top: 10px;
 }
 .cg-tag {
   display: inline-block;
-  border-radius: 4px;
+  border-radius: var(--radius-xs);
   padding: 1px 7px;
   font-size: 11px;
   margin-right: 5px;
   margin-top: 4px;
+  font-family: "JetBrains Mono", monospace;
 }
 .cg-tag.route {
-  background: #12333d;
-  color: #7dd8e8;
+  color: #3a9fae;
+  background: rgba(125, 216, 232, 0.12);
+  border: 1px solid rgba(125, 216, 232, 0.45);
 }
 .cg-tag.entry {
-  background: #3d2f12;
-  color: #ffcf7d;
-  border: 1px solid #6b5320;
-}
-.source-btn {
-  margin-top: 10px;
-  height: 28px;
-  padding: 0 10px;
-  font-size: 12px;
-}
-.cg-source-actions {
-  margin-top: 10px;
-  display: flex;
-  gap: 8px;
-}
-.cg-source-actions .source-btn {
-  margin-top: 0;
-}
-.cg-edge-link {
-  font-size: 12px;
-  color: var(--color-primary);
-  cursor: pointer;
-  padding: 3px 2px;
-  border-radius: var(--radius-xs);
-  word-break: break-all;
-}
-.cg-edge-link:hover {
-  background: var(--bg-elevated);
-}
-.cg-edge-link em {
-  font-style: normal;
-  color: var(--text-tertiary);
-  font-size: 11px;
-  margin-left: 4px;
-}
-.cg-empty-inline {
-  color: var(--text-tertiary);
-  font-size: 12px;
-  padding: 6px 0;
+  color: #c98a1e;
+  background: rgba(240, 180, 41, 0.14);
+  border: 1px solid rgba(240, 180, 41, 0.45);
 }
 
 /* 源码抽屉 */
@@ -1521,23 +1575,8 @@ let srcDecorations: { clear(): void } | null = null;
   min-height: 0;
   position: relative;
 }
-.cg-source-loading {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--text-tertiary);
-  font-size: 13px;
-  background: var(--bg-card);
-  z-index: 2;
-}
 /* 函数区间高亮（Monaco 装饰类是编辑器内部 DOM，经 :deep 命中） */
 :deep(.cg-src-highlight) {
   background: color-mix(in oklch, var(--color-primary) 13%, transparent);
-}
-:deep(.cg-src-line-mark) {
-  margin-left: 3px;
-  border-left: 3px solid var(--color-primary);
 }
 </style>

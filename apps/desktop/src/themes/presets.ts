@@ -88,15 +88,15 @@ export const PRESETS: Record<BuiltinPreset, { label: string; palette: Record<Res
       },
       dark: {
         primary: "#f2f2f0",
-        bgBase: "#191a1c",
-        bgSurface: "#232527",
-        bgInput: "#2d2f31",
-        bgElevated: "#282a2c",
+        bgBase: "#16171a",     // 夜纸底（拉深，扩大与面板层的差）
+        bgSurface: "#212327",  // 面板层
+        bgInput: "#2b2d31",    // 输入层
+        bgElevated: "#33363b", // 浮起层（与 surface 拉 6%+，悬浮件/主按钮清晰可辨）
         textPrimary: "#ececee",
         textSecondary: "#a3a6aa",
-        textTertiary: "#74777c",
-        borderBase: "#3a3c3f",
-        borderLight: "#2d2f31",
+        textTertiary: "#787b80",
+        borderBase: "#45484d", // 明确亮于面板，描边可见
+        borderLight: "#33363b",
       },
     },
   },

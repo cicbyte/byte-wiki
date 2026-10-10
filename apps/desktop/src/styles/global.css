@@ -211,3 +211,124 @@ body.asset-preview-open .app-layout {
 .ant-switch:not(.ant-switch-checked) {
   background-color: var(--bg-elevated) !important;
 }
+
+/* ============ 全局按钮体系（.btn） ============
+ * 设计：默认软底无框（bg-elevated，hover 主题色淡底+着色），primary 实底
+ * （文字色用 --hero-cta-text——亮主色预设下自动换墨字防白上白），
+ * warn/danger 语义态，ghost 无底，sm 小号；focus-visible 焦点环、active 轻按陷。
+ */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 14px;
+  border: 1px solid var(--border-base);
+  background: var(--bg-input);
+  color: var(--text-secondary);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  font-size: 13px;
+  font-family: inherit;
+  line-height: 1;
+  white-space: nowrap;
+  user-select: none;
+  transition:
+    background var(--transition-fast),
+    color var(--transition-fast),
+    box-shadow var(--transition-fast),
+    transform var(--transition-fast);
+}
+.btn .anticon {
+  font-size: 14px;
+}
+.btn:hover:not(:disabled) {
+  border-color: var(--btn-ink);
+  color: var(--btn-ink);
+}
+.btn:active:not(:disabled) {
+  transform: scale(0.97);
+}
+.btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.btn:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+.btn.primary {
+  /* 中性单色主操作：底走 --btn-primary-bg（明暗各配，暗色下比面板亮一档），
+     字走 --btn-primary-ink（与底亮度互斥，由 derivation 按 data-theme 定值——
+     不跟随 text-primary：纸墨暗黑的 textPrimary 近白，浅底+白字会白上白） */
+  border: none;
+  background: var(--btn-primary-bg);
+  color: var(--btn-primary-ink);
+  font-weight: 600;
+}
+.btn.primary:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--btn-primary-ink) 12%, var(--btn-primary-bg));
+  color: var(--btn-primary-ink);
+}
+.btn.warn {
+  color: var(--color-warning);
+}
+.btn.warn:hover:not(:disabled) {
+  background: var(--warning-bg);
+  color: var(--color-warning);
+}
+.btn.danger {
+  color: var(--color-danger);
+}
+.btn.danger:hover:not(:disabled) {
+  background: var(--danger-bg);
+  color: var(--color-danger);
+}
+.btn.ghost {
+  background: transparent;
+}
+.btn.ghost:hover:not(:disabled) {
+  background: var(--bg-elevated);
+}
+.btn.sm {
+  height: 28px;
+  padding: 0 10px;
+  font-size: 12.5px;
+  border-radius: var(--radius-sm);
+}
+.btn.sm .anticon {
+  font-size: 12.5px;
+}
+
+/* ---- antd 按钮接管：与 .btn 体系同视觉（模态框确定/取消等命令式按钮自动继承） ---- */
+.ant-btn {
+  background: var(--bg-input) !important;
+  border: 1px solid var(--border-base) !important;
+  color: var(--text-secondary) !important;
+  box-shadow: none !important;
+}
+.ant-btn:hover:not(:disabled):not(.ant-btn-primary) {
+  background: var(--bg-input) !important;
+  border-color: var(--text-secondary) !important;
+  color: var(--text-primary) !important;
+}
+.ant-btn-primary {
+  background: var(--btn-primary-bg) !important;
+  border: none !important;
+  color: var(--btn-primary-ink) !important;
+  font-weight: 600 !important;
+  box-shadow: none !important;
+}
+.ant-btn-primary:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--btn-primary-ink) 12%, var(--btn-primary-bg)) !important;
+  color: var(--btn-primary-ink) !important;
+}
+.ant-btn-dangerous {
+  color: var(--color-danger) !important;
+  background: transparent !important;
+}
+.ant-btn-dangerous:hover:not(:disabled) {
+  background: var(--danger-bg) !important;
+  color: var(--color-danger) !important;
+}

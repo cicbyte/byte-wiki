@@ -144,7 +144,7 @@ onMounted(async () => {
 
     <div class="wp-actions">
       <span class="wp-hint">无壁纸时面板恢复纯色。</span>
-      <a-button v-if="wallpaper.hasWallpaper" size="small" @click="wallpaper.clear()">清除壁纸</a-button>
+      <button v-if="wallpaper.hasWallpaper" class="btn sm danger" @click="wallpaper.clear()">清除壁纸</button>
     </div>
   </div>
 </template>

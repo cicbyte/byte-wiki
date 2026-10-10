@@ -226,11 +226,11 @@ function onImportFile(e: Event) {
       <div class="editor-head">
         <span class="editor-title">自定义主题配色</span>
         <div class="head-actions">
-          <a-button size="small" @click="exportToFile"><DownloadOutlined /> 导出</a-button>
-          <a-button size="small">
+          <button class="btn sm" @click="exportToFile"><DownloadOutlined /> 导出</button>
+          <button class="btn sm">
             <ImportOutlined /> 导入
             <input class="import-input" type="file" accept="application/json" @change="onImportFile" />
-          </a-button>
+          </button>
           <div class="mode-tabs">
             <button class="mode-tab" :class="{ active: editorMode === 'visual' }" @click="editorMode = 'visual'">可视化</button>
             <button class="mode-tab" :class="{ active: editorMode === 'json' }" @click="enterJsonMode">JSON 代码</button>
@@ -247,8 +247,8 @@ function onImportFile(e: Event) {
           </div>
           <span class="editor-hint">改动即时生效</span>
           <div class="subhead-actions">
-            <a-button size="small" @click="onAutoFit">按底色自动协调</a-button>
-            <a-button size="small" @click="resetVariant">重置</a-button>
+            <button class="btn sm" @click="onAutoFit">按底色自动协调</button>
+            <button class="btn sm" @click="resetVariant">重置</button>
           </div>
         </div>
 
@@ -284,8 +284,8 @@ function onImportFile(e: Event) {
             <SnippetEditor v-model="jsonText" language="json" :auto-detect="false" />
           </div>
           <div class="json-footer">
-            <a-button size="small" @click="enterJsonMode">刷新</a-button>
-            <a-button size="small" type="primary" @click="applyJson">应用</a-button>
+            <button class="btn sm" @click="enterJsonMode">刷新</button>
+            <button class="btn sm primary" @click="applyJson">应用</button>
           </div>
         </div>
       </template>
