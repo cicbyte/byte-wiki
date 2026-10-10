@@ -53,6 +53,13 @@ export const CALLCHAIN_EVENT = "wiki://callchain";
 /** 调用图产物在 .bytewiki/ 内的路径（read_wiki_doc 口径） */
 export const CALLGRAPH_DOC_PATH = "graphs/callchain/callgraph.json";
 
+/** 走读页单个函数源码切片 */
+export interface ChainSource {
+  id: string;
+  code: string;
+  truncated: boolean;
+}
+
 export const callchainApi = {
   /** 生成调用链（进度经 CALLCHAIN_EVENT 推送） */
   callchainGenerate: (path: string) => invoke<CallchainSummary>("generate_callchain", { path }),
@@ -64,6 +71,12 @@ export const callchainApi = {
   /** 读取仓库内源码文件（Monaco 定位打开，路径防护在后端） */
   readRepoFile: (repoPath: string, relPath: string) =>
     invoke<string>("read_repo_file", { repoPath, relPath }),
+
+  /** 走读页批量源码切片：(节点id, 相对路径, 起行, 止行)[]（文件去重 + 服务端切片） */
+  getChainSources: (
+    repoPath: string,
+    items: [string, string, number, number][],
+  ) => invoke<ChainSource[]>("get_chain_sources", { repoPath, items }),
 
   /** 订阅生成进度（已解析文件数），返回取消函数 */
   callchainOnProgress: (handler: (n: number) => void): Promise<UnlistenFn> =>

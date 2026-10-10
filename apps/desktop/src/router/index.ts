@@ -3,7 +3,7 @@ import { createRouter, createWebHashHistory } from "vue-router";
 /**
  * 两层 IA：
  * - 全局层：项目列表（/）、服务、系统
- * - 项目层：/repo/:id（总览）、/docs 文档、/callgraph 调用链、/chat 问答、/cards 知识卡
+ * - 项目层：/repo/:id（总览）、/docs 文档、/callgraph 调用链、/walkthrough 链路走读、/chat 问答、/cards 知识卡
  *   —— 进入项目后 Sidebar 切换为项目专属菜单（components/layout/lib/constants.repoMenu）
  */
 const routes = [
@@ -30,6 +30,12 @@ const routes = [
     name: "repo-callgraph",
     component: () => import("@/views/repo/RepoSpace.vue"),
     meta: { title: "调用链", tab: "callgraph", fullsize: true },
+  },
+  {
+    path: "/repo/:id/walkthrough",
+    name: "repo-walkthrough",
+    component: () => import("@/views/wiki/Walkthrough.vue"),
+    meta: { title: "链路走读", fullsize: true },
   },
   {
     path: "/repo/:id/chat",

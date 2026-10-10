@@ -11,6 +11,7 @@
  * 搜索 250ms 防抖、fit/focus 去 animation。
  */
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
+import { useRoute, useRouter } from "vue-router";
 import { message } from "ant-design-vue";
 import {
   SearchOutlined,
@@ -27,6 +28,7 @@ import {
   ClearOutlined,
   FunctionOutlined,
   FileOutlined,
+  ReadOutlined,
 } from "@ant-design/icons-vue";
 import { DataSet, Network } from "vis-network/standalone";
 import { api } from "@/api";
@@ -540,6 +542,13 @@ function jumpTo(id: string) {
   network?.focus(id, { scale: 1.1, animation: false });
 }
 
+// ===== 链路走读入口 =====
+const route = useRoute();
+const router = useRouter();
+function goWalkthrough(id: string) {
+  router.push({ path: `/repo/${route.params.id}/walkthrough`, query: { node: id } });
+}
+
 // ===== 画布右键菜单 =====
 const ctxMenu = reactive({
   show: false,
@@ -652,6 +661,11 @@ onMounted(async () => {
     progressText.value = `已解析 ${n} 个源文件…`;
   });
   await loadData();
+  // 从走读页返回时带 node 查询参数：定位选中该节点
+  const qn = typeof route.query.node === "string" ? route.query.node : "";
+  if (qn && data.value?.nodes.some((n) => n.id === qn)) {
+    jumpTo(qn);
+  }
 });
 onBeforeUnmount(() => {
   resizeObs?.disconnect();
@@ -844,6 +858,9 @@ let srcDecorations: { clear(): void } | null = null;
                 >
                   <span v-if="it.verb" class="cg-verb" :class="verbClass(it.verb)">{{ it.verb }}</span>
                   <span class="cg-entry-path">{{ it.label }}</span>
+                  <button class="cg-entry-walk" title="链路走读：整链代码单页阅读" @click.stop="goWalkthrough(it.node.id)">
+                    <ReadOutlined />
+                  </button>
                 </div>
               </div>
             </div>
@@ -886,6 +903,9 @@ let srcDecorations: { clear(): void } | null = null;
             <div class="cg-ctx-head" :title="ctxMenu.node.id">{{ ctxMenu.node.qualname }}</div>
             <div class="cg-ctx-item" @click="ctxAction(openFunctionCtx)">
               <FunctionOutlined /> 打开函数
+            </div>
+            <div class="cg-ctx-item" @click="ctxAction(() => goWalkthrough(ctxMenu.node!.id))">
+              <ReadOutlined /> 链路走读
             </div>
             <div class="cg-ctx-item" @click="ctxAction(() => openSource(ctxMenu.node!))">
               <CodeOutlined /> 打开整个文件
@@ -973,6 +993,9 @@ let srcDecorations: { clear(): void } | null = null;
             <div class="cg-source-actions">
               <button class="btn sm primary" @click="openFunction(selected)">
                 <FunctionOutlined /> 打开函数
+              </button>
+              <button class="btn sm" @click="goWalkthrough(selected.id)">
+                <ReadOutlined /> 链路走读
               </button>
               <button class="btn sm" @click="openSource(selected)">
                 <FileOutlined /> 整个文件
@@ -1279,6 +1302,29 @@ let srcDecorations: { clear(): void } | null = null;
 .m-any,
 .m-gf { color: #75839f; }
 .m-none { display: none; }
+.cg-entry-walk {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+  border: 1px solid var(--border-base);
+  background: var(--bg-surface);
+  color: var(--text-tertiary);
+  border-radius: var(--radius-xs);
+  cursor: pointer;
+  font-size: 11px;
+  transition: all var(--transition-fast);
+}
+.cg-entry-walk:hover {
+  color: var(--color-primary);
+  border-color: var(--color-primary-border);
+}
+.cg-entry-item:hover .cg-entry-walk,
+.cg-entry-item.active .cg-entry-walk {
+  display: inline-flex;
+}
 .cg-entry-path {
   flex: 1;
   min-width: 0;

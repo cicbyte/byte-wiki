@@ -56,6 +56,7 @@ pub fn run() {
             // 调用链（函数级视图）
             commands::callchain::generate_callchain,
             commands::callchain::read_repo_file,
+            commands::callchain::get_chain_sources,
             // 变更检测 + 知识卡（M2）
             commands::watch::check_staleness,
             commands::cards::create_card,
