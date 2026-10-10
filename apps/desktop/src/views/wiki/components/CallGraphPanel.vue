@@ -30,6 +30,7 @@ import { DataSet, Network } from "vis-network/standalone";
 import { api } from "@/api";
 import type { CallgraphData, CallGraphNode, CallgraphEdge } from "@/api/callchain";
 import { useThemeStore } from "@/stores/theme";
+import { monaco } from "@/monaco/setup";
 import EmptyState from "@/components/common/EmptyState.vue";
 import SnippetEditor from "@/components/editor/SnippetEditor.vue";
 
@@ -149,10 +150,12 @@ const focusNote = ref("");
 const sourceState = reactive({
   open: false,
   loading: false,
+  qualname: "",
   file: "",
   lang: "",
   content: "",
   line: 1,
+  endLine: 1,
 });
 
 // ===== 画布对象（非响应式）=====
@@ -638,17 +641,33 @@ const EXT_LANG: Record<string, string> = {
 async function openSource(n: CallGraphNode) {
   sourceState.open = true;
   sourceState.loading = true;
+  sourceState.qualname = n.qualname;
   sourceState.file = `${n.file}:${n.lineno}-${n.end_lineno}`;
   sourceState.lang = EXT_LANG[n.file.split(".").pop() ?? ""] ?? "plaintext";
   sourceState.line = n.lineno;
+  sourceState.endLine = n.end_lineno;
   sourceState.content = "";
   try {
     sourceState.content = await api.readRepoFile(props.repoPath, n.file);
+    // 双 nextTick：确保 a-drawer 内容挂载 + SnippetEditor 的 modelValue watch 完成 setValue 后再定位
+    await nextTick();
     await nextTick();
     const ed = editorEl.value?.getEditor();
     if (ed) {
       ed.revealLineInCenter(n.lineno);
       ed.setPosition({ lineNumber: n.lineno, column: 1 });
+      // 函数整段高亮：行背景 + 行号栏标记（每次打开重建，先清旧集合）
+      srcDecorations?.clear();
+      srcDecorations = ed.createDecorationsCollection([
+        {
+          range: new monaco.Range(n.lineno, 1, n.end_lineno, 2147483647),
+          options: {
+            isWholeLine: true,
+            className: "cg-src-highlight",
+            linesDecorationsClassName: "cg-src-line-mark",
+          },
+        },
+      ]);
     }
   } catch (e) {
     message.error(typeof e === "string" ? e : "读取源码失败");
@@ -657,6 +676,9 @@ async function openSource(n: CallGraphNode) {
     sourceState.loading = false;
   }
 }
+
+/** 源码抽屉的函数高亮装饰集合（打开时重建） */
+let srcDecorations: { clear(): void } | null = null;
 </script>
 
 <template>
@@ -905,7 +927,7 @@ async function openSource(n: CallGraphNode) {
     <!-- 源码抽屉（Monaco 读实时文件 + 定位行） -->
     <a-drawer
       v-model:open="sourceState.open"
-      :title="sourceState.file"
+      :title="`${sourceState.qualname} — ${sourceState.file}`"
       width="62%"
       placement="right"
       :body-style="{ padding: '0', display: 'flex', flexDirection: 'column' }"
@@ -1449,5 +1471,13 @@ async function openSource(n: CallGraphNode) {
   font-size: 13px;
   background: var(--bg-card);
   z-index: 2;
+}
+/* 函数区间高亮（Monaco 装饰类是编辑器内部 DOM，经 :deep 命中） */
+:deep(.cg-src-highlight) {
+  background: color-mix(in oklch, var(--color-primary) 13%, transparent);
+}
+:deep(.cg-src-line-mark) {
+  margin-left: 3px;
+  border-left: 3px solid var(--color-primary);
 }
 </style>
