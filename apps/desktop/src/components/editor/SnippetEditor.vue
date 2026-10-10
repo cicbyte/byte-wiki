@@ -33,12 +33,15 @@ const props = withDefaults(
     autoDetect?: boolean;
     /** 自定义右键菜单项（追加到 Monaco 默认菜单后） */
     contextMenuItems?: EditorContextMenuItem[];
+    /** 字号（默认 13；长文阅读场景可传 14/15） */
+    fontSize?: number;
   }>(),
   {
     language: "",
     readonly: false,
     autoDetect: true,
     contextMenuItems: () => [],
+    fontSize: 13,
   }
 );
 const emit = defineEmits<{
@@ -80,9 +83,9 @@ onMounted(() => {
     theme: themeStore.isDark ? "byte-wiki-dark" : "byte-wiki-light",
     readOnly: props.readonly,
     automaticLayout: true,
-    fontSize: 13,
+    fontSize: props.fontSize,
     fontFamily: "'JetBrains Mono', 'Cascadia Code', Consolas, monospace",
-    lineHeight: 1.7 * 13,
+    lineHeight: 1.7 * props.fontSize,
     minimap: { enabled: !props.readonly },
     scrollBeyondLastLine: false,
     smoothScrolling: true,

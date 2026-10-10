@@ -15,6 +15,8 @@ import {
   BookOutlined,
   NodeExpandOutlined,
   NodeCollapseOutlined,
+  DoubleLeftOutlined,
+  DoubleRightOutlined,
 } from "@ant-design/icons-vue";
 import { api } from "@/api";
 import type { CallgraphData, CallGraphNode, CallgraphEdge } from "@/api/callchain";
@@ -197,6 +199,13 @@ const stats = computed(() => {
   return { fns: entries.value.length, files: files.size, lines };
 });
 
+/** 大纲折叠（收起为细轨，代码区吃满宽度） */
+const outlineCollapsed = ref(localStorage.getItem("bw:wk-outline-collapsed") === "1");
+function toggleOutline() {
+  outlineCollapsed.value = !outlineCollapsed.value;
+  localStorage.setItem("bw:wk-outline-collapsed", outlineCollapsed.value ? "1" : "0");
+}
+
 const blockRefs = new Map<string, HTMLElement>();
 function setBlockRef(id: string, el: unknown) {
   if (el) blockRefs.set(id, el as HTMLElement);
@@ -280,9 +289,14 @@ function backToGraph() {
     </div>
 
     <div v-else class="wk-main">
-      <!-- 大纲 -->
-      <aside class="wk-outline">
-        <div class="wk-outline-head">执行流大纲</div>
+      <!-- 大纲（可折叠：收起为细轨，代码区吃满宽度） -->
+      <aside v-if="!outlineCollapsed" class="wk-outline">
+        <div class="wk-outline-head">
+          <span>执行流大纲</span>
+          <button class="wk-outline-fold" title="收起大纲" @click="toggleOutline">
+            <DoubleLeftOutlined />
+          </button>
+        </div>
         <div class="wk-outline-list">
           <button
             v-for="e in entries"
@@ -298,6 +312,11 @@ function backToGraph() {
           </button>
         </div>
       </aside>
+
+      <button v-if="outlineCollapsed" class="wk-outline-rail" title="展开执行流大纲" @click="toggleOutline">
+        <DoubleRightOutlined />
+        <span class="wk-outline-rail-text">大纲 {{ entries.length }}</span>
+      </button>
 
       <!-- 代码块流 -->
       <div class="wk-stream">
@@ -450,6 +469,50 @@ function backToGraph() {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.wk-outline-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.wk-outline-fold {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: none;
+  background: transparent;
+  color: var(--text-tertiary);
+  border-radius: var(--radius-xs);
+  cursor: pointer;
+}
+.wk-outline-fold:hover {
+  background: var(--bg-elevated);
+  color: var(--color-primary);
+}
+.wk-outline-rail {
+  width: 34px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 0;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-panel, 14px);
+  color: var(--text-tertiary);
+  cursor: pointer;
+  transition: color var(--transition-fast);
+}
+.wk-outline-rail:hover {
+  color: var(--color-primary);
+}
+.wk-outline-rail-text {
+  writing-mode: vertical-rl;
+  font-size: 11px;
+  letter-spacing: 2px;
 }
 .wk-stream {
   flex: 1;

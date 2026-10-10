@@ -62,7 +62,31 @@ async function ensureEditor() {
   const ed = editorEl.value?.getEditor();
   if (!ed) return;
   // 行号偏移：块内第 1 行显示为真实文件行号
-  ed.updateOptions({ lineNumbers: (l: number) => String(props.startLine + l - 1) });
+  ed.updateOptions({
+    lineNumbers: (l: number) => String(props.startLine + l - 1),
+    scrollbar: { alwaysConsumeMouseWheel: false },
+    scrollBeyondLastLine: false,
+  });
+  // 滚轮穿透：Monaco 的 wheel 监听总会 preventDefault（实测 alwaysConsumeMouseWheel
+  // 对已建实例无效），走读块按内容定高后自身无需滚动——在容器捕获阶段截停事件
+  // （stopPropagation 不 preventDefault），浏览器原生滚动落到页面滚动容器
+  const wrap = rootEl.value?.querySelector(".wk-code") as HTMLElement | null;
+  wrap?.addEventListener(
+    "wheel",
+    (e) => {
+      e.stopPropagation();
+    },
+    { capture: true },
+  );
+  // 容器按内容高度撑开（编辑器默认 min-height 200px 会让长函数在小框内滚动——走读要全展开）。
+  // Monaco 布局是异步的：一次性测量会拿到未完成布局的高度（曾致某块卡在 98px），
+  // 持续监听 layout 变化校正直至稳定（readonly 静态内容事件很少）
+  const syncHeight = () => {
+    const wrap = rootEl.value?.querySelector(".wk-code") as HTMLElement | null;
+    if (wrap) wrap.style.height = `${ed.getContentHeight() + 2}px`;
+  };
+  requestAnimationFrame(syncHeight);
+  ed.onDidLayoutChange(syncHeight);
   // 调用行高亮 + 点击跳转（走读的核心标注）
   if (props.callLinks.length) {
     ed.createDecorationsCollection(
@@ -139,7 +163,7 @@ const ext = () => props.file.split(".").pop() ?? "";
       </button>
     </div>
 
-    <div v-if="expanded" class="wk-code" :style="{ maxHeight: Math.min(64, (endLine - startLine + 1)) + 'vh' }">
+    <div v-if="expanded" class="wk-code">
       <SnippetEditor
         v-if="mounted"
         ref="editorEl"
@@ -147,6 +171,7 @@ const ext = () => props.file.split(".").pop() ?? "";
         :language="EXT_LANG[ext()] ?? lang"
         :readonly="true"
         :auto-detect="false"
+        :font-size="14"
       />
       <div v-else class="wk-code-loading">加载编辑器…</div>
     </div>
@@ -260,6 +285,8 @@ const ext = () => props.file.split(".").pop() ?? "";
 }
 .wk-code :deep(.snippet-editor) {
   border-radius: 0;
+  min-height: 0;
+  height: 100%;
 }
 .wk-code-loading {
   display: flex;
