@@ -555,11 +555,10 @@ function focusDownstreamCtx() {
   if (n) focusFromEntry(n.id, `已聚焦下游执行流（${descendantsOf(n.id).size} 节点）· 重置视图恢复`);
 }
 
+/** 菜单动作：先关菜单再执行（模板内联事件直接调用本函数，不能再返回闭包） */
 function ctxAction(fn: () => void) {
-  return () => {
-    closeCtxMenu();
-    fn();
-  };
+  closeCtxMenu();
+  fn();
 }
 
 async function copyText(t: string, tip: string) {
