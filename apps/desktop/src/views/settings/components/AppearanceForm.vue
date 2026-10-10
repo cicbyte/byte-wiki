@@ -3,7 +3,7 @@
  * 外观设置：5 套预设 + 自定义色板（基础 token + 状态色）+ 区域覆盖 + 导入导出
  *
  * 对齐 ax 三层架构：
- * - 预设：buildPresetColors 派生（blue 精调 slate，其余由 bgBase 派生）
+ * - 预设：每套浅/深两态手工精调（低饱和纸感），自定义由底色派生协调中性色
  * - 自定义：编辑基础 token + 状态色（深/浅各一套），primary 变化时自动重算派生项
  * - 区域覆盖：5 区域 × (背景/主文字/次文字)，跨预设保留
  * 改动即时生效（可视化拖动只更 CSS 变量；松开/JSON/导入时完整 apply + 持久化）。
@@ -70,8 +70,8 @@ function onHexCommit(field: keyof ThemeColors, value: string) {
 }
 
 function resetVariant() {
-  editDark.value = buildPresetColors("blue", "dark");
-  editLight.value = buildPresetColors("blue", "light");
+  editDark.value = buildPresetColors("paper", "dark");
+  editLight.value = buildPresetColors("paper", "light");
   applyCustom();
   message.success("已重置为默认配色");
 }

@@ -64,8 +64,6 @@ function navigate(key: string) {
   height: 100%;
   position: relative;
   z-index: 2;
-  background-color: var(--bg-sider);
-  border-right: 1px solid var(--border-frame);
   transition: width var(--transition-normal);
   overflow: hidden;
   flex-shrink: 0;

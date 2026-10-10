@@ -6,29 +6,34 @@
     <title>byte-wiki</title>
     <script>
       // 主题预热：同步、在 CSS 解析前执行，消除首帧 FOUC。
-      // 读 localStorage → 迁移 legacy themeId 结构 → 解析 mode → 注入基础层 CSS 变量 + 区域覆盖；
-      // 非 blue/custom 预设用户首帧用 blue 兜底色板，main.ts 接管后立即修正（几乎无感）。
+      // 读 localStorage → 迁移 legacy themeId / v4 工具色预设结构 → 解析 mode → 注入基础层 CSS 变量 + 区域覆盖；
+      // 非 paper/custom 预设用户首帧用纸墨兜底色板，main.ts 接管后立即修正（几乎无感）。
       (function () {
         try {
-          var BLUE = {
-            dark: { primary:"#60a5fa", primaryBg:"rgba(96,165,250,0.15)", colorHover:"rgba(255,255,255,0.05)", primaryBorder:"rgba(96,165,250,0.4)", bgBase:"#0f172a", bgSurface:"#1e293b", bgInput:"#334155", bgElevated:"#273449", textPrimary:"#f1f5f9", textSecondary:"#94a3b8", textTertiary:"#64748b", borderBase:"#334155", borderLight:"#243049" },
-            light:{ primary:"#2563eb", primaryBg:"rgba(37,99,235,0.15)", colorHover:"rgba(15,23,42,0.04)", primaryBorder:"rgba(37,99,235,0.4)", bgBase:"#f8fafc", bgSurface:"#ffffff", bgInput:"#f1f5f9", bgElevated:"#f1f5f9", textPrimary:"#0f172a", textSecondary:"#475569", textTertiary:"#94a3b8", borderBase:"#cbd5e1", borderLight:"#e2e8f0" }
+          var PAPER = {
+            dark: { primary:"#f2f2f0", primaryBg:"rgba(242,242,240,0.15)", colorHover:"rgba(255,255,255,0.05)", primaryBorder:"rgba(242,242,240,0.4)", bgBase:"#191a1c", bgSurface:"#232527", bgInput:"#2d2f31", bgElevated:"#282a2c", textPrimary:"#ececee", textSecondary:"#a3a6aa", textTertiary:"#74777c", borderBase:"#3a3c3f", borderLight:"#2d2f31" },
+            light:{ primary:"#1b1c1f", primaryBg:"rgba(27,28,31,0.15)", colorHover:"rgba(28,29,33,0.04)", primaryBorder:"rgba(27,28,31,0.4)", bgBase:"#f1f1ee", bgSurface:"#ffffff", bgInput:"#f3f3f1", bgElevated:"#f8f8f7", textPrimary:"#1c1d21", textSecondary:"#5c6167", textTertiary:"#97999d", borderBase:"#dcdcd9", borderLight:"#e9e9e7" }
           };
           var raw = localStorage.getItem("byte-wiki-theme");
           var s = raw ? JSON.parse(raw) : null;
-          // 旧 {themeId, mode} 结构 → preset 映射（custom 首帧用 blue 兜底，main.ts 迁移真实自定义色）
+          // 旧 {themeId, mode} 结构 → preset 映射（v5 纸感系；custom 首帧用 paper 兜底，main.ts 迁移真实自定义色）
           if (s && s.themeId) {
-            var m = { "calm-blue":"blue", "minimal-green":"emerald", "rust-amber":"amber", "custom":"custom" };
-            s = { preset: m[s.themeId] || "blue", mode: s.mode || "auto", custom: null, regions: { light:{}, dark:{} } };
+            var m = { "calm-blue":"indigo", "minimal-green":"celadon", "rust-amber":"tea", "custom":"custom" };
+            s = { preset: m[s.themeId] || "paper", mode: s.mode || "auto", custom: null, regions: { light:{}, dark:{} } };
           }
-          if (!s || typeof s !== "object" || !s.preset) s = { preset: "blue", mode: "auto", custom: null, regions: { light:{}, dark:{} } };
+          // v4 工具色预设 → v5 纸感预设（按色相就近归并）
+          if (s && s.preset && !s.themeId) {
+            var v4 = { "blue":"indigo", "emerald":"celadon", "violet":"plum", "amber":"tea", "rose":"paper" };
+            if (v4[s.preset]) s.preset = v4[s.preset];
+          }
+          if (!s || typeof s !== "object" || !s.preset) s = { preset: "paper", mode: "auto", custom: null, regions: { light:{}, dark:{} } };
 
           var prefMode = s.mode;
           var mode = prefMode === "light" || prefMode === "dark"
             ? prefMode
             : (window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
 
-          var p = (s.preset === "custom" && s.custom && s.custom[mode]) ? s.custom[mode] : BLUE[mode];
+          var p = (s.preset === "custom" && s.custom && s.custom[mode]) ? s.custom[mode] : PAPER[mode];
           var root = document.documentElement;
           root.setAttribute("data-theme", mode);
           var map = {

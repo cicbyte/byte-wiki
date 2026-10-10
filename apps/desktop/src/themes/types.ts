@@ -21,7 +21,7 @@ export type Mode = AppearanceMode;
 export type ResolvedMode = Appearance;
 
 /** 6 套预设 key（5 内置 + 自定义） */
-export type PresetKey = "blue" | "emerald" | "violet" | "amber" | "rose" | "custom";
+export type PresetKey = "paper" | "indigo" | "celadon" | "plum" | "tea" | "custom";
 /** 内置预设 key（不含 custom） */
 export type BuiltinPreset = Exclude<PresetKey, "custom">;
 

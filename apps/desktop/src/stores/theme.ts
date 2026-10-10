@@ -5,7 +5,8 @@
  *       regions（区域覆盖表，浅深各一套，跨预设保留）
  * apply()：注入基础层 + 扩展层 + 区域覆盖 CSS 变量 + antd ConfigProvider + Monaco。
  *
- * 「好看」来自 presets.ts 的派生：blue 精调 slate，其余由 bgBase 派生协调中性色。
+ * 「好看」来自 presets.ts 的精调专色板：每套预设浅/深两态手工精调（低饱和纸感），
+ * 自定义主题可由底色派生协调中性色（autoFit）。v5 预设键自 v4 工具色系迁移而来（PRESET_MIGRATION）。
  * 偏好纯前端持久化（localStorage），不碰 config.toml——避免 ax 的「死字段」坑。
  */
 import { defineStore } from "pinia";
@@ -37,7 +38,7 @@ import { applyColorsToDOM, buildAntdToken } from "@/themes/token";
 
 const STORAGE_KEY = "byte-wiki-theme";
 const LEGACY_CUSTOM_KEY = "byte-wiki-custom-theme";
-const THEME_STATE_VERSION = 4;
+const THEME_STATE_VERSION = 5;
 
 interface ThemeState {
   version: number;
@@ -48,8 +49,17 @@ interface ThemeState {
 }
 
 function isPresetKey(v: unknown): v is PresetKey {
-  return v === "blue" || v === "emerald" || v === "violet" || v === "amber" || v === "rose" || v === "custom";
+  return v === "paper" || v === "indigo" || v === "celadon" || v === "plum" || v === "tea" || v === "custom";
 }
+
+/** v4 旧工具色预设 → v5 纸感预设的迁移映射（按色相就近归并；玫瑰红并入纸墨） */
+const PRESET_MIGRATION: Record<string, PresetKey> = {
+  blue: "indigo",
+  emerald: "celadon",
+  violet: "plum",
+  amber: "tea",
+  rose: "paper",
+};
 function isMode(v: unknown): v is Mode {
   return v === "auto" || v === "light" || v === "dark";
 }
@@ -63,22 +73,22 @@ function isValidRegions(v: unknown): v is { light: RegionOverrides; dark: Region
   });
 }
 
-/** 旧 byte-wiki themeId → 新 preset 映射（terminal-cyan 无对应，回落 blue） */
+/** 旧 byte-wiki themeId → v5 preset 映射（先归 v4 工具色键再走 PRESET_MIGRATION；terminal-cyan 无对应，回落纸墨） */
 function mapLegacyThemeId(id: unknown): PresetKey {
-  switch (id) {
-    case "calm-blue": return "blue";
-    case "minimal-green": return "emerald";
-    case "rust-amber": return "amber";
-    case "custom": return "custom";
-    default: return "blue";
-  }
+  const v4: Record<string, PresetKey> = {
+    "calm-blue": "indigo",
+    "minimal-green": "celadon",
+    "rust-amber": "tea",
+    "custom": "custom",
+  };
+  return v4[String(id)] ?? "paper";
 }
 
 /** 旧 ThemePreset 的 dark/light（含 headerBg 等已废弃字段）→ 新 custom:{light,dark} */
 function migrateCustomFromLegacy(legacy: { dark?: Partial<ThemeColors>; light?: Partial<ThemeColors> } | null): { light: ThemeColors; dark: ThemeColors } {
   if (!legacy || !legacy.dark || !legacy.light) return defaultCustom();
   const pick = (m: ResolvedMode): ThemeColors => {
-    const base = buildPresetColors("blue", m); // 骨架（保证新字段齐全）
+    const base = buildPresetColors("paper", m); // 骨架（保证新字段齐全）
     const src = (m === "dark" ? legacy.dark : legacy.light) as Partial<ThemeColors>;
     return { ...base, ...src, colorHover: deriveHover(m) };
   };
@@ -87,7 +97,7 @@ function migrateCustomFromLegacy(legacy: { dark?: Partial<ThemeColors>; light?: 
 
 export const useThemeStore = defineStore("theme", () => {
   // ===== state =====
-  const preset = ref<PresetKey>("blue");
+  const preset = ref<PresetKey>("paper");
   const mode = ref<Mode>("auto");
   const custom = ref<{ light: ThemeColors; dark: ThemeColors }>(defaultCustom());
   const regions = ref<{ light: RegionOverrides; dark: RegionOverrides }>({ light: {}, dark: {} });
@@ -162,7 +172,7 @@ export const useThemeStore = defineStore("theme", () => {
     persist();
   }
   function resetVariant(m: ResolvedMode) {
-    custom.value[m] = buildPresetColors("blue", m);
+    custom.value[m] = buildPresetColors("paper", m);
     apply();
     persist();
   }
@@ -226,7 +236,7 @@ export const useThemeStore = defineStore("theme", () => {
   }
 
   function freshState(): ThemeState {
-    return { version: THEME_STATE_VERSION, preset: "blue", mode: "auto", custom: defaultCustom(), regions: { light: {}, dark: {} } };
+    return { version: THEME_STATE_VERSION, preset: "paper", mode: "auto", custom: defaultCustom(), regions: { light: {}, dark: {} } };
   }
 
   /** 任意 parsed → 合法 ThemeState（枚举校验 + 缺字段兜底）。loadMigrate 与 applyRawState 共用 */
@@ -249,7 +259,8 @@ export const useThemeStore = defineStore("theme", () => {
     // 新结构 {preset, mode, custom, regions}
     if (parsed && typeof parsed === "object" && Object.prototype.hasOwnProperty.call(parsed, "preset")) {
       const s = parsed as Partial<ThemeState>;
-      const presetKey = isPresetKey(s.preset) ? s.preset : "blue";
+      const legacy = typeof s.preset === "string" ? PRESET_MIGRATION[s.preset] : undefined;
+      const presetKey = isPresetKey(s.preset) ? s.preset : legacy ?? "paper";
       return {
         version: THEME_STATE_VERSION,
         preset: presetKey,

@@ -1,18 +1,24 @@
 /**
- * 主题注入（对齐 ax 三层架构 + byte-wiki 变量层半透明）
+ * 主题注入（对齐 ax 三层架构 + CICBYTE 变量层半透明）
  *
  * - applyColorsToDOM()：基础 bg 注入 `--bg-*-orig`（原始色），由 :root 的
  *   `--bg-*: color-mix(var(--bg-*-orig), transparent var(--wp-panel-alpha,0%))`
- *   统一派生半透明——一处定义，所有用 var(--bg-*) 的容器自动透出壁纸（全覆盖，
- *   不再依赖逐组件改 background）。非 bg 基础 + 扩展层 + 区域文字直接注入；
+ *   统一派生半透明（壁纸时透出，无壁纸等价纯色）。非 bg 基础 + 扩展层 + 区域文字直接注入；
  *   区域 bg 也走 -orig（覆盖值 ?? 默认派生）。
  * - buildAntdToken()：生成 Ant Design ConfigProvider token，读同一份 ThemeColors。
  */
 import { theme as antdTheme } from "ant-design-vue";
 import type { ThemeColors, Appearance, RegionOverrides, RegionOverrideKey } from "./types";
-import { EXT_CSS_VARS, REGION_DEFS, defaultRegions } from "./presets";
+import { EXT_CSS_VARS, REGION_DEFS, defaultRegions, hexToRgb } from "./presets";
 
-/** 基础 bg → -orig（供 :root color-mix 半透明派生） */
+/** 主色是否偏亮（相对亮度 > 0.7）——亮主色（如纸墨暗色的纸白，亮度 ~0.9）需要深色反白文字；
+ *  其余预设暗色主色亮度 ~0.63，保持白字观感不变 */
+function isLightPrimary(hex: string): boolean {
+  const [r, g, b] = hexToRgb(hex);
+  return (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255 > 0.7;
+}
+
+/** 基础 bg → -orig（供 :root 派生 --bg-*） */
 const BASE_BG: Record<string, string> = {
   bgBase: "--bg-base-orig",
   bgSurface: "--bg-surface-orig",
@@ -39,7 +45,7 @@ export function applyColorsToDOM(
 ): void {
   const root = document.documentElement;
 
-  // 基础 bg → -orig（:root color-mix 消费，壁纸时 --wp-panel-alpha>0 半透明）
+  // 基础 bg → -orig（:root 派生 --bg-*）
   for (const key in BASE_BG) {
     root.style.setProperty(BASE_BG[key], colors[key as keyof ThemeColors] ?? "");
   }
@@ -51,6 +57,14 @@ export function applyColorsToDOM(
     root.style.setProperty(EXT_CSS_VARS[key], colors[key as keyof ThemeColors] ?? "");
   }
   root.style.setProperty("--accent", colors.primary);
+  // 主题色 RGB 三元组（"r, g, b"）：供 rgba(var(--color-primary-rgb), α) 透明度梯度使用
+  const [pr, pg, pb] = hexToRgb(colors.primary);
+  root.style.setProperty("--color-primary-rgb", `${pr}, ${pg}, ${pb}`);
+  // hero CTA：主题色底上的文字色（亮主色如纸墨暗色的纸白需墨字）
+  root.style.setProperty(
+    "--hero-cta-text",
+    isLightPrimary(colors.primary) ? "#1b1c1f" : "#ffffff",
+  );
 
   // 区域语义层：bg → -orig（用户覆盖值 ?? 默认派生，统一走半透明）；文字 → 直接（覆盖 set / 未覆盖 remove）
   const defs = defaultRegions(colors);
@@ -64,6 +78,14 @@ export function applyColorsToDOM(
     });
   });
 
+  // hero 暗色覆盖（derivation.css 只有浅色兜底，暗色由 JS 注入）：
+  // 渐变随主题色板（bgBase→bgElevated，纸墨暗色即炭色系，不再写死 slate 偏蓝亮块）；
+  // 纸白主色下白晕过亮 → 暗色移除光斑
+  if (appearance === "dark") {
+    root.style.setProperty("--hero-from", colors.bgBase);
+    root.style.setProperty("--hero-to", colors.bgElevated);
+    root.style.setProperty("--hero-glow-alpha", "0");
+  }
   root.setAttribute("data-theme", appearance);
 }
 
@@ -93,11 +115,13 @@ export function buildAntdToken(colors: ThemeColors, appearance: Appearance) {
       borderRadius: 6,
       fontFamily: "'Inter','PingFang SC','Microsoft YaHei',sans-serif",
       fontSize: 14,
+      // 反白文字（主按钮/选中态等）：主色偏亮（纸墨暗色的纸白）时用墨字，避免白上白
+      colorTextLightSolid: isLightPrimary(colors.primary) ? "#1b1c1f" : "#ffffff",
     },
     components: {
       Layout: {
-        headerBg: colors.bgSurface,
-        siderBg: colors.bgSurface,
+        headerBg: colors.bgBase,
+        siderBg: colors.bgBase,
         bodyBg: colors.bgBase,
       },
       Menu: {
@@ -121,6 +145,13 @@ export function buildAntdToken(colors: ThemeColors, appearance: Appearance) {
       },
       Input: {
         colorBgContainer: colors.bgInput,
+      },
+      Button: {
+        // 暗色下默认按钮若用 bgSurface，与页面底色亮度差过小（轮廓不清）；
+        // 提到 bgElevated 一档，浅色下维持 bgSurface 白底即可
+        defaultBg: isDark ? colors.bgElevated : colors.bgSurface,
+        defaultBorderColor: colors.borderBase,
+        defaultColor: colors.textPrimary,
       },
     },
   };

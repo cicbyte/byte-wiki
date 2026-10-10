@@ -194,27 +194,3 @@ export function countUp(
 }
 
 /** 路由切换过渡：enter 弹入，leave 快速淡出。用于 <Transition :css="false"> */
-export function useRouteTransition() {
-  const onEnter = (el: Element, done: () => void) => {
-    if (motionDisabled()) {
-      gsap.set(el, { autoAlpha: 1, y: 0 });
-      done();
-      return;
-    }
-    gsap.fromTo(el, { y: revealOffset(), autoAlpha: 0 }, { ...REVEAL_TO, onComplete: done });
-  };
-  const onLeave = (el: Element, done: () => void) => {
-    if (motionDisabled()) {
-      done();
-      return;
-    }
-    gsap.to(el, {
-      autoAlpha: 0,
-      y: -8,
-      duration: 0.15 * speedFactor(),
-      ease: "power2.in",
-      onComplete: done,
-    });
-  };
-  return { onEnter, onLeave };
-}

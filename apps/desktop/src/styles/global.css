@@ -50,20 +50,27 @@ body {
   font-size: 14px;
 }
 
-/* 滚动条（暗色适配） */
-::-webkit-scrollbar {
+/* 细化滚动条（WebView2/Chromium，含表格内部滚动区） */
+*::-webkit-scrollbar {
   width: 8px;
   height: 8px;
 }
-::-webkit-scrollbar-track {
+*::-webkit-scrollbar-track {
   background: transparent;
 }
-::-webkit-scrollbar-thumb {
-  background: var(--border-base);
+*::-webkit-scrollbar-thumb {
+  background: rgba(128, 128, 128, 0.35);
   border-radius: 4px;
+  border: 2px solid transparent;
+  background-clip: content-box;
 }
-::-webkit-scrollbar-thumb:hover {
-  background: var(--color-primary);
+*::-webkit-scrollbar-thumb:hover {
+  background: rgba(128, 128, 128, 0.55);
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+*::-webkit-scrollbar-corner {
+  background: transparent;
 }
 
 /* ============ Ant Design 全局主题覆盖 ============
@@ -73,9 +80,10 @@ body {
  */
 
 /* --- 输入框/选择器/日期：统一边框 + 背景，移除 focus 蓝色 --- */
-.ant-input,
-.ant-input:focus,
-.ant-input-focused,
+/* 无边框输入（bordered=false）不参与边框/底色强制，保持透明融入界面 */
+.ant-input:not(.ant-input-borderless),
+.ant-input:focus:not(.ant-input-borderless),
+.ant-input-focused:not(.ant-input-borderless),
 .ant-input-affix-wrapper,
 .ant-input-affix-wrapper:focus,
 .ant-input-affix-wrapper-focused,
@@ -85,8 +93,8 @@ body {
 .ant-select-focused .ant-select-selector,
 .ant-input-number,
 .ant-input-number-focused,
-textarea.ant-input,
-textarea.ant-input:focus {
+textarea.ant-input:not(.ant-input-borderless),
+textarea.ant-input:focus:not(.ant-input-borderless) {
   border-color: var(--border-base) !important;
   box-shadow: none !important;
 }

@@ -2,36 +2,38 @@
  *
  * 三道防线消除 FOUC：
  *  1) index.html 的 inline FOUC 脚本在 CSS 解析前先注入 --bg-*-orig 等用户主题变量；
- *  2) 本文件 :root 提供 blue/dark 兜底值（脚本失败/首次访问时）；
+ *  2) 本文件 :root 提供纸墨 dark 兜底值（脚本失败/首次访问时）；
  *  3) themeStore.apply() 运行时注入实际主题（inline 优先级最高，覆盖兜底）。
  *
  * 壁纸机制（变量层，全覆盖）：所有 --bg-* 由 `--bg-*-orig` 经
  *   color-mix(in srgb, var(--bg-*-orig), transparent var(--wp-panel-alpha, 0%))
  * 派生。--wp-panel-alpha=0%（无壁纸）时等价纯色；壁纸启用时 wallpaper store
  * 注入 panelAlpha%，所有用 var(--bg-*) 的容器自动半透明透出壁纸层——无需逐组件改。
+ *
+ * 悬浮面板三档阴影 / 导航层次 / hero 变量按明暗静态定义（不随预设注入，随 [data-theme] 切换）。
  */
 :root {
-  /* ===== 基础 bg 原始值兜底（blue/dark；token apply 注入实际值到此） ===== */
-  --bg-base-orig: #0f172a;
-  --bg-surface-orig: #1e293b;
-  --bg-elevated-orig: #273449;
-  --bg-input-orig: #334155;
+  /* ===== 基础 bg 原始值兜底（纸墨 dark；token apply 注入实际值到此） ===== */
+  --bg-base-orig: #191a1c;
+  --bg-surface-orig: #232527;
+  --bg-elevated-orig: #282a2c;
+  --bg-input-orig: #2d2f31;
 
-  /* ===== 基础非 bg 兜底（blue/dark） ===== */
-  --color-primary: #60a5fa;
-  --color-primary-bg: rgba(96, 165, 250, 0.15);
+  /* ===== 基础非 bg 兜底（纸墨 dark） ===== */
+  --color-primary: #f2f2f0;
+  --color-primary-bg: rgba(242, 242, 240, 0.15);
   --color-hover: rgba(255, 255, 255, 0.05);
-  --text-primary: #f1f5f9;
-  --text-secondary: #94a3b8;
-  --text-tertiary: #64748b;
-  --border-base: #334155;
-  --border-light: #243049;
+  --text-primary: #ececee;
+  --text-secondary: #a3a6aa;
+  --text-tertiary: #74777c;
+  --border-base: #3a3c3f;
+  --border-light: #2d2f31;
 
   /* ===== 扩展层（状态色等，不参与预设色调） ===== */
-  --text-disabled: #475569;
-  --color-primary-hover: #73b0fb;
-  --color-primary-active: #5491dc;
-  --color-primary-border: rgba(96, 165, 250, 0.4);
+  --text-disabled: #4b4e53;
+  --color-primary-hover: #ffffff;
+  --color-primary-active: #d9d9d6;
+  --color-primary-border: rgba(242, 242, 240, 0.4);
   --color-success: #22c55e;
   --color-warning: #f59e0b;
   --color-danger: #ef4444;
@@ -41,6 +43,13 @@
   --danger-bg: rgba(239, 68, 68, 0.14);
   --info-bg: rgba(6, 182, 212, 0.14);
   --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.4);
+  /* 主色 RGB 三元组（token apply 注入；供 rgba(var(--color-primary-rgb), α) 透明度梯度） */
+  --color-primary-rgb: 242, 242, 240;
+  /* hero CTA：主题色底上的文字色（亮主色如纸墨暗色的纸白需墨字，token 按亮度判定注入） */
+  --hero-cta-text: #1b1c1f;
+
+  /* ===== 悬浮面板圆角（shell-panel 体系，模式无关） ===== */
+  --radius-panel: 14px;
 
   /* ===== 别名（旧消费方兼容） ===== */
   --accent: var(--color-primary);
@@ -48,10 +57,12 @@
   --border-card: var(--border-light);
   --border-frame: var(--border-light);
 
-  /* ===== 区域 bg 原始值默认回指（token apply 注入覆盖值/默认值到此）===== */
-  --bg-header-orig: var(--bg-surface-orig);
-  --bg-sider-orig: var(--bg-surface-orig);
-  --bg-footer-orig: var(--bg-surface-orig);
+  /* ===== 区域 bg 原始值默认回指（token apply 注入覆盖值/默认值到此）=====
+     chrome 区域（顶/侧/底栏）与内容区统一用页面底色——整窗一张纸，
+     白色只留给真正的卡片（--bg-card），栏间靠 1px 细线轻分隔。 */
+  --bg-header-orig: var(--bg-base-orig);
+  --bg-sider-orig: var(--bg-base-orig);
+  --bg-footer-orig: var(--bg-base-orig);
   --bg-content-orig: var(--bg-base-orig);
   --bg-card-orig: var(--bg-surface-orig);
 
@@ -81,4 +92,50 @@
   /* ===== 壁纸系统变量（wallpaper store apply 注入；默认 0 = 无壁纸态）===== */
   --wp-blur: 0px;
   --wp-panel-alpha: 0%;
+}
+
+/* ===== 暗色态：悬浮面板阴影（接触层更深 + 更大柔光，呼吸翻转可见）+ 导航层次 + hero ===== */
+[data-theme="dark"] {
+  --shadow-panel: 0 1px 2px rgba(0, 0, 0, 0.4), 0 10px 28px -16px rgba(0, 0, 0, 0.55);
+  --shadow-panel-breathe: 0 2px 5px rgba(0, 0, 0, 0.45), 0 18px 42px -16px rgba(0, 0, 0, 0.7);
+  --shadow-panel-hover: 0 1px 2px rgba(0, 0, 0, 0.5), 0 14px 38px -12px rgba(0, 0, 0, 0.65);
+  --color-nav-hover: rgba(255, 255, 255, 0.05);
+  --color-nav-active: rgba(255, 255, 255, 0.09);
+
+  /* hero（暗色态：主题色板深渐变 + 亮字；token apply 会按预设覆盖 from/to） */
+  --hero-from: var(--bg-base);
+  --hero-to: var(--bg-elevated);
+  --hero-grid-alpha: 0.05;
+  --hero-glow-alpha: 0.07;
+  --hero-title: #f1f5f9;
+  --hero-title-hl: var(--color-primary);
+  --hero-sub: #94a3b8;
+  --hero-stat-value: #f1f5f9;
+  --hero-stat-label: #94a3b8;
+  --hero-divider: rgba(148, 163, 184, 0.25);
+  --hero-border: none;
+}
+
+/* ===== 浅色态：悬浮面板阴影（双层结构：1px 接触 + 大范围负 spread 柔光）+ 导航层次 + hero ===== */
+[data-theme="light"] {
+  --shadow-panel: 0 1px 2px rgba(28, 29, 33, 0.03), 0 8px 24px -16px rgba(28, 29, 33, 0.08);
+  --shadow-panel-breathe: 0 2px 4px rgba(28, 29, 33, 0.04), 0 16px 38px -16px rgba(28, 29, 33, 0.16);
+  --shadow-panel-hover: 0 1px 2px rgba(28, 29, 33, 0.04), 0 12px 32px -12px rgba(28, 29, 33, 0.14);
+
+  /* 导航专用低透明度层次（悬浮轻于选中，不与全局按钮 hover 混用） */
+  --color-nav-hover: rgba(28, 29, 33, 0.05);
+  --color-nav-active: rgba(28, 29, 33, 0.09);
+
+  /* hero（浅色态：纸感浅底 + 墨字） */
+  --hero-from: var(--bg-surface);
+  --hero-to: #f3f3f0;
+  --hero-grid-alpha: 0.06;
+  --hero-glow-alpha: 0.07;
+  --hero-title: var(--text-primary);
+  --hero-title-hl: var(--color-primary);
+  --hero-sub: var(--text-secondary);
+  --hero-stat-value: var(--text-primary);
+  --hero-stat-label: var(--text-tertiary);
+  --hero-divider: var(--border-base);
+  --hero-border: 1px solid var(--border-light);
 }

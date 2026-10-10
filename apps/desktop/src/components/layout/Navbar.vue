@@ -149,8 +149,6 @@ const breadcrumbItems = computed(() => {
   display: flex;
   align-items: center;
   padding: 0 var(--spacing-md);
-  border-bottom: 1px solid var(--border-frame);
-  background: var(--bg-header);
   flex-shrink: 0;
   user-select: none;
 }
