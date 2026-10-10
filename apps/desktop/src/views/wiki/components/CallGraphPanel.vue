@@ -22,6 +22,9 @@ import {
   CaretRightOutlined,
   ExpandOutlined,
   ShrinkOutlined,
+  CopyOutlined,
+  ClusterOutlined,
+  ClearOutlined,
 } from "@ant-design/icons-vue";
 import { DataSet, Network } from "vis-network/standalone";
 import { api } from "@/api";
@@ -409,6 +412,8 @@ function buildGraph() {
   network.on("doubleClick", (params: any) => {
     if (params.nodes.length) focusChain(params.nodes[0]);
   });
+  // 右键菜单（vis 事件名是老 vis.js 遗留的 oncontext）
+  network.on("oncontext", openCtxMenu);
 }
 
 // ===== 筛选 / 聚焦 =====
@@ -463,9 +468,9 @@ function showOnly(keep: Set<string>, centerId: string, note: string) {
   focusNote.value = note;
 }
 
-function focusFromEntry(id: string) {
+function focusFromEntry(id: string, note?: string) {
   const keep = descendantsOf(id);
-  showOnly(keep, id, `已聚焦该入口执行流（${keep.size} 节点）· 重置视图恢复`);
+  showOnly(keep, id, note ?? `已聚焦该入口执行流（${keep.size} 节点）· 重置视图恢复`);
 }
 
 /** 双击：上下游闭包（全部祖先 + 后代） */
@@ -500,6 +505,70 @@ function jumpTo(id: string) {
   selectedId.value = id;
   network?.selectNodes([id]);
   network?.focus(id, { scale: 1.1, animation: false });
+}
+
+// ===== 画布右键菜单 =====
+const ctxMenu = reactive({
+  show: false,
+  x: 0,
+  y: 0,
+  node: null as CallGraphNode | null,
+});
+
+function openCtxMenu(params: any) {
+  params.event?.preventDefault?.();
+  const node = params.nodes?.length ? nodeById.get(params.nodes[0]) ?? null : null;
+  if (node) {
+    selectedId.value = node.id; // 右键即选中，详情栏同步
+  }
+  ctxMenu.node = node;
+  ctxMenu.x = params.pointer?.DOM?.x ?? 0;
+  ctxMenu.y = params.pointer?.DOM?.y ?? 0;
+  ctxMenu.show = true;
+  // 边界翻转：贴边时菜单往回展开（估宽 220 / 每项 32 + 头 34）
+  nextTick(() => {
+    const box = canvasBox.value;
+    if (!box) return;
+    const w = 224;
+    const h = ctxMenu.node ? 34 + 32 * 5 + 8 : 32 * 2 + 4;
+    if (ctxMenu.x + w > box.clientWidth - 8) ctxMenu.x = box.clientWidth - w - 8;
+    if (ctxMenu.y + h > box.clientHeight - 8) ctxMenu.y = box.clientHeight - h - 8;
+    ctxMenu.x = Math.max(4, ctxMenu.x);
+    ctxMenu.y = Math.max(4, ctxMenu.y);
+  });
+}
+
+function closeCtxMenu() {
+  ctxMenu.show = false;
+}
+
+function onCtxGlobalDown(e: MouseEvent) {
+  if (ctxMenu.show && !(e.target as HTMLElement)?.closest?.(".cg-ctxmenu")) closeCtxMenu();
+}
+
+function onCtxKey(e: KeyboardEvent) {
+  if (e.key === "Escape" && ctxMenu.show) closeCtxMenu();
+}
+
+function focusDownstreamCtx() {
+  const n = ctxMenu.node;
+  if (n) focusFromEntry(n.id, `已聚焦下游执行流（${descendantsOf(n.id).size} 节点）· 重置视图恢复`);
+}
+
+function ctxAction(fn: () => void) {
+  return () => {
+    closeCtxMenu();
+    fn();
+  };
+}
+
+async function copyText(t: string, tip: string) {
+  try {
+    await navigator.clipboard.writeText(t);
+    message.success(tip);
+  } catch {
+    message.error("复制失败");
+  }
 }
 
 // ===== 生成 =====
@@ -539,6 +608,8 @@ onMounted(async () => {
   if (canvasEl.value) resizeObs.observe(canvasEl.value);
   document.addEventListener("fullscreenchange", onFullscreenChange);
   window.addEventListener("keydown", onZenEsc);
+  document.addEventListener("mousedown", onCtxGlobalDown, true);
+  window.addEventListener("keydown", onCtxKey);
   unlisten = await api.callchainOnProgress((n) => {
     progressText.value = `已解析 ${n} 个源文件…`;
   });
@@ -548,6 +619,8 @@ onBeforeUnmount(() => {
   resizeObs?.disconnect();
   document.removeEventListener("fullscreenchange", onFullscreenChange);
   window.removeEventListener("keydown", onZenEsc);
+  document.removeEventListener("mousedown", onCtxGlobalDown, true);
+  window.removeEventListener("keydown", onCtxKey);
   unlisten?.();
   if (freezeTimer) clearTimeout(freezeTimer);
   if (searchTimer) clearTimeout(searchTimer);
@@ -714,6 +787,39 @@ async function openSource(n: CallGraphNode) {
           <ShrinkOutlined /> 退出全屏
         </button>
         <div ref="canvasEl" class="cg-canvas-inner" />
+
+        <!-- 右键上下文菜单 -->
+        <div
+          v-if="ctxMenu.show"
+          class="cg-ctxmenu"
+          :style="{ left: ctxMenu.x + 'px', top: ctxMenu.y + 'px' }"
+        >
+          <template v-if="ctxMenu.node">
+            <div class="cg-ctx-head" :title="ctxMenu.node.id">{{ ctxMenu.node.qualname }}</div>
+            <div class="cg-ctx-item" @click="ctxAction(() => openSource(ctxMenu.node!))">
+              <CodeOutlined /> 打开源码
+            </div>
+            <div class="cg-ctx-item" @click="ctxAction(() => focusChain(ctxMenu.node!.id))">
+              <AimOutlined /> 聚焦上下游链路
+            </div>
+            <div class="cg-ctx-item" @click="ctxAction(focusDownstreamCtx)">
+              <ClusterOutlined /> 只看下游执行流
+            </div>
+            <div class="cg-ctx-sep" />
+            <div class="cg-ctx-item" @click="ctxAction(() => copyText(ctxMenu.node!.id, '已复制限定名'))">
+              <CopyOutlined /> 复制限定名
+            </div>
+            <div class="cg-ctx-item" @click="ctxAction(() => copyText(ctxMenu.node!.qualname, '已复制函数名'))">
+              <CopyOutlined /> 复制函数名
+            </div>
+          </template>
+          <template v-else>
+            <div class="cg-ctx-item" @click="ctxAction(resetView)"><ClearOutlined /> 重置视图</div>
+            <div class="cg-ctx-item" @click="ctxAction(toggleCanvasFullscreen)">
+              <ExpandOutlined /> 全屏画布
+            </div>
+          </template>
+        </div>
         <div v-if="loading" class="cg-overlay"><EmptyState text="加载调用图…" /></div>
         <div v-else-if="missing" class="cg-overlay">
           <EmptyState
@@ -1118,6 +1224,58 @@ async function openSource(n: CallGraphNode) {
   border-radius: 0;
   background: var(--bg-base);
 }
+/* 右键上下文菜单 */
+.cg-ctxmenu {
+  position: absolute;
+  z-index: 20;
+  min-width: 200px;
+  max-width: 260px;
+  padding: 4px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-base);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-md);
+}
+.cg-ctx-head {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  font-family: "JetBrains Mono", monospace;
+  padding: 6px 10px 8px;
+  border-bottom: 1px solid var(--border-light);
+  margin-bottom: 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cg-ctx-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  font-size: 13px;
+  color: var(--text-primary);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.cg-ctx-item .anticon {
+  font-size: 13px;
+  color: var(--text-tertiary);
+}
+.cg-ctx-item:hover {
+  background: var(--bg-input);
+  color: var(--color-primary);
+}
+.cg-ctx-item:hover .anticon {
+  color: var(--color-primary);
+}
+.cg-ctx-sep {
+  height: 1px;
+  background: var(--border-light);
+  margin: 4px 6px;
+}
+
 /* 沉浸态浮动退出按钮（半透明贴角，hover 实心） */
 .cg-exit-fs {
   position: absolute;
