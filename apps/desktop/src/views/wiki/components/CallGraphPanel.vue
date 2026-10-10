@@ -20,6 +20,8 @@ import {
   DoubleLeftOutlined,
   DoubleRightOutlined,
   CaretRightOutlined,
+  ExpandOutlined,
+  ShrinkOutlined,
 } from "@ant-design/icons-vue";
 import { DataSet, Network } from "vis-network/standalone";
 import { api } from "@/api";
@@ -61,6 +63,84 @@ const verbFilter = ref(""); // "" = 全部动词
 const panelCollapsed = ref(localStorage.getItem("bw:cg-entries-collapsed") === "1");
 /** 展开的入口分组（module key；自定义入口用 CUSTOM_KEY） */
 const expandedGroups = ref<Set<string>>(new Set());
+
+// ===== 三栏宽度拖拽（左入口栏/右详情栏可拖，画布弹性自适应） =====
+const ENTRIES_W_DEFAULT = 248;
+const DETAIL_W_DEFAULT = 360;
+const entriesWidth = ref(Number(localStorage.getItem("bw:cg-entries-w")) || ENTRIES_W_DEFAULT);
+const detailWidth = ref(Number(localStorage.getItem("bw:cg-detail-w")) || DETAIL_W_DEFAULT);
+const resizing = ref<"" | "entries" | "detail">("");
+
+/** 夹片拖拽：按下记录起点，move 按方向差值改宽（右栏取反向），抬起重存 localStorage */
+function startResize(which: "entries" | "detail", e: MouseEvent) {
+  e.preventDefault();
+  resizing.value = which;
+  const startX = e.clientX;
+  const startW = which === "entries" ? entriesWidth.value : detailWidth.value;
+  const onMove = (ev: MouseEvent) => {
+    const dx = ev.clientX - startX;
+    const w = which === "entries" ? startW + dx : startW - dx;
+    if (which === "entries") {
+      entriesWidth.value = Math.min(420, Math.max(200, w));
+    } else {
+      detailWidth.value = Math.min(560, Math.max(280, w));
+    }
+  };
+  const onUp = () => {
+    window.removeEventListener("mousemove", onMove);
+    window.removeEventListener("mouseup", onUp);
+    resizing.value = "";
+    localStorage.setItem(
+      which === "entries" ? "bw:cg-entries-w" : "bw:cg-detail-w",
+      String(which === "entries" ? entriesWidth.value : detailWidth.value),
+    );
+  };
+  window.addEventListener("mousemove", onMove);
+  window.addEventListener("mouseup", onUp);
+}
+
+/** 双击夹片复位该栏默认宽 */
+function resetResize(which: "entries" | "detail") {
+  if (which === "entries") entriesWidth.value = ENTRIES_W_DEFAULT;
+  else detailWidth.value = DETAIL_W_DEFAULT;
+  localStorage.removeItem(which === "entries" ? "bw:cg-entries-w" : "bw:cg-detail-w");
+}
+
+// ===== 画布全屏：原生 Fullscreen 优先，应用内全屏兜底 =====
+const canvasBox = ref<HTMLDivElement>();
+const isFullscreen = ref(false);
+const canvasZen = ref(false);
+/** 沉浸态：原生全屏或应用内全屏（隐藏工具栏与两栏，画布铺满） */
+const immersive = computed(() => isFullscreen.value || canvasZen.value);
+
+async function toggleCanvasFullscreen() {
+  const el = canvasBox.value;
+  if (!el) return;
+  if (!document.fullscreenElement) {
+    try {
+      await el.requestFullscreen();
+    } catch {
+      canvasZen.value = true; // WebView 不支持时兜底：应用内全屏
+    }
+  } else {
+    await document.exitFullscreen();
+  }
+}
+
+function exitImmersive() {
+  if (document.fullscreenElement) {
+    document.exitFullscreen();
+  }
+  canvasZen.value = false;
+}
+
+function onFullscreenChange() {
+  isFullscreen.value = !!document.fullscreenElement;
+}
+/** 应用内全屏没有原生 Esc，自行监听退出 */
+function onZenEsc(e: KeyboardEvent) {
+  if (e.key === "Escape" && canvasZen.value) exitImmersive();
+}
 const selectedId = ref<string | null>(null);
 const focusNote = ref("");
 const sourceState = reactive({
@@ -441,14 +521,33 @@ async function generate() {
   }
 }
 
+/** 容器尺寸变化（拖拽/折叠）→ 画布重绘（rAF 合帧，拖拽不掉帧） */
+let resizeObs: ResizeObserver | null = null;
+let redrawPending = false;
+function scheduleRedraw() {
+  if (redrawPending) return;
+  redrawPending = true;
+  requestAnimationFrame(() => {
+    redrawPending = false;
+    network?.redraw();
+  });
+}
+
 let unlisten: Awaited<ReturnType<typeof api.callchainOnProgress>> | null = null;
 onMounted(async () => {
+  resizeObs = new ResizeObserver(scheduleRedraw);
+  if (canvasEl.value) resizeObs.observe(canvasEl.value);
+  document.addEventListener("fullscreenchange", onFullscreenChange);
+  window.addEventListener("keydown", onZenEsc);
   unlisten = await api.callchainOnProgress((n) => {
     progressText.value = `已解析 ${n} 个源文件…`;
   });
   await loadData();
 });
 onBeforeUnmount(() => {
+  resizeObs?.disconnect();
+  document.removeEventListener("fullscreenchange", onFullscreenChange);
+  window.removeEventListener("keydown", onZenEsc);
   unlisten?.();
   if (freezeTimer) clearTimeout(freezeTimer);
   if (searchTimer) clearTimeout(searchTimer);
@@ -489,9 +588,9 @@ async function openSource(n: CallGraphNode) {
 </script>
 
 <template>
-  <div class="cg-panel">
-    <!-- 工具栏 -->
-    <div class="cg-toolbar">
+  <div class="cg-panel" :class="{ resizing: !!resizing }">
+    <!-- 工具栏（沉浸态隐藏） -->
+    <div v-show="!immersive" class="cg-toolbar">
       <div class="cg-toolbar-left">
         <button class="cg-btn primary" :disabled="generating" @click="generate">
           <ReloadOutlined :spin="generating" />
@@ -532,13 +631,21 @@ async function openSource(n: CallGraphNode) {
           @change="applyFilter"
         />
         <button class="cg-btn" @click="resetView">重置视图</button>
+        <button class="cg-btn" title="画布全屏（Esc 退出）" @click="toggleCanvasFullscreen">
+          <ExpandOutlined /> 全屏
+        </button>
       </div>
     </div>
 
     <!-- 主体三栏 -->
     <div class="cg-main">
-      <!-- 入口面板（可折叠：收起为细轨，画布全宽） -->
-      <aside class="cg-entries" :class="{ collapsed: panelCollapsed }">
+      <!-- 入口面板（沉浸态隐藏；可拖宽/可折叠：收起为细轨，画布全宽） -->
+      <aside
+        v-show="!immersive"
+        class="cg-entries"
+        :class="{ collapsed: panelCollapsed }"
+        :style="panelCollapsed ? undefined : { width: entriesWidth + 'px' }"
+      >
         <!-- 折叠态：细轨只留展开按钮 -->
         <div v-if="panelCollapsed" class="cg-entries-rail">
           <button class="cg-rail-btn" title="展开入口面板" @click="togglePanel">
@@ -590,8 +697,22 @@ async function openSource(n: CallGraphNode) {
         </template>
       </aside>
 
+      <!-- 左夹片：拖拽调入口栏宽，双击复位 -->
+      <div
+        v-show="!immersive && !panelCollapsed"
+        class="cg-resizer"
+        :class="{ active: resizing === 'entries' }"
+        title="拖拽调整宽度 · 双击复位"
+        @mousedown="startResize('entries', $event)"
+        @dblclick="resetResize('entries')"
+      ></div>
+
       <!-- 画布 -->
-      <div class="cg-canvas">
+      <div ref="canvasBox" class="cg-canvas">
+        <!-- 沉浸态浮动退出按钮 -->
+        <button v-if="immersive" class="cg-exit-fs" title="退出全屏（Esc）" @click="exitImmersive">
+          <ShrinkOutlined /> 退出全屏
+        </button>
         <div ref="canvasEl" class="cg-canvas-inner" />
         <div v-if="loading" class="cg-overlay"><EmptyState text="加载调用图…" /></div>
         <div v-else-if="missing" class="cg-overlay">
@@ -614,8 +735,18 @@ async function openSource(n: CallGraphNode) {
         </div>
       </div>
 
-      <!-- 详情侧栏 -->
-      <aside class="cg-detail">
+      <!-- 右夹片：拖拽调详情栏宽，双击复位 -->
+      <div
+        v-show="!immersive"
+        class="cg-resizer"
+        :class="{ active: resizing === 'detail' }"
+        title="拖拽调整宽度 · 双击复位"
+        @mousedown="startResize('detail', $event)"
+        @dblclick="resetResize('detail')"
+      ></div>
+
+      <!-- 详情侧栏（沉浸态隐藏） -->
+      <aside v-show="!immersive" class="cg-detail" :style="{ width: detailWidth + 'px' }">
         <template v-if="selected">
           <div class="cg-card">
             <h3>{{ selected.qualname }}</h3>
@@ -769,9 +900,44 @@ async function openSource(n: CallGraphNode) {
   display: flex;
   gap: var(--spacing-sm);
 }
-/* 入口面板（可折叠）——字号/圆角/间距对齐全局令牌（正文 13-14px） */
+/* 宽度夹片：拖拽调宽，双击复位 */
+.cg-resizer {
+  position: relative;
+  width: 8px;
+  margin: 0 -5px;
+  flex-shrink: 0;
+  cursor: col-resize;
+  z-index: 3;
+}
+.cg-resizer::after {
+  content: "";
+  position: absolute;
+  top: 8%;
+  bottom: 8%;
+  left: 50%;
+  width: 2px;
+  transform: translateX(-50%);
+  border-radius: 1px;
+  background: transparent;
+  transition: background var(--transition-fast);
+}
+.cg-resizer:hover::after {
+  background: var(--color-primary-border);
+}
+.cg-resizer.active::after {
+  background: var(--color-primary);
+}
+/* 拖拽中：全区域统一光标 + 禁止选中文本；宽度过渡停用避免拖拽跟手延迟 */
+.cg-panel.resizing,
+.cg-panel.resizing * {
+  cursor: col-resize !important;
+  user-select: none;
+}
+.cg-panel:not(.resizing) .cg-entries {
+  transition: width var(--transition-normal);
+}
+/* 入口面板（宽度由内联样式驱动：拖拽/折叠；可拖宽/可折叠） */
 .cg-entries {
-  width: 248px;
   flex-shrink: 0;
   background: var(--bg-card);
   border: 1px solid var(--border-card);
@@ -781,7 +947,6 @@ async function openSource(n: CallGraphNode) {
   flex-direction: column;
   gap: 10px;
   overflow: hidden;
-  transition: width var(--transition-normal);
 }
 .cg-entries.collapsed {
   width: 36px;
@@ -947,6 +1112,37 @@ async function openSource(n: CallGraphNode) {
   border-radius: var(--radius-lg);
   overflow: hidden;
 }
+/* 原生全屏态：占满整屏、去边框圆角 */
+.cg-canvas:fullscreen {
+  border: none;
+  border-radius: 0;
+  background: var(--bg-base);
+}
+/* 沉浸态浮动退出按钮（半透明贴角，hover 实心） */
+.cg-exit-fs {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 10;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 12px;
+  border: 1px solid var(--border-base);
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  font-size: 12.5px;
+  opacity: 0.55;
+  transition: all var(--transition-fast);
+}
+.cg-exit-fs:hover {
+  opacity: 1;
+  color: var(--color-primary);
+  border-color: var(--color-primary-border);
+}
 .cg-canvas-inner {
   position: absolute;
   inset: 0;
@@ -993,9 +1189,8 @@ async function openSource(n: CallGraphNode) {
   border-bottom: 1px dashed var(--border-base);
 }
 
-/* 详情侧栏 */
+/* 详情侧栏（宽度由内联样式驱动：拖拽） */
 .cg-detail {
-  width: 360px;
   flex-shrink: 0;
   background: var(--bg-card);
   border: 1px solid var(--border-card);
