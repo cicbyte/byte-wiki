@@ -25,6 +25,8 @@ import {
   CopyOutlined,
   ClusterOutlined,
   ClearOutlined,
+  FunctionOutlined,
+  FileOutlined,
 } from "@ant-design/icons-vue";
 import { DataSet, Network } from "vis-network/standalone";
 import { api } from "@/api";
@@ -156,6 +158,9 @@ const sourceState = reactive({
   content: "",
   line: 1,
   endLine: 1,
+  /** file = 整文件（可滚动上下文）；function = 仅函数体切片（行号偏移显示真实行号） */
+  mode: "file" as "file" | "function",
+  startLine: 1,
 });
 
 // ===== 画布对象（非响应式）=====
@@ -243,9 +248,9 @@ const verbChips = computed<[string, number][]>(() => {
   return [...counts.entries()].sort((a, b) => b[1] - a[1]);
 });
 
-/** 动词下拉选项（与工具栏 a-select 形态一致，控件不混搭） */
+/** 请求方式下拉选项（与工具栏 a-select 形态一致，控件不混搭） */
 const verbOptions = computed(() => [
-  { label: "全部动词", value: "" },
+  { label: "全部方法", value: "" },
   ...verbChips.value.map(([v, c]) => ({ label: `${v}（${c}）`, value: v })),
 ]);
 
@@ -368,11 +373,16 @@ function buildGraph() {
     color: {
       background: modColor.value.get(n.module),
       border: n.is_entry ? "#e8a33d" : modColor.value.get(n.module),
-      highlight: { background: "#ffffff", border: "#5aa2ff" },
+      // 选中态不换背景（纯白高亮会破坏配色且压住标签），改主题蓝描边环表达
+      highlight: {
+        background: modColor.value.get(n.module),
+        border: "#5aa2ff",
+      },
     },
     shape: n.is_entry ? "diamond" : n.routes.length ? "box" : "ellipse",
     font: { color: canvasColors.value.font, size: 12 },
     borderWidth: n.is_entry ? 2 : 1,
+    borderWidthSelected: 4,
   }));
   const edgesArr = d.edges.map((e, i) => ({
     id: `e${i}`,
@@ -533,7 +543,7 @@ function openCtxMenu(params: any) {
     const box = canvasBox.value;
     if (!box) return;
     const w = 224;
-    const h = ctxMenu.node ? 34 + 32 * 5 + 8 : 32 * 2 + 4;
+    const h = ctxMenu.node ? 34 + 32 * 6 + 8 : 32 * 2 + 4;
     if (ctxMenu.x + w > box.clientWidth - 8) ctxMenu.x = box.clientWidth - w - 8;
     if (ctxMenu.y + h > box.clientHeight - 8) ctxMenu.y = box.clientHeight - h - 8;
     ctxMenu.x = Math.max(4, ctxMenu.x);
@@ -556,6 +566,12 @@ function onCtxKey(e: KeyboardEvent) {
 function focusDownstreamCtx() {
   const n = ctxMenu.node;
   if (n) focusFromEntry(n.id, `已聚焦下游执行流（${descendantsOf(n.id).size} 节点）· 重置视图恢复`);
+}
+
+/** 右键「打开函数」：源码抽屉只显示该函数 */
+function openFunctionCtx() {
+  const n = ctxMenu.node;
+  if (n) openFunction(n);
 }
 
 /** 菜单动作：先关菜单再执行（模板内联事件直接调用本函数，不能再返回闭包） */
@@ -639,35 +655,63 @@ const EXT_LANG: Record<string, string> = {
 };
 
 async function openSource(n: CallGraphNode) {
+  await openSourceBase(n, "file");
+}
+
+/** 打开函数：源码抽屉只显示该函数的行区间，行号偏移为真实文件行号 */
+async function openFunction(n: CallGraphNode) {
+  await openSourceBase(n, "function");
+}
+
+async function openSourceBase(n: CallGraphNode, mode: "file" | "function") {
   sourceState.open = true;
   sourceState.loading = true;
+  sourceState.mode = mode;
   sourceState.qualname = n.qualname;
   sourceState.file = `${n.file}:${n.lineno}-${n.end_lineno}`;
   sourceState.lang = EXT_LANG[n.file.split(".").pop() ?? ""] ?? "plaintext";
   sourceState.line = n.lineno;
   sourceState.endLine = n.end_lineno;
+  sourceState.startLine = mode === "function" ? n.lineno : 1;
   sourceState.content = "";
   try {
-    sourceState.content = await api.readRepoFile(props.repoPath, n.file);
+    const text = await api.readRepoFile(props.repoPath, n.file);
+    if (mode === "function") {
+      // 仅函数体切片（end_lineno 含端）
+      const lines = text.split("\n");
+      sourceState.content = lines.slice(n.lineno - 1, n.end_lineno).join("\n");
+    } else {
+      sourceState.content = text;
+    }
     // 双 nextTick：确保 a-drawer 内容挂载 + SnippetEditor 的 modelValue watch 完成 setValue 后再定位
     await nextTick();
     await nextTick();
     const ed = editorEl.value?.getEditor();
     if (ed) {
-      ed.revealLineInCenter(n.lineno);
-      ed.setPosition({ lineNumber: n.lineno, column: 1 });
-      // 函数整段高亮：行背景 + 行号栏标记（每次打开重建，先清旧集合）
-      srcDecorations?.clear();
-      srcDecorations = ed.createDecorationsCollection([
-        {
-          range: new monaco.Range(n.lineno, 1, n.end_lineno, 2147483647),
-          options: {
-            isWholeLine: true,
-            className: "cg-src-highlight",
-            linesDecorationsClassName: "cg-src-line-mark",
+      if (mode === "function") {
+        // 行号偏移：切片从 1 起，但显示为真实文件行号
+        ed.updateOptions({ lineNumbers: (l: number) => String(n.lineno + l - 1) });
+        ed.revealLineInCenter(1);
+        ed.setPosition({ lineNumber: 1, column: 1 });
+        srcDecorations?.clear();
+        srcDecorations = null;
+      } else {
+        ed.updateOptions({ lineNumbers: "on" });
+        ed.revealLineInCenter(n.lineno);
+        ed.setPosition({ lineNumber: n.lineno, column: 1 });
+        // 函数整段高亮：行背景 + 行号栏标记（每次打开重建，先清旧集合）
+        srcDecorations?.clear();
+        srcDecorations = ed.createDecorationsCollection([
+          {
+            range: new monaco.Range(n.lineno, 1, n.end_lineno, 2147483647),
+            options: {
+              isWholeLine: true,
+              className: "cg-src-highlight",
+              linesDecorationsClassName: "cg-src-line-mark",
+            },
           },
-        },
-      ]);
+        ]);
+      }
     }
   } catch (e) {
     message.error(typeof e === "string" ? e : "读取源码失败");
@@ -817,8 +861,11 @@ let srcDecorations: { clear(): void } | null = null;
         >
           <template v-if="ctxMenu.node">
             <div class="cg-ctx-head" :title="ctxMenu.node.id">{{ ctxMenu.node.qualname }}</div>
+            <div class="cg-ctx-item" @click="ctxAction(openFunctionCtx)">
+              <FunctionOutlined /> 打开函数
+            </div>
             <div class="cg-ctx-item" @click="ctxAction(() => openSource(ctxMenu.node!))">
-              <CodeOutlined /> 打开源码
+              <CodeOutlined /> 打开整个文件
             </div>
             <div class="cg-ctx-item" @click="ctxAction(() => focusChain(ctxMenu.node!.id))">
               <AimOutlined /> 聚焦上下游链路
@@ -887,9 +934,14 @@ let srcDecorations: { clear(): void } | null = null;
               <span v-for="r in selected.routes" :key="r" class="cg-tag route">{{ r }}</span>
               <span v-if="selected.is_entry" class="cg-tag entry">入口</span>
             </div>
-            <button class="cg-btn source-btn" @click="openSource(selected)">
-              <CodeOutlined /> 打开源码
-            </button>
+            <div class="cg-source-actions">
+              <button class="cg-btn source-btn primary" @click="openFunction(selected)">
+                <FunctionOutlined /> 打开函数
+              </button>
+              <button class="cg-btn source-btn" @click="openSource(selected)">
+                <FileOutlined /> 整个文件
+              </button>
+            </div>
           </div>
           <div class="cg-card">
             <h3>被谁调用（{{ callersOf.length }}）</h3>
@@ -1431,6 +1483,14 @@ let srcDecorations: { clear(): void } | null = null;
   height: 28px;
   padding: 0 10px;
   font-size: 12px;
+}
+.cg-source-actions {
+  margin-top: 10px;
+  display: flex;
+  gap: 8px;
+}
+.cg-source-actions .source-btn {
+  margin-top: 0;
 }
 .cg-edge-link {
   font-size: 12px;
