@@ -15,7 +15,6 @@ import { useLayoutStore } from "@/stores/layout";
 import { useMenuExpansion } from "./lib/useMenuExpansion";
 import SidebarLogo from "./components/SidebarLogo.vue";
 import SidebarNav from "./components/SidebarNav.vue";
-import SidebarBottom from "./components/SidebarBottom.vue";
 
 const route = useRoute();
 const router = useRouter();
@@ -52,8 +51,6 @@ function navigate(key: string) {
       @hover-group="collapsedHover = $event"
     />
 
-    <!-- 底部 -->
-    <SidebarBottom :collapsed="layout.sidebarCollapsed" />
   </div>
 </template>
 

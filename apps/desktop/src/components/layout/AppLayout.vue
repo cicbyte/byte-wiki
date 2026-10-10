@@ -7,32 +7,18 @@
  *   ├── Sidebar.vue          独立悬浮面板（14px 圆角 + panel 阴影）
  *   └── .app-right (COLUMN, 8px 缝隙)
  *       ├── Navbar.vue       顶栏面板（45px）
- *       └── .app-content     内容面板（MainContent + 状态栏收进卡内）
+ *       └── .app-content     内容面板（MainContent 吃满，无状态栏）
  *
  * 面板三件套：圆角 + 细边框 + 呼吸阴影（panelBreathe 8s，hover 即停换 hover 档）。
  * 壁纸机制：各面板经 color-mix(--bg-*, --wp-panel-alpha) 派生半透明 + backdrop-filter。
  */
-import { computed, onMounted } from "vue";
-import { useRoute } from "vue-router";
-import { FolderOutlined } from "@ant-design/icons-vue";
-import { useLayoutStore } from "@/stores/layout";
-import { useThemeStore } from "@/stores/theme";
+import { onMounted } from "vue";
 import { useWallpaperStore } from "@/stores/wallpaper";
-import { useWikiStore } from "@/stores/wiki";
 import Navbar from "./Navbar.vue";
 import Sidebar from "./Sidebar.vue";
 import MainContent from "./MainContent.vue";
 
-const layout = useLayoutStore();
-const themeStore = useThemeStore();
 const wallpaper = useWallpaperStore();
-const wiki = useWikiStore();
-const route = useRoute();
-
-/** 项目空间模式：footer 显示当前仓库（菜单已去掉仓库分组） */
-const showRepoBadge = computed(
-  () => route.path.startsWith("/repo/") && !!wiki.currentRepo,
-);
 
 onMounted(() => {
   wallpaper.init();
@@ -56,32 +42,6 @@ onMounted(() => {
       <Navbar class="shell-panel" />
       <div class="app-content shell-panel">
         <MainContent />
-        <div class="global-footer">
-        <div class="status-bar">
-          <template v-for="(item, idx) in layout.statusItems" :key="item.key">
-            <span class="status-item">
-              <span class="status-value">{{ item.text }}</span>
-              <span
-                v-if="idx < layout.statusItems.length - 1"
-                class="status-sep"
-              ></span>
-            </span>
-          </template>
-          <span v-if="showRepoBadge" class="repo-badge" :title="wiki.currentRepo!.path">
-            <FolderOutlined /> {{ wiki.currentRepo!.name }}<em v-if="wiki.currentRepo!.branch">@{{ wiki.currentRepo!.branch }}</em>
-          </span>
-          <span class="status-spacer"></span>
-          <span class="theme-status">{{ themeStore.resolvedAppearance === 'dark' ? '深色' : '浅色' }}</span>
-          <div
-            class="mode-switch"
-            :class="{ edit: layout.editMode }"
-            @click="layout.toggleEditMode()"
-          >
-            <span class="mode-opt" :class="{ on: !layout.editMode }">阅读</span>
-            <span class="mode-opt" :class="{ on: layout.editMode }">编辑</span>
-          </div>
-        </div>
-      </div>
       </div>
     </div>
   </div>
@@ -160,98 +120,5 @@ onMounted(() => {
 .app-content > :deep(.main-content) {
   flex: 1;
   min-height: 0;
-}
-.global-footer {
-  display: flex;
-  align-items: center;
-  padding: 0 var(--spacing-lg);
-  height: var(--statusbar-height);
-  border-top: 1px solid var(--border-frame);
-  background: var(--bg-footer);
-  flex-shrink: 0;
-  overflow: hidden;
-}
-.status-bar {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-sm);
-  width: 100%;
-  font-size: 12px;
-  color: var(--text-secondary);
-  user-select: none;
-}
-.status-item {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  min-width: 0;
-}
-.status-value {
-  color: var(--text-primary);
-  font-weight: 500;
-  font-family: "JetBrains Mono", monospace;
-  font-size: 11px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.status-sep {
-  color: var(--text-tertiary);
-  opacity: 0.4;
-}
-.status-sep::after {
-  content: "·";
-}
-.status-spacer {
-  flex: 1;
-}
-/* 当前仓库（项目空间模式，footer 右侧） */
-.repo-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  font-size: 11px;
-  color: var(--color-primary);
-  background: var(--color-primary-bg);
-  padding: 2px 10px;
-  border-radius: var(--radius-xs);
-  font-family: "JetBrains Mono", monospace;
-  max-width: 340px;
-  overflow: hidden;
-}
-.repo-badge em {
-  font-style: normal;
-  color: var(--text-secondary);
-}
-.theme-status {
-  font-size: 11px;
-  color: var(--text-tertiary);
-  font-family: "JetBrains Mono", monospace;
-  padding: 2px 8px;
-  border-radius: var(--radius-xs);
-  background: var(--bg-input);
-}
-/* 阅读/编辑 模式开关（segmented 风格） */
-.mode-switch {
-  display: inline-flex;
-  align-items: center;
-  background: var(--bg-input);
-  border-radius: 10px;
-  padding: 2px;
-  cursor: pointer;
-  user-select: none;
-  font-size: 11px;
-  font-family: "JetBrains Mono", monospace;
-}
-.mode-opt {
-  padding: 2px 10px;
-  border-radius: 8px;
-  color: var(--text-tertiary);
-  transition: all var(--transition-fast);
-}
-.mode-opt.on {
-  background: var(--color-primary);
-  color: #fff;
-  font-weight: 500;
 }
 </style>
