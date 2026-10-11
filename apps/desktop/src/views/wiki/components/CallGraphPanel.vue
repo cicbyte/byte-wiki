@@ -1302,28 +1302,36 @@ let srcDecorations: { clear(): void } | null = null;
 .m-any,
 .m-gf { color: #75839f; }
 .m-none { display: none; }
+/* 永久占位 + 透明度切换：display 切换会让按钮悬停出现时挤压路径文本重排，
+   鼠标落点处按钮忽隐忽现造成自激闪动——占位恒定则零布局变化 */
 .cg-entry-walk {
-  display: none;
+  display: inline-flex;
   align-items: center;
   justify-content: center;
   width: 22px;
   height: 22px;
   flex-shrink: 0;
-  border: 1px solid var(--border-base);
-  background: var(--bg-surface);
+  border: 1px solid transparent;
+  background: transparent;
   color: var(--text-tertiary);
   border-radius: var(--radius-xs);
   cursor: pointer;
   font-size: 11px;
-  transition: all var(--transition-fast);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--transition-fast), color var(--transition-fast),
+    border-color var(--transition-fast), background var(--transition-fast);
+}
+.cg-entry-item:hover .cg-entry-walk,
+.cg-entry-item.active .cg-entry-walk {
+  opacity: 1;
+  pointer-events: auto;
+  border-color: var(--border-base);
+  background: var(--bg-surface);
 }
 .cg-entry-walk:hover {
   color: var(--color-primary);
   border-color: var(--color-primary-border);
-}
-.cg-entry-item:hover .cg-entry-walk,
-.cg-entry-item.active .cg-entry-walk {
-  display: inline-flex;
 }
 .cg-entry-path {
   flex: 1;
