@@ -17,6 +17,8 @@ import {
   NodeCollapseOutlined,
   DoubleLeftOutlined,
   DoubleRightOutlined,
+  CopyOutlined,
+  SaveOutlined,
 } from "@ant-design/icons-vue";
 import { api } from "@/api";
 import type { CallgraphData, CallGraphNode, CallgraphEdge } from "@/api/callchain";
@@ -255,6 +257,87 @@ function jumpTo(id: string) {
 function onVisible(id: string) {
   activeId.value = id;
 }
+// ===== 导出 / 复制（AI 友好的全链 Markdown） =====
+const LANG_OF: Record<string, string> = {
+  py: "python", pyi: "python",
+  js: "javascript", jsx: "javascript", mjs: "javascript", cjs: "javascript",
+  ts: "typescript", tsx: "typescript", mts: "typescript", cts: "typescript",
+  go: "go", java: "java", rs: "rust",
+};
+
+/** includeTitle：复制版 = true（独立文档需自带 H1）；存卡版 = false（createCard 自动写 `# title`，自带会双标题） */
+function buildMarkdown(includeTitle: boolean): string {
+  const root = rootEntry.value;
+  if (!root || !stats.value) return "";
+  const repo = wiki.currentRepo;
+  const L: string[] = [];
+  const routes = root.node.routes.length ? `（${root.node.routes.join(" / ")}）` : "";
+  if (includeTitle) L.push(`# 链路走读：${root.node.qualname}${routes}`, "");
+  L.push(
+    `> 仓库：${repo?.name ?? "?"}${repo?.branch ? ` @ ${repo.branch}` : ""} · 起点：${root.node.file}:${root.node.lineno} · ` +
+      `${stats.value.fns} 函数 / ${stats.value.files} 文件 · 由 byte-wiki 调用链生成（图为快照，代码为导出时实时文件）`,
+    "",
+  );
+  L.push("## 执行流大纲", "");
+  for (const e of entries.value) {
+    const indent = "  ".repeat(e.num.split(".").length - 1);
+    const r = e.node.routes.length ? ` \`${e.node.routes[0]}\`` : "";
+    L.push(`${indent}- ${e.num} ${e.node.qualname} — \`${e.node.file}:${e.node.lineno}-${e.node.end_lineno}\`${r}`);
+  }
+  for (const e of entries.value) {
+    const src = codeMap.value.get(e.id);
+    L.push("", `## ${e.num}. ${e.node.qualname}`, "");
+    L.push(`\`${e.node.file}:${e.node.lineno}-${e.node.end_lineno}\`${e.node.routes.length ? ` · ${e.node.routes.join(" / ")}` : ""}`, "");
+    // 4 反引号围栏：代码内含 ``` 也不破
+    L.push("````" + (LANG_OF[e.node.file.split(".").pop() ?? ""] ?? ""));
+    L.push(src?.code ?? "（源码未加载）");
+    if (src?.truncated) L.push("<!-- 函数超 1200 行已截断 -->");
+    L.push("````");
+    if (e.calls.length) {
+      L.push(
+        "",
+        "调用：" +
+          e.calls
+            .map((c) => `\`${e.node.file}:${c.line}\` → ${c.targetNum} ${c.targetName}${c.kind === "heuristic" ? "（同名启发）" : ""}`)
+            .join("；"),
+      );
+    }
+  }
+  return L.join("\n") + "\n";
+}
+
+const exporting = ref(false);
+async function copyAll() {
+  const md = buildMarkdown(true);
+  if (!md) return;
+  try {
+    await navigator.clipboard.writeText(md);
+    message.success(`已复制全链 Markdown（${(md.length / 1000).toFixed(1)}k 字符），可直接粘贴给 AI`);
+  } catch {
+    message.error("复制失败");
+  }
+}
+async function exportCard() {
+  const root = rootEntry.value;
+  if (!root || exporting.value) return;
+  exporting.value = true;
+  try {
+    const md = buildMarkdown(false);
+    // title 带路由信息：createCard 自动写 `# title` 作为唯一 H1 并用于 wiki_docs 登记
+    const routes = root.node.routes.length ? `（${root.node.routes[0]}）` : "";
+    const rel = await api.createCard(
+      wiki.currentRepo!.path,
+      `链路走读：${root.node.qualname}${routes}`,
+      md,
+    );
+    message.success(`已存为知识卡（${rel}），RAG 可检索，文件在 .bytewiki/cards/ 下`);
+  } catch (e) {
+    message.error(typeof e === "string" ? e : "导出失败");
+  } finally {
+    exporting.value = false;
+  }
+}
+
 function backToGraph() {
   router.push({ path: `/repo/${route.params.id}/callgraph`, query: { node: rootNodeId.value } });
 }
@@ -276,6 +359,8 @@ function backToGraph() {
         {{ stats.fns }} 函数 · {{ stats.files }} 文件 · {{ stats.lines }} 行
       </span>
       <div class="wk-toolbar-actions">
+        <button class="btn sm primary" :disabled="!rootEntry" @click="copyAll"><CopyOutlined /> 复制全链</button>
+        <button class="btn sm" :disabled="!rootEntry || exporting" @click="exportCard"><SaveOutlined /> 存为知识卡</button>
         <button class="btn sm" title="展开全部代码" @click="expandAll"><NodeExpandOutlined /> 全展开</button>
         <button class="btn sm" title="折叠为起点" @click="collapseAll"><NodeCollapseOutlined /> 全折叠</button>
         <button class="btn sm" @click="mainPathOnly">仅主路径</button>

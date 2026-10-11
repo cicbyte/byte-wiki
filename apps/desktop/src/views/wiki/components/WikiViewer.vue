@@ -5,6 +5,9 @@
  */
 import { computed, ref, watch } from "vue";
 import { MdPreview } from "md-editor-v3";
+// 组件样式必须自持：此前仅 McpConfigPane 引过 lib/style.css（懒加载路由），
+// 没访问过 MCP 页时本组件渲染裸奔（代码块工具栏/语言标签/复制按钮全无样式）
+import "md-editor-v3/lib/style.css";
 import { message } from "ant-design-vue";
 import { ZoomInOutlined, ZoomOutOutlined, ReloadOutlined } from "@ant-design/icons-vue";
 import { api } from "@/api";
@@ -23,12 +26,18 @@ const loading = ref(false);
 const zoom = ref(1);
 const isGraph = computed(() => props.docPath.endsWith(".mmd"));
 
+/** 剥掉开头的 YAML frontmatter：cards/ 文档带 title/created/source 头，
+ * 直接渲染会把 `---` 变分割线、meta 变正文，且 md-editor-v3 还会把 title 再渲染成一个 H1（标题重复） */
+function stripFrontmatter(raw: string): string {
+  return raw.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/, "").replace(/^\s+/, "");
+}
+
 async function load() {
   loading.value = true;
   zoom.value = 1;
   try {
     const raw = await api.readWikiDoc(props.repoPath, props.docPath);
-    content.value = isGraph.value ? "```mermaid\n" + raw + "\n```" : raw;
+    content.value = isGraph.value ? "```mermaid\n" + raw + "\n```" : stripFrontmatter(raw);
   } catch (e: any) {
     content.value = "";
     message.error(typeof e === "string" ? e : "读取文档失败");
