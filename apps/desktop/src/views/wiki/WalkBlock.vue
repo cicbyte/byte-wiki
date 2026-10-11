@@ -163,7 +163,8 @@ const ext = () => props.file.split(".").pop() ?? "";
       </button>
     </div>
 
-    <div v-if="expanded" class="wk-code">
+    <!-- v-show 而非 v-if：折叠只隐藏不销毁——v-if 重建编辑器后会跳过单次守卫的 ensureEditor，高度同步丢失导致代码区塌成 0 高 -->
+    <div v-show="expanded" class="wk-code">
       <SnippetEditor
         v-if="mounted"
         ref="editorEl"
@@ -175,7 +176,7 @@ const ext = () => props.file.split(".").pop() ?? "";
       />
       <div v-else class="wk-code-loading">加载编辑器…</div>
     </div>
-    <div v-else class="wk-collapsed">
+    <div v-show="!expanded" class="wk-collapsed">
       已折叠 · {{ endLine - startLine + 1 }} 行（点左侧展开）
     </div>
     <div v-if="truncated" class="wk-truncated">函数超 1200 行已截断</div>
