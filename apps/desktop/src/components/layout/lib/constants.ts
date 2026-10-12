@@ -2,7 +2,7 @@
  * 全局层 + 项目空间菜单静态数据（SidebarNav 消费）
  *
  * 两层 IA（对齐 router/index.ts）：
- * - 全局层：项目列表（顶层项）+ 服务 / 系统 分组
+ * - 全局层：项目（顶层项）+ 服务 / 系统 分组
  * - 项目层：repoMenu(repoId) 平铺项目专属菜单（总览/文档/调用链/对话/知识卡）
  *
  * 注意：label 支持 `() => string`（动态标签预留），统一经 labelOfItem 解析。
@@ -44,7 +44,7 @@ export function labelOfItem(item: MenuItem): string {
 
 /** 全局层：顶层独立项 */
 export const topItems: MenuItem[] = [
-  { key: "/", icon: ProjectOutlined, label: "项目列表" },
+  { key: "/", icon: ProjectOutlined, label: "项目" },
 ];
 
 /** 全局层：分组菜单（服务 / 系统） */

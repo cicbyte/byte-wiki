@@ -335,9 +335,6 @@ const busy = computed(() => generating.value || updating.value);
               <button v-if="wikiDocs.length" class="btn" @click="router.push(`/repo/${repoId}/docs`)">
                 浏览文档（{{ wikiDocs.length }}）
               </button>
-              <button class="btn" @click="router.push('/')">
-                <ArrowLeftOutlined /> 项目列表
-              </button>
             </div>
 
             <!-- 生成进度 -->
@@ -416,9 +413,6 @@ const busy = computed(() => generating.value || updating.value);
             <button class="btn" @click="cardModalOpen = true">
               <FileAddOutlined /> 知识卡
             </button>
-            <button class="btn" @click="router.push('/')">
-              <ArrowLeftOutlined /> 项目列表
-            </button>
           </div>
         </div>
         <div v-if="genProgress && busy" class="gen-progress browse-progress">
@@ -469,9 +463,6 @@ const busy = computed(() => generating.value || updating.value);
             <button class="btn" @click="router.push(`/repo/${repoId}/docs`)">
               <FileTextOutlined /> 文档
             </button>
-            <button class="btn" @click="router.push('/')">
-              <ArrowLeftOutlined /> 项目列表
-            </button>
           </div>
         </div>
         <div class="chat-tab">
@@ -485,9 +476,6 @@ const busy = computed(() => generating.value || updating.value);
           <div class="cards-actions">
             <button class="btn primary" @click="cardModalOpen = true">
               <FileAddOutlined /> 新建知识卡
-            </button>
-            <button class="btn" @click="router.push('/')">
-              <ArrowLeftOutlined /> 项目列表
             </button>
             <span class="hint">cards/ 为人工知识区：重新生成与增量更新不会覆盖，且可被问答检索</span>
           </div>

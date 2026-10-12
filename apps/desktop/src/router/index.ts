@@ -2,7 +2,7 @@ import { createRouter, createWebHashHistory } from "vue-router";
 
 /**
  * 两层 IA：
- * - 全局层：项目列表（/）、服务、系统
+ * - 全局层：项目（/）、服务、系统
  * - 项目层：/repo/:id（总览）、/docs 文档、/callgraph 调用链、/walkthrough 链路走读、/chat 问答、/cards 知识卡
  *   —— 进入项目后 Sidebar 切换为项目专属菜单（components/layout/lib/constants.repoMenu）
  */
@@ -11,7 +11,7 @@ const routes = [
     path: "/",
     name: "repo-list",
     component: () => import("@/views/wiki/RepoList.vue"),
-    meta: { title: "项目列表", fullsize: true },
+    meta: { title: "项目", fullsize: true },
   },
   {
     path: "/repo/:id",
