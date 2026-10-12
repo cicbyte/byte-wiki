@@ -210,8 +210,11 @@ function toggleOutline() {
 
 const blockRefs = new Map<string, HTMLElement>();
 function setBlockRef(id: string, el: unknown) {
-  if (el) blockRefs.set(id, el as HTMLElement);
-  else blockRefs.delete(id);
+  if (el) {
+    // WalkBlock 是组件：函数 ref 拿到的是组件实例，DOM 在 $el（根节点 <section>）
+    const dom = (el as { $el?: HTMLElement }).$el ?? (el as HTMLElement);
+    blockRefs.set(id, dom);
+  } else blockRefs.delete(id);
 }
 
 function toggleBlock(id: string) {
@@ -248,11 +251,12 @@ function mainPathOnly() {
 }
 
 function jumpTo(id: string) {
-  expandedIds.value.has(id) || toggleBlock(id);
+  if (!expandedIds.value.has(id)) toggleBlock(id);
   activeId.value = id;
-  requestAnimationFrame(() => {
-    blockRefs.get(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
-  });
+  const scroll = () => blockRefs.get(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
+  requestAnimationFrame(scroll);
+  // 点击折叠项时：展开后编辑器懒挂载、块高度异步增长，补一次迟到滚动校准落点
+  setTimeout(scroll, 350);
 }
 function onVisible(id: string) {
   activeId.value = id;
