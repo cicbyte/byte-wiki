@@ -54,6 +54,7 @@ pub fn run() {
             commands::generate::list_wiki_docs,
             commands::generate::read_wiki_doc,
             commands::generate::repo_chat,
+            commands::generate::chat_cancel,
             commands::generate::rebuild_embeddings,
             // 调用链（函数级视图）
             commands::callchain::generate_callchain,

@@ -26,6 +26,9 @@ const route = useRoute();
 const router = useRouter();
 const themeStore = useThemeStore();
 const layout = useLayoutStore();
+
+/** 项目空间才显示 AI 入口（对话需要仓库上下文） */
+const inProjectSpace = computed(() => route.path.startsWith("/repo/"));
 const wiki = useWikiStore();
 const q = ref("");
 const appWindow = getCurrentWindow();
@@ -101,6 +104,15 @@ const breadcrumbItems = computed(() => {
     </div>
 
     <div class="navbar-right" data-tauri-drag-region>
+      <button
+        v-if="inProjectSpace"
+        class="icon-btn ai-toggle"
+        :class="{ on: layout.aiDockOpen }"
+        title="AI 问答"
+        @click="layout.aiDockOpen = !layout.aiDockOpen"
+      >
+        <RobotOutlined />
+      </button>
       <button
         class="icon-btn"
         :title="themeStore.isDark ? '切换到浅色' : '切换到深色'"
@@ -192,6 +204,14 @@ const breadcrumbItems = computed(() => {
   position: relative;
   width: 100%;
   max-width: 420px;
+}
+.icon-btn.ai-toggle {
+  color: var(--text-tertiary);
+  transition: color var(--transition-fast), background var(--transition-fast);
+}
+.icon-btn.ai-toggle.on {
+  color: var(--color-primary);
+  background: var(--color-primary-bg);
 }
 .navbar-right {
   display: flex;

@@ -59,6 +59,10 @@ pub struct LlmConfig {
     /// 当前使用的供应商 id
     #[serde(default = "default_active_id")]
     pub active_id: String,
+    /// Embedding 独立供应商 id（None/空 = 跟随当前供应商）——
+    /// 支持「对话用远程 + 向量化用本地」组合；切换后旧向量空间失效需重建
+    #[serde(default)]
+    pub embed_provider_id: Option<String>,
     /// 预置供应商是否已补齐过（true 后用户删除的预置不再自动复活）
     #[serde(default)]
     pub presets_seeded: bool,
@@ -162,6 +166,7 @@ impl Default for LlmConfig {
         Self {
             providers: default_providers(),
             active_id: default_active_id(),
+            embed_provider_id: None,
             presets_seeded: false,
         }
     }

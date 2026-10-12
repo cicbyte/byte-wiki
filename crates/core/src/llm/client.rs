@@ -50,6 +50,19 @@ pub struct LlmClient {
 }
 
 impl LlmClient {
+    /// 按 embedding 独立供应商创建（embed_provider_id 优先，回退当前供应商）——
+    /// 检索 query 向量化与建库必须同一模型，两侧都走这里
+    pub fn for_embed(cfg: &LlmConfig) -> CoreResult<Self> {
+        let p = match cfg.embed_provider_id.as_deref() {
+            Some(id) if !id.is_empty() => cfg.providers.iter().find(|p| p.id == id),
+            _ => None,
+        };
+        match p {
+            Some(p) if p.enabled => Self::for_provider(p),
+            _ => Self::new(cfg),
+        }
+    }
+
     /// 按当前使用的供应商创建
     pub fn new(cfg: &LlmConfig) -> CoreResult<Self> {
         let Some(p) = cfg.active() else {
@@ -96,9 +109,28 @@ impl LlmClient {
         opts: &ChatOptions,
         on_delta: &(dyn Fn(&str) + Send + Sync),
     ) -> CoreResult<ChatOutcome> {
+        self.chat_stream_ext(messages, opts, on_delta, &|_| {}, &|| false)
+            .await
+    }
+
+    /// 流式对话（扩展）：思考过程通道 + 取消检查（token 边界检测，返回 ChatCancelled）
+    pub async fn chat_stream_ext(
+        &self,
+        messages: &[ChatMessage],
+        opts: &ChatOptions,
+        on_delta: &(dyn Fn(&str) + Send + Sync),
+        on_thinking: &(dyn Fn(&str) + Send + Sync),
+        is_cancelled: &(dyn Fn() -> bool + Send + Sync),
+    ) -> CoreResult<ChatOutcome> {
         match self.cfg.kind.as_str() {
-            "ollama" => self.ollama_chat_stream(messages, opts, on_delta).await,
-            "openai" => self.openai_chat_stream(messages, opts, on_delta).await,
+            "ollama" => {
+                self.ollama_chat_stream_ext(messages, opts, on_delta, on_thinking, is_cancelled)
+                    .await
+            }
+            "openai" => {
+                self.openai_chat_stream_ext(messages, opts, on_delta, on_thinking, is_cancelled)
+                    .await
+            }
             other => Err(unknown_provider(other)),
         }
     }
@@ -142,11 +174,14 @@ impl LlmClient {
         })
     }
 
-    async fn ollama_chat_stream(
+    #[allow(clippy::too_many_arguments)]
+    async fn ollama_chat_stream_ext(
         &self,
         messages: &[ChatMessage],
         opts: &ChatOptions,
         on_delta: &(dyn Fn(&str) + Send + Sync),
+        on_thinking: &(dyn Fn(&str) + Send + Sync),
+        is_cancelled: &(dyn Fn() -> bool + Send + Sync),
     ) -> CoreResult<ChatOutcome> {
         let url = self.endpoint("/api/chat");
         let body = serde_json::json!({
@@ -164,6 +199,10 @@ impl LlmClient {
                 .await
                 .map_err(|e| CoreError::Other(anyhow::anyhow!("流读取失败：{e}")))?;
             let Some(chunk) = chunk else { break };
+            if is_cancelled() {
+                drop(resp);
+                return Err(CoreError::Other(anyhow::anyhow!("__CHAT_CANCELLED__")));
+            }
             for line in lines.push(&chunk) {
                 if line.trim().is_empty() {
                     continue;
@@ -172,6 +211,16 @@ impl LlmClient {
                     tracing::warn!("ollama 流行解析失败，跳过：{line}");
                     continue;
                 };
+                // 思考通道：message.thinking（Ollama 新版）/ message.reasoning_content（兼容）
+                if let Some(th) = v
+                    .pointer("/message/thinking")
+                    .or_else(|| v.pointer("/message/reasoning_content"))
+                    .and_then(|t| t.as_str())
+                {
+                    if !th.is_empty() {
+                        on_thinking(th);
+                    }
+                }
                 if let Some(delta) = v.pointer("/message/content").and_then(|t| t.as_str()) {
                     if !delta.is_empty() {
                         on_delta(delta);
@@ -238,11 +287,14 @@ impl LlmClient {
         })
     }
 
-    async fn openai_chat_stream(
+    #[allow(clippy::too_many_arguments)]
+    async fn openai_chat_stream_ext(
         &self,
         messages: &[ChatMessage],
         opts: &ChatOptions,
         on_delta: &(dyn Fn(&str) + Send + Sync),
+        on_thinking: &(dyn Fn(&str) + Send + Sync),
+        is_cancelled: &(dyn Fn() -> bool + Send + Sync),
     ) -> CoreResult<ChatOutcome> {
         let url = self.endpoint_openai("/chat/completions");
         let body = serde_json::json!({
@@ -262,6 +314,10 @@ impl LlmClient {
                 .await
                 .map_err(|e| CoreError::Other(anyhow::anyhow!("流读取失败：{e}")))?;
             let Some(chunk) = chunk else { break };
+            if is_cancelled() {
+                drop(resp);
+                return Err(CoreError::Other(anyhow::anyhow!("__CHAT_CANCELLED__")));
+            }
             for line in lines.push(&chunk) {
                 let Some(data) = line.strip_prefix("data:") else { continue };
                 let data = data.trim();
@@ -272,6 +328,15 @@ impl LlmClient {
                     tracing::warn!("openai 流行解析失败，跳过：{data}");
                     continue;
                 };
+                // 思考通道：delta.reasoning_content（DeepSeek-R1/GLM 兼容端点通用约定）
+                if let Some(th) = v
+                    .pointer("/choices/0/delta/reasoning_content")
+                    .and_then(|t| t.as_str())
+                {
+                    if !th.is_empty() {
+                        on_thinking(th);
+                    }
+                }
                 if let Some(delta) = v.pointer("/choices/0/delta/content").and_then(|t| t.as_str()) {
                     if !delta.is_empty() {
                         on_delta(delta);

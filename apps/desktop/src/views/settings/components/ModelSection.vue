@@ -1,9 +1,10 @@
 <script setup lang="ts">
 /**
  * 模型分区（设置 → 模型）— 参考-byte-voice ModelSettings 两栏布局：
- * 左栏「供应商」列表（卡片 + 启用开关 + 使用中标记），右栏供应商详情
- * （API 端点 / 密钥 + 行内检测 / 对话与 Embedding 模型 / 分组模型列表 +
- * 获取模型弹窗 / 设为当前使用）。600ms 节流自动保存。
+ * 顶部「默认供应商」区（对话/问答、Embedding 两个全局选择器，按供应商粒度切换，
+ * 模型跟随各供应商详情内的默认配置）；左栏「供应商」列表（卡片 + 启用开关 +
+ * 使用中标记），右栏供应商详情（API 端点 / 密钥 + 行内检测 / 供应商内默认模型 /
+ * 分组模型列表 + 获取模型弹窗）。600ms 节流自动保存。
  * 样式遵循 byte-wiki 现有主题 token。
  */
 import { computed, nextTick, onMounted, reactive, ref, watch } from "vue";
@@ -20,6 +21,66 @@ import { api } from "@/api";
 import type { LlmConfig, LlmProvider } from "@/api/llm";
 
 const config = ref<LlmConfig>({ providers: [], active_id: "" });
+
+/** 顶部「默认供应商」选项：按供应商粒度选择，模型跟随供应商详情内的默认配置 */
+const chatOptions = computed(() =>
+  config.value.providers
+    .filter((p) => p.enabled)
+    .map((p) => ({
+      label: p.chat_model ? p.name : `${p.name}（未选择模型）`,
+      value: p.id,
+      disabled: !p.chat_model,
+    })),
+);
+const embedOptions = computed(() =>
+  config.value.providers
+    .filter((p) => p.enabled)
+    .map((p) => ({
+      label: p.embed_model ? p.name : `${p.name}（未选择模型）`,
+      value: p.id,
+      disabled: !p.embed_model,
+    })),
+);
+
+/** Embedding 实际使用的供应商（未显式指定时与对话供应商一致） */
+const embedActiveId = computed(
+  () => config.value.embed_provider_id ?? config.value.active_id,
+);
+
+async function onChatProviderChange(v: unknown) {
+  const id = v as string;
+  if (!id || id === config.value.active_id) return;
+  // 切换对话供应商不影响 Embedding：跟随态先固化为显式选择，防向量配置漂移
+  if (config.value.embed_provider_id === null) {
+    const prev = config.value.providers.find((p) => p.id === config.value.active_id);
+    if (prev?.embed_model) {
+      config.value.embed_provider_id = prev.id;
+    }
+  }
+  config.value.active_id = id;
+  try {
+    await api.setLlmConfig(config.value);
+    const p = config.value.providers.find((x) => x.id === id);
+    message.success(`生成与问答已切换至「${p?.name}」`);
+  } catch (e: any) {
+    message.error(typeof e === "string" ? e : "保存失败");
+  }
+}
+
+async function onEmbedProviderChange(v: unknown) {
+  const id = (v as string) || "";
+  const prev = embedActiveId.value;
+  // 与对话供应商一致时存 null（跟随语义的归一化存储）
+  config.value.embed_provider_id = id && id !== config.value.active_id ? id : null;
+  try {
+    await api.setLlmConfig(config.value);
+    if (id && id !== prev) {
+      message.info("Embedding 供应商已切换——向量空间需匹配，建议到项目页「重建向量索引」");
+    }
+  } catch (e: any) {
+    message.error(typeof e === "string" ? e : "保存失败");
+  }
+}
 const selectedId = ref("");
 const checking = ref(false);
 const connectResult = ref<{ ok: boolean; message: string } | null>(null);
@@ -46,9 +107,6 @@ const KIND_OPTIONS = [
 const providers = computed(() => config.value.providers);
 const currentProvider = computed(() =>
   providers.value.find((p) => p.id === selectedId.value),
-);
-const isActive = computed(
-  () => selectedId.value !== "" && selectedId.value === config.value.active_id,
 );
 
 // 编辑表单（与 byte-voice syncEditForm 模式一致：切换供应商时同步，避免触发自动保存）
@@ -132,7 +190,7 @@ watch(
   { deep: true },
 );
 
-// ============ 供应商增删 / 设为当前使用 ============
+// ============ 供应商增删 / 启停 ============
 
 function showAddProvider() {
   newProviderName.value = "";
@@ -163,8 +221,8 @@ function confirmAddProvider() {
 async function removeProvider() {
   const p = currentProvider.value;
   if (!p) return;
-  if (p.id === config.value.active_id) {
-    message.warning("当前使用中的供应商不能删除，请先切换");
+  if (p.id === config.value.active_id || p.id === embedActiveId.value) {
+    message.warning("默认模型正在使用此供应商，请先在顶部切换后再删除");
     return;
   }
   config.value.providers = config.value.providers.filter((x) => x.id !== p.id);
@@ -175,23 +233,13 @@ async function removeProvider() {
   message.success(`已删除「${p.name}」`);
 }
 
-async function setActive() {
-  const p = currentProvider.value;
-  if (!p) return;
-  if (!p.enabled) {
-    message.warning("供应商已禁用，请先启用");
-    return;
-  }
-  config.value.active_id = p.id;
-  await api.setLlmConfig(config.value);
-  message.success(`「${p.name}」已设为当前使用`);
-}
-
 async function toggleProvider(p: LlmProvider, val: boolean) {
   p.enabled = val;
-  // 禁用当前使用的供应商时提示
+  // 禁用默认模型正在使用的供应商时提示
   if (!val && p.id === config.value.active_id) {
-    message.warning("已禁用当前使用的供应商，生成/问答将不可用");
+    message.warning("已禁用对话使用的供应商，生成 / 问答将不可用");
+  } else if (!val && p.id === embedActiveId.value) {
+    message.warning("已禁用 Embedding 使用的供应商，向量检索将不可用");
   }
   await api.setLlmConfig(config.value);
 }
@@ -332,6 +380,37 @@ function removeModel(name: string) {
 
 <template>
   <section class="model-pane">
+    <!-- 顶部：默认供应商全局切换（模型跟随各供应商详情内的默认配置） -->
+    <div class="default-models">
+      <div class="dm-head">
+        <div class="dm-title">默认供应商</div>
+        <div class="dm-sub">对话与向量检索分别使用的供应商，可自由组合</div>
+      </div>
+      <div class="dm-fields">
+        <div class="dm-field">
+          <span class="dm-label">对话 / 问答</span>
+          <a-select
+            :value="config.active_id"
+            :options="chatOptions"
+            class="dm-select"
+            size="small"
+            placeholder="选择供应商"
+            @change="onChatProviderChange"
+          />
+        </div>
+        <div class="dm-field">
+          <span class="dm-label">Embedding</span>
+          <a-select
+            :value="embedActiveId"
+            :options="embedOptions"
+            class="dm-select"
+            size="small"
+            placeholder="选择供应商"
+            @change="onEmbedProviderChange"
+          />
+        </div>
+      </div>
+    </div>
     <div class="model-container">
       <!-- 左栏：供应商列表 -->
       <div class="provider-list-panel">
@@ -350,7 +429,8 @@ function removeModel(name: string) {
             <div class="provider-info">
               <div class="provider-name">
                 {{ p.name }}
-                <span v-if="p.id === config.active_id" class="active-tag">使用中</span>
+                <span v-if="p.id === config.active_id" class="active-tag">对话</span>
+                <span v-if="p.id === embedActiveId" class="active-tag embed">Embed</span>
               </div>
               <div class="provider-meta">{{ p.models.length }} 个模型</div>
             </div>
@@ -367,13 +447,18 @@ function removeModel(name: string) {
       <!-- 右栏：供应商详情 -->
       <div v-if="currentProvider" class="provider-detail-panel">
         <div class="detail-header">
-          <div class="detail-name">
-            {{ editForm.name }}
-            <a-tag class="kind-tag">{{ editForm.kind === "ollama" ? "Ollama" : "OpenAI 兼容" }}</a-tag>
+          <div class="header-main">
+            <div class="detail-name">
+              {{ editForm.name }}
+              <a-tag class="kind-tag">{{ editForm.kind === "ollama" ? "Ollama" : "OpenAI 兼容" }}</a-tag>
+            </div>
+            <div class="detail-description">
+              {{ editForm.kind === "ollama" ? "本地 Ollama 服务，代码不出本机" : "OpenAI 兼容远程端点，代码片段将发送至第三方" }}
+            </div>
           </div>
-          <div class="detail-description">
-            {{ editForm.kind === "ollama" ? "本地 Ollama 服务，代码不出本机" : "OpenAI 兼容远程端点，代码片段将发送至第三方" }}
-          </div>
+          <button class="btn danger-btn header-delete" @click="removeProvider">
+            <DeleteOutlined /> 删除
+          </button>
         </div>
 
         <!-- 名称 -->
@@ -477,24 +562,15 @@ function removeModel(name: string) {
           <div v-else class="model-empty">暂无模型，点击"获取模型"或"添加"</div>
         </div>
 
-        <!-- 启用 / 当前使用 -->
+        <!-- 启用开关 -->
         <div class="setting-group">
           <div class="setting-row-inline">
             <div>
               <div class="setting-row-label">启用此供应商</div>
-              <div class="setting-row-desc">禁用后不可被生成 / 问答使用</div>
+              <div class="setting-row-desc">禁用后不可被默认模型选用</div>
             </div>
             <a-switch v-model:checked="editForm.enabled" size="small" />
           </div>
-        </div>
-        <div class="setting-group detail-actions">
-          <button v-if="!isActive" class="btn primary" @click="setActive">
-            <ApiOutlined /> 设为当前使用
-          </button>
-          <span v-else class="in-use-hint">当前生成与问答使用此供应商</span>
-          <button class="btn danger-btn" @click="removeProvider">
-            <DeleteOutlined /> 删除
-          </button>
         </div>
       </div>
 
@@ -564,9 +640,61 @@ function removeModel(name: string) {
 <style scoped>
 .model-pane {
   display: flex;
+  flex-direction: column;
   flex: 1;
   min-height: 0;
   min-width: 0;
+}
+
+/* 顶部默认模型选择区：左标题块 + 右字段组（label 上、select 下） */
+.default-models {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 28px;
+  padding: 13px 20px 13px 22px;
+  border-bottom: 1px solid var(--border-light);
+  background: var(--bg-card);
+}
+.dm-head {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  flex-shrink: 0;
+}
+.dm-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  line-height: 1.3;
+}
+.dm-sub {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  line-height: 1.4;
+}
+.dm-fields {
+  display: flex;
+  gap: 14px;
+  flex: 1;
+  max-width: 740px;
+  margin-left: auto;
+}
+.dm-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  flex: 1;
+  min-width: 0;
+}
+.dm-label {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-tertiary);
+  white-space: nowrap;
+}
+.dm-select {
+  width: 100%;
 }
 
 /* 两栏容器（全出血：撑满设置内容区） */
@@ -658,6 +786,10 @@ function removeModel(name: string) {
   padding: 0 6px;
   flex-shrink: 0;
 }
+.active-tag.embed {
+  color: #9254de;
+  background: color-mix(in oklch, #9254de 14%, transparent);
+}
 .provider-meta {
   margin-top: 2px;
   font-size: 11px;
@@ -696,6 +828,19 @@ function removeModel(name: string) {
   margin-bottom: 16px;
   padding-bottom: 14px;
   border-bottom: 1px solid var(--border-light);
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+.header-main {
+  min-width: 0;
+}
+.header-delete {
+  height: 26px;
+  padding: 0 10px;
+  font-size: 12px;
+  flex-shrink: 0;
 }
 .detail-name {
   font-size: 17px;
@@ -782,16 +927,6 @@ function removeModel(name: string) {
   font-size: 12px;
   color: var(--text-tertiary);
   margin-top: 2px;
-}
-.detail-actions {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-sm);
-}
-.in-use-hint {
-  font-size: 12px;
-  color: var(--color-primary);
-  flex: 1;
 }
 .danger-btn:hover:not(:disabled) {
   border-color: var(--color-danger);
@@ -903,5 +1038,4 @@ function removeModel(name: string) {
   font-size: 13px;
   margin: 0;
 }
-
 </style>

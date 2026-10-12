@@ -21,6 +21,8 @@ export interface LlmProvider {
 export interface LlmConfig {
   providers: LlmProvider[];
   active_id: string;
+  /** Embedding 独立供应商（null/undefined = 跟随当前供应商） */
+  embed_provider_id?: string | null;
 }
 
 /** 测试连接结果 */

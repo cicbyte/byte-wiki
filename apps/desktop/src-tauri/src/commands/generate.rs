@@ -94,7 +94,19 @@ pub fn read_wiki_doc(repo_path: String, doc_path: String) -> Result<String, Stri
 /// 问答流式增量事件通道（前端 listen 拼接）
 pub const CHAT_DELTA_EVENT: &str = "wiki://chat-delta";
 
-/// 仓库 RAG 问答：流式增量经事件推送，返回最终答案与出处
+/// 思考过程增量事件通道（前端 listen 拼接）
+pub const CHAT_THINKING_EVENT: &str = "wiki://chat-thinking";
+
+/// 问答取消注册表：request_id → AtomicBool（token 边界中断 SSE，服务端真取消）
+static CHAT_CANCELS: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, std::sync::Arc<std::sync::atomic::AtomicBool>>>> =
+    std::sync::OnceLock::new();
+
+fn chat_cancels() -> &'static std::sync::Mutex<std::collections::HashMap<String, std::sync::Arc<std::sync::atomic::AtomicBool>>> {
+    CHAT_CANCELS.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+}
+
+/// 仓库 RAG 问答：流式增量（正文 + 思考）经事件推送，返回最终答案与出处。
+/// request_id 用于取消配对；取消时返回 __CHAT_CANCELLED__ 哨兵字符串（前端识别）
 #[tauri::command]
 pub async fn repo_chat(
     app: tauri::AppHandle,
@@ -102,14 +114,57 @@ pub async fn repo_chat(
     path: String,
     question: String,
     history: Vec<(String, String)>,
+    request_id: Option<String>,
 ) -> Result<byte_wiki_core::rag::ChatAnswer, String> {
     let svc = Arc::clone(&state.svc);
-    let app_handle = app.clone();
-    svc.chat_with_repo(&path, &question, &history, &move |delta: &str| {
-        let _ = app_handle.emit(CHAT_DELTA_EVENT, delta);
-    })
-    .await
-    .map_err(|e| e.to_string())
+    let app_delta = app.clone();
+    let app_think = app.clone();
+
+    let (flag, rid) = match &request_id {
+        Some(id) if !id.is_empty() => {
+            let flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            chat_cancels().lock().unwrap().insert(id.clone(), std::sync::Arc::clone(&flag));
+            (Some(flag), Some(id.clone()))
+        }
+        _ => (None, None),
+    };
+
+    let result = svc
+        .chat_with_repo_ext(
+            &path,
+            &question,
+            &history,
+            &move |delta: &str| {
+                let _ = app_delta.emit(CHAT_DELTA_EVENT, delta);
+            },
+            &move |think: &str| {
+                let _ = app_think.emit(CHAT_THINKING_EVENT, think);
+            },
+            &move || {
+                flag.as_ref()
+                    .map(|f| f.load(std::sync::atomic::Ordering::Relaxed))
+                    .unwrap_or(false)
+            },
+        )
+        .await
+        .map_err(|e| e.to_string());
+
+    if let Some(id) = &rid {
+        chat_cancels().lock().unwrap().remove(id);
+    }
+    result
+}
+
+/// 取消进行中的问答（服务端真取消：token 边界中断 SSE，不再计费）
+#[tauri::command]
+pub fn chat_cancel(request_id: String) -> Result<bool, String> {
+    let map = chat_cancels().lock().unwrap();
+    if let Some(flag) = map.get(&request_id) {
+        flag.store(true, std::sync::atomic::Ordering::Relaxed);
+        Ok(true)
+    } else {
+        Ok(false)
+    }
 }
 
 /// 重建向量索引（克隆加载场景 / embedding 模型更换后）

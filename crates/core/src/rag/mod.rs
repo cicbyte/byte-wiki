@@ -72,7 +72,18 @@ impl AppService {
         let chunked = chunks.len();
 
         // 2) 批量 embed
-        let provider = self.active_llm()?;
+        // embedding 走独立供应商（未配置则跟随当前）
+        let cfg = self.llm_config()?;
+        let provider = match cfg.embed_provider_id.as_deref() {
+            Some(id) if !id.is_empty() => cfg
+                .providers
+                .iter()
+                .find(|p| p.id == id)
+                .cloned()
+                .map(Result::Ok)
+                .unwrap_or_else(|| Err(CoreError::Other(anyhow::anyhow!("Embedding 供应商不存在（设置 → 模型）")))),
+            _ => self.active_llm(),
+        }?;
         if provider.embed_model.trim().is_empty() {
             return Err(CoreError::Other(anyhow::anyhow!(
                 "未配置 embedding 模型（设置 → 模型）"
@@ -118,7 +129,8 @@ impl AppService {
         let Some(repo) = self.db.get_repo_by_path(&canon)? else {
             return Err(CoreError::Other(anyhow::anyhow!("仓库未登记：{repo_path}")));
         };
-        let client = LlmClient::new(&self.llm_config()?)?;
+        // query 向量化必须与建库同一 embed 供应商（独立选择，回退当前）
+        let client = LlmClient::for_embed(&self.llm_config()?)?;
         let q_vec = client
             .embed(&[query.to_string()])
             .await?
@@ -152,6 +164,20 @@ impl AppService {
         history: &[(String, String)], // (role, content)，多轮上下文
         on_delta: &(dyn Fn(&str) + Send + Sync),
     ) -> CoreResult<ChatAnswer> {
+        self.chat_with_repo_ext(repo_path, question, history, on_delta, &|_| {}, &|| false)
+            .await
+    }
+
+    /// 仓库问答（扩展）：思考过程通道 + 取消（取消经 __CHAT_CANCELLED__ 哨兵向上传播）
+    pub async fn chat_with_repo_ext(
+        &self,
+        repo_path: &str,
+        question: &str,
+        history: &[(String, String)],
+        on_delta: &(dyn Fn(&str) + Send + Sync),
+        on_thinking: &(dyn Fn(&str) + Send + Sync),
+        is_cancelled: &(dyn Fn() -> bool + Send + Sync),
+    ) -> CoreResult<ChatAnswer> {
         let hits = self.search_similar(repo_path, question, DEFAULT_TOP_K).await?;
         if hits.is_empty() {
             return Err(CoreError::Other(anyhow::anyhow!(
@@ -182,7 +208,9 @@ impl AppService {
             "仓库检索上下文：\n{ctx}\n问题：{question}"
         )));
 
-        let outcome = client.chat_stream(&messages, &Default::default(), on_delta).await?;
+        let outcome = client
+            .chat_stream_ext(&messages, &Default::default(), on_delta, on_thinking, is_cancelled)
+            .await?;
         let sources: Vec<String> = {
             let mut seen = std::collections::BTreeSet::new();
             hits.iter()

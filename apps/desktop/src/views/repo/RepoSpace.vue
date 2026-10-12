@@ -62,6 +62,12 @@ const cardContent = ref("");
 const creatingCard = ref(false);
 const loadFailed = ref(false);
 
+
+function openDocFromAi(docPath: string) {
+  layout.aiDockOpen = false;
+  openDocInDocs(docPath);
+}
+
 const cards = computed(() => wikiDocs.value.filter(([, kind]) => kind === "card"));
 
 // ===== 事件订阅 =====
@@ -506,6 +512,18 @@ const busy = computed(() => generating.value || updating.value);
     <div v-else class="loading-pane">
       <EmptyState text="加载中…" />
     </div>
+
+    <!-- AI 对话抽屉：顶栏按钮触发（layout.aiDockOpen 全局态） -->
+    <a-drawer
+      v-model:open="layout.aiDockOpen"
+      title="AI 问答"
+      placement="right"
+      :width="440"
+      :body-style="{ padding: '0', display: 'flex', flexDirection: 'column' }"
+      :header-style="{ padding: '10px 16px' }"
+    >
+      <ChatPanel :repo-path="wiki.currentRepo!.path" @open-doc="openDocFromAi" />
+    </a-drawer>
 
     <!-- 新建知识卡弹窗 -->
     <a-modal
