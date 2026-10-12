@@ -1,27 +1,22 @@
 <script setup lang="ts">
 /**
- * Sidebar 层级菜单导航（对齐 byte-wiki-桌面布局设计.md §3 + reference Sidebar）
+ * Sidebar 侧栏（对齐 byte-writer-桌面布局设计.md §3 + reference Sidebar）
  *
  * 顶部 logo header（高度同 navbar）：左侧 logo+文字
- * 主体：分组菜单（手风琴展开，路由联动高亮）
- * 折叠态：仅图标，hover flyout
+ * 主体：平铺分组导航（小标题仅视觉分隔，子项常显直达）
+ * 折叠态：纯图标列（tooltip 补全名）
  *
- * 本文件为组合入口：持有响应式状态（expanded / collapsedHover），
- * 通过 props 下发子组件、emit 回收变更；静态菜单数据见 ./lib/constants。
+ * 本文件为组合入口：静态菜单数据见 ./lib/constants。
  */
-import { computed, ref } from "vue";
+import { computed } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { useLayoutStore } from "@/stores/layout";
-import { useMenuExpansion } from "./lib/useMenuExpansion";
 import SidebarLogo from "./components/SidebarLogo.vue";
 import SidebarNav from "./components/SidebarNav.vue";
 
 const route = useRoute();
 const router = useRouter();
 const layout = useLayoutStore();
-
-const { expanded, toggleGroup } = useMenuExpansion();
-const collapsedHover = ref<string | null>(null);
 
 /** 项目空间模式：当前路由 /repo/:id 时提取仓库 id（左侧菜单切换为项目专属菜单） */
 const repoId = computed(() => {
@@ -44,13 +39,8 @@ function navigate(key: string) {
       :collapsed="layout.sidebarCollapsed"
       :current-path="route.path"
       :repo-id="repoId"
-      :expanded="expanded"
-      :collapsed-hover="collapsedHover"
-      @toggle-group="toggleGroup"
       @navigate="navigate"
-      @hover-group="collapsedHover = $event"
     />
-
   </div>
 </template>
 
