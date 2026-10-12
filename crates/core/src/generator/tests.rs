@@ -76,6 +76,7 @@ fn svc_with_llm(dir: &Path, base_url: &str) -> AppService {
             embed_model: "mock".into(),
         }],
         active_id: "test".into(),
+        embed_provider_id: None,
         presets_seeded: true,
     })
     .unwrap();
@@ -248,6 +249,7 @@ async fn real_generate_smoke() {
             embed_model: "nomic-embed-text".into(),
         }],
         active_id: "real".into(),
+        embed_provider_id: None,
         presets_seeded: true,
     })
     .unwrap();

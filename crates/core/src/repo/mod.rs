@@ -40,7 +40,7 @@ impl AppService {
         let branch = head_branch(root);
         let file_count = quick_file_count(root);
         self.db.upsert_repo(
-            &root.canonicalize()?.to_string_lossy(),
+            &crate::canonical_key(root)?,
             &name,
             branch.as_deref(),
             file_count,

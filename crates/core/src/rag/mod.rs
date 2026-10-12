@@ -48,7 +48,7 @@ impl AppService {
         on_progress: &(dyn Fn(&str) + Send + Sync),
     ) -> CoreResult<EmbedSummary> {
         let root = Path::new(repo_path);
-        let canon = root.canonicalize()?.to_string_lossy().into_owned();
+        let canon = crate::canonical_key(root)?;
         let Some(repo) = self.db.get_repo_by_path(&canon)? else {
             return Err(CoreError::Other(anyhow::anyhow!("仓库未登记：{repo_path}")));
         };
@@ -125,7 +125,7 @@ impl AppService {
     /// 相似检索：query 向量化后与该仓库全部块算余弦，取 top-k
     pub async fn search_similar(&self, repo_path: &str, query: &str, top_k: usize) -> CoreResult<Vec<SearchHit>> {
         let root = Path::new(repo_path);
-        let canon = root.canonicalize()?.to_string_lossy().into_owned();
+        let canon = crate::canonical_key(root)?;
         let Some(repo) = self.db.get_repo_by_path(&canon)? else {
             return Err(CoreError::Other(anyhow::anyhow!("仓库未登记：{repo_path}")));
         };

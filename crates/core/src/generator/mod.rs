@@ -78,7 +78,7 @@ impl AppService {
     ) -> CoreResult<UpdateSummary> {
         let started = std::time::Instant::now();
         let root = Path::new(repo_path);
-        let canon = root.canonicalize()?.to_string_lossy().into_owned();
+        let canon = crate::canonical_key(root)?;
         let Some(repo) = self.db.get_repo_by_path(&canon)? else {
             return Err(CoreError::Other(anyhow::anyhow!("仓库未登记：{repo_path}")));
         };
@@ -204,7 +204,7 @@ impl AppService {
     ) -> CoreResult<GenerateSummary> {
         let started = std::time::Instant::now();
         let root = Path::new(repo_path);
-        let canon = root.canonicalize()?.to_string_lossy().into_owned();
+        let canon = crate::canonical_key(root)?;
         let Some(repo) = self.db.get_repo_by_path(&canon)? else {
             return Err(CoreError::Other(anyhow::anyhow!("仓库未登记，请先打开：{repo_path}")));
         };
@@ -419,7 +419,7 @@ impl AppService {
         if !wiki.is_dir() {
             return Ok(vec![]);
         }
-        let canon = repo_root.canonicalize()?.to_string_lossy().into_owned();
+        let canon = crate::canonical_key(repo_root)?;
         let mut out: Vec<(String, String, String)> = Vec::new();
         for entry in walkdir::WalkDir::new(&wiki)
             .into_iter()

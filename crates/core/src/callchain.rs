@@ -43,7 +43,7 @@ impl AppService {
         if !root.join(".git").exists() {
             return Err(CoreError::Other(anyhow::anyhow!("不是 Git 仓库：{repo_path}")));
         }
-        let Some(repo) = self.db.get_repo_by_path(&root.canonicalize()?.to_string_lossy())? else {
+        let Some(repo) = self.db.get_repo_by_path(&crate::canonical_key(root)?)? else {
             return Err(CoreError::Other(anyhow::anyhow!("仓库未登记，请先打开：{repo_path}")));
         };
 

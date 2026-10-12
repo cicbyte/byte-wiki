@@ -40,7 +40,7 @@ impl AppService {
     /// 对比当前仓库与索引快照，输出变更与受影响模块
     pub fn check_staleness(&self, repo_path: &str) -> CoreResult<StaleReport> {
         let root = Path::new(repo_path);
-        let canon = root.canonicalize()?.to_string_lossy().into_owned();
+        let canon = crate::canonical_key(root)?;
         let Some(repo) = self.db.get_repo_by_path(&canon)? else {
             return Err(crate::CoreError::Other(anyhow::anyhow!("仓库未登记：{repo_path}")));
         };

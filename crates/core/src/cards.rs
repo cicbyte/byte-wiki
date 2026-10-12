@@ -18,7 +18,7 @@ impl AppService {
             return Err(CoreError::Other(anyhow::anyhow!("卡片标题不能为空")));
         }
         let root = Path::new(repo_path);
-        let canon = root.canonicalize()?.to_string_lossy().into_owned();
+        let canon = crate::canonical_key(root)?;
         let Some(repo) = self.db.get_repo_by_path(&canon)? else {
             return Err(CoreError::Other(anyhow::anyhow!("仓库未登记：{repo_path}")));
         };
@@ -48,7 +48,7 @@ impl AppService {
     /// 删除知识卡（文件 + 登记）
     pub fn delete_card(&self, repo_path: &str, card_rel: &str) -> CoreResult<()> {
         let root = Path::new(repo_path);
-        let canon = root.canonicalize()?.to_string_lossy().into_owned();
+        let canon = crate::canonical_key(root)?;
         let Some(repo) = self.db.get_repo_by_path(&canon)? else {
             return Err(CoreError::Other(anyhow::anyhow!("仓库未登记：{repo_path}")));
         };
