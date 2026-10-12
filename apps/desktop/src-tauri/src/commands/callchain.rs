@@ -48,7 +48,12 @@ pub fn read_repo_file(repo_path: String, rel_path: String) -> Result<String, Str
     if len > 4 * 1024 * 1024 {
         return Err("文件过大（源码查看上限 4MB）".into());
     }
-    std::fs::read_to_string(&full).map_err(|e| e.to_string())
+    let content = std::fs::read_to_string(&full).map_err(|e| e.to_string())?;
+    // 二进制检测：前 8KB 含 NUL 视为二进制，浏览页给出可读错误而不是乱码
+    if content.as_bytes()[..content.len().min(8192)].contains(&0) {
+        return Err(format!("二进制文件：{rel_path}"));
+    }
+    Ok(content)
 }
 
 /// 走读页单个函数源码切片

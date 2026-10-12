@@ -14,7 +14,7 @@ import { mcpServerApi } from "./mcp-server";
 import { apiServerApi } from "./api-server";
 import { systemApi } from "./system";
 import { llmApi } from "./llm";
-import { repoApi } from "./repo";
+import { repoApi, fileBrowseApi } from "./repo";
 import { generateApi } from "./generate";
 import { callchainApi } from "./callchain";
 import { watchApi, cardsApi } from "./watch";
@@ -29,6 +29,7 @@ export const api = {
   ...systemApi,
   ...llmApi,
   ...repoApi,
+  ...fileBrowseApi,
   ...generateApi,
   ...callchainApi,
   ...watchApi,

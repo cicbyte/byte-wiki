@@ -413,6 +413,7 @@ name = "byte-wiki-desktop"
 version = "0.1.0"
 dependencies = [
  "byte-wiki-core",
+ "ignore",
  "serde",
  "serde_json",
  "tauri",

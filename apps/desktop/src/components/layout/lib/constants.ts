@@ -10,6 +10,7 @@
 import type { Component } from "vue";
 import {
   ProjectOutlined,
+  FolderOutlined,
   CloudServerOutlined,
   ClusterOutlined,
   ApiOutlined,
@@ -75,6 +76,7 @@ export function repoMenu(repoId: string): { topItems: MenuItem[]; menuGroups: Me
     topItems: [
       { key: base, icon: AppstoreOutlined, label: "总览" },
       { key: `${base}/docs`, icon: FileTextOutlined, label: "文档" },
+      { key: `${base}/files`, icon: FolderOutlined, label: "文件" },
       { key: `${base}/callgraph`, icon: NodeIndexOutlined, label: "调用链" },
       { key: `${base}/chat`, icon: MessageOutlined, label: "问答" },
       { key: `${base}/cards`, icon: BookOutlined, label: "知识卡" },

@@ -22,6 +22,8 @@ serde_json = { workspace = true }
 tokio = { workspace = true }
 tokio-util = "0.7"
 toml = "0.8"
+# 文件浏览页搜索：遵循 .gitignore 的全量遍历（与 core indexer 同源）
+ignore = "0.4"
 
 [features]
 # 默认启用自定义协议（生产构建用）

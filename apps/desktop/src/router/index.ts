@@ -26,6 +26,12 @@ const routes = [
     meta: { title: "文档", tab: "docs", fullsize: true },
   },
   {
+    path: "/repo/:id/files",
+    name: "repo-files",
+    component: () => import("@/views/repo/RepoSpace.vue"),
+    meta: { title: "文件", tab: "files", fullsize: true },
+  },
+  {
     path: "/repo/:id/callgraph",
     name: "repo-callgraph",
     component: () => import("@/views/repo/RepoSpace.vue"),

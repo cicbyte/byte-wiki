@@ -35,6 +35,7 @@ import WikiTree from "@/views/wiki/components/WikiTree.vue";
 import WikiViewer from "@/views/wiki/components/WikiViewer.vue";
 import ChatPanel from "@/views/wiki/components/ChatPanel.vue";
 import CallGraphPanel from "@/views/wiki/components/CallGraphPanel.vue";
+import FileBrowse from "@/views/wiki/components/FileBrowse.vue";
 
 const route = useRoute();
 const router = useRouter();
@@ -442,6 +443,11 @@ const busy = computed(() => generating.value || updating.value);
         </div>
       </div>
 
+      <!-- ============ 文件浏览 ============ -->
+      <div v-else-if="tab === 'files'" class="files-pane">
+        <FileBrowse />
+      </div>
+
       <!-- ============ 调用链 ============ -->
       <div v-else-if="tab === 'callgraph'" class="callgraph-pane">
         <CallGraphPanel :repo-path="wiki.currentRepo.path" />
@@ -685,6 +691,15 @@ const busy = computed(() => generating.value || updating.value);
   border-radius: var(--radius-lg);
   overflow: hidden;
   display: flex;
+}
+
+/* 文件浏览 */
+.files-pane {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: var(--spacing-md);
 }
 
 /* 调用链 */

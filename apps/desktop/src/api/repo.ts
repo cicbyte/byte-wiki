@@ -29,3 +29,23 @@ export const repoApi = {
 
   indexRepo: (path: string) => invoke<IndexSummary>("index_repo", { path }),
 };
+
+// ===== 文件浏览页 =====
+
+/** 目录条目（浏览树懒加载） */
+export interface DirEntryInfo {
+  name: string;
+  path: string;
+  is_dir: boolean;
+  size: number;
+}
+
+export const fileBrowseApi = {
+  /** 列子目录（一层，目录在前字母序；sub_path 空为仓库根） */
+  listRepoDir: (repoPath: string, subPath: string) =>
+    invoke<DirEntryInfo[]>("list_repo_dir", { repoPath, subPath }),
+
+  /** 按文件名搜索（遵循 .gitignore，上限 200） */
+  searchRepoFiles: (repoPath: string, query: string) =>
+    invoke<string[]>("search_repo_files", { repoPath, query }),
+};
