@@ -6,7 +6,7 @@
  * 本组件持有跨 pane 共享状态（文档清单/滞后报告/生成进度），按路由 meta.tab 渲染：
  * - 总览：仓库概览 + 生成/更新/索引
  * - 文档：WikiTree + WikiViewer
- * - 问答：ChatPanel 全高
+ * - 对话：ChatPanel 全高
  * - 知识卡：卡片列表 + 新建
  */
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
@@ -22,8 +22,10 @@ import {
   MessageOutlined,
   BookOutlined,
   ArrowLeftOutlined,
+  CloseOutlined,
 } from "@ant-design/icons-vue";
 import { useLayoutStore } from "@/stores/layout";
+import { useAiStore } from "@/stores/ai";
 import { useWikiStore } from "@/stores/wiki";
 import { api } from "@/api";
 import type { IndexSummary } from "@/api/repo";
@@ -40,6 +42,7 @@ import FileBrowse from "@/views/wiki/components/FileBrowse.vue";
 const route = useRoute();
 const router = useRouter();
 const layout = useLayoutStore();
+const ai = useAiStore();
 const wiki = useWikiStore();
 
 const repoId = computed(() => Number(route.params.id));
@@ -61,12 +64,6 @@ const cardTitle = ref("");
 const cardContent = ref("");
 const creatingCard = ref(false);
 const loadFailed = ref(false);
-
-
-function openDocFromAi(docPath: string) {
-  layout.aiDockOpen = false;
-  openDocInDocs(docPath);
-}
 
 const cards = computed(() => wikiDocs.value.filter(([, kind]) => kind === "card"));
 
@@ -263,20 +260,22 @@ const busy = computed(() => generating.value || updating.value);
 
 <template>
   <div class="repo-space">
-    <!-- 仓库失效 -->
-    <Panel v-if="loadFailed" class="failed-panel">
-      <EmptyState
-        text="仓库不可用"
-        hint="路径可能已被移动或删除，请返回项目列表重新打开"
-      />
-      <div class="failed-actions">
-        <button class="btn" @click="router.push('/')">
-          <ArrowLeftOutlined /> 返回项目列表
-        </button>
-      </div>
-    </Panel>
+    <div class="rs-body">
+      <div class="rs-main">
+        <!-- 仓库失效 -->
+        <Panel v-if="loadFailed" class="failed-panel">
+          <EmptyState
+            text="仓库不可用"
+            hint="路径可能已被移动或删除，请返回项目列表重新打开"
+          />
+          <div class="failed-actions">
+            <button class="btn" @click="router.push('/')">
+              <ArrowLeftOutlined /> 返回项目列表
+            </button>
+          </div>
+        </Panel>
 
-    <template v-else-if="wiki.currentRepo">
+        <template v-else-if="wiki.currentRepo">
       <!-- ============ 总览 ============ -->
       <div v-if="tab === 'overview'" class="pane-scroll">
         <Panel :title="`仓库总览 — ${wiki.currentRepo.name}`">
@@ -412,7 +411,7 @@ const busy = computed(() => generating.value || updating.value);
               {{ rebuilding ? "重建索引中…" : "重建索引" }}
             </button>
             <button class="btn" @click="router.push(`/repo/${repoId}/chat`)">
-              <MessageOutlined /> 问答
+              <MessageOutlined /> 对话
             </button>
             <button class="btn" @click="cardModalOpen = true">
               <FileAddOutlined /> 知识卡
@@ -459,7 +458,7 @@ const busy = computed(() => generating.value || updating.value);
         <CallGraphPanel :repo-path="wiki.currentRepo.path" />
       </div>
 
-      <!-- ============ 问答 ============ -->
+      <!-- ============ 对话 ============ -->
       <div v-else-if="tab === 'chat'" class="chat-wrap">
         <div class="chat-toolbar">
           <span class="browse-title">
@@ -506,24 +505,25 @@ const busy = computed(() => generating.value || updating.value);
           </ul>
         </Panel>
       </div>
-    </template>
+        </template>
 
-    <!-- 加载中 -->
-    <div v-else class="loading-pane">
-      <EmptyState text="加载中…" />
+        <!-- 加载中 -->
+        <div v-else class="loading-pane">
+          <EmptyState text="加载中…" />
+        </div>
+      </div>
+
+      <!-- AI 对话侧栏：内嵌布局右侧（VSCode 式挤压内容区，非浮层）；chat tab 本身即对话页不重复显示 -->
+      <aside v-if="ai.dockOpen && tab !== 'chat' && wiki.currentRepo" class="rs-ai-dock">
+        <div class="ai-dock-head">
+          <span class="ai-dock-title">AI 对话</span>
+          <button class="btn sm" title="收起侧栏" @click="ai.dockOpen = false">
+            <CloseOutlined />
+          </button>
+        </div>
+        <ChatPanel :repo-path="wiki.currentRepo.path" @open-doc="openDocInDocs" />
+      </aside>
     </div>
-
-    <!-- AI 对话抽屉：顶栏按钮触发（layout.aiDockOpen 全局态） -->
-    <a-drawer
-      v-model:open="layout.aiDockOpen"
-      title="AI 问答"
-      placement="right"
-      :width="440"
-      :body-style="{ padding: '0', display: 'flex', flexDirection: 'column' }"
-      :header-style="{ padding: '10px 16px' }"
-    >
-      <ChatPanel :repo-path="wiki.currentRepo!.path" @open-doc="openDocFromAi" />
-    </a-drawer>
 
     <!-- 新建知识卡弹窗 -->
     <a-modal
@@ -553,6 +553,46 @@ const busy = computed(() => generating.value || updating.value);
   display: flex;
   flex-direction: column;
   height: 100%;
+  min-height: 0;
+}
+/* 双栏：主内容 + AI 侧栏（内嵌挤压，非浮层） */
+.rs-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+.rs-main {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.rs-ai-dock {
+  width: 400px;
+  flex-shrink: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid var(--border-light);
+  background: var(--bg-card);
+}
+.ai-dock-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 10px 8px 14px;
+  border-bottom: 1px solid var(--border-light);
+  flex-shrink: 0;
+}
+.ai-dock-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-secondary);
+  letter-spacing: 0.04em;
+}
+.rs-ai-dock > :deep(.chat-dock) {
+  flex: 1;
   min-height: 0;
 }
 .pane-scroll {
@@ -729,7 +769,7 @@ const busy = computed(() => generating.value || updating.value);
   padding: var(--spacing-md);
 }
 
-/* 问答 */
+/* 对话 */
 .chat-wrap {
   flex: 1;
   min-height: 0;

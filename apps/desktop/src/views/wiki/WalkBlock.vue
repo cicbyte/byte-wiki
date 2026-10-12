@@ -59,8 +59,16 @@ async function ensureEditor() {
   if (mounted.value || !props.expanded) return;
   mounted.value = true;
   await nextTick();
+  initEditor();
+}
+
+/** Monaco 创建在子组件 onMounted（同步），但 loader 就绪存在竞态——取不到实例时短暂重试，避免卡死在「加载编辑器…」 */
+function initEditor(attempt = 0) {
   const ed = editorEl.value?.getEditor();
-  if (!ed) return;
+  if (!ed) {
+    if (attempt < 8) setTimeout(() => initEditor(attempt + 1), 120);
+    return;
+  }
   // 行号偏移：块内第 1 行显示为真实文件行号
   ed.updateOptions({
     lineNumbers: (l: number) => String(props.startLine + l - 1),
@@ -140,8 +148,8 @@ const ext = () => props.file.split(".").pop() ?? "";
 
 <template>
   <section ref="rootEl" class="wk-block" :data-node-id="`${index}`">
-    <header class="wk-block-head">
-      <button class="wk-toggle" :title="expanded ? '折叠代码' : '展开代码'" @click="emit('toggle')">
+    <header class="wk-block-head" :title="expanded ? '点击折叠代码' : '点击展开代码'" @click="emit('toggle')">
+      <button class="wk-toggle" @click.stop="emit('toggle')">
         <CaretRightOutlined :class="{ open: expanded }" />
       </button>
       <span class="wk-num">{{ num }}</span>
@@ -176,8 +184,8 @@ const ext = () => props.file.split(".").pop() ?? "";
       />
       <div v-else class="wk-code-loading">加载编辑器…</div>
     </div>
-    <div v-show="!expanded" class="wk-collapsed">
-      已折叠 · {{ endLine - startLine + 1 }} 行（点左侧展开）
+    <div v-show="!expanded" class="wk-collapsed" role="button" @click="emit('toggle')">
+      已折叠 · {{ endLine - startLine + 1 }} 行 · 点击展开
     </div>
     <div v-if="truncated" class="wk-truncated">函数超 1200 行已截断</div>
   </section>
@@ -201,15 +209,21 @@ const ext = () => props.file.split(".").pop() ?? "";
   padding: 8px 12px;
   background: var(--bg-elevated);
   border-bottom: 1px solid var(--border-light);
-  cursor: default;
+  cursor: pointer;
+  user-select: none;
 }
 .wk-toggle {
   border: none;
   background: transparent;
   color: var(--text-tertiary);
   cursor: pointer;
-  padding: 2px;
+  padding: 4px;
+  margin: -2px;
   display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  min-height: 20px;
 }
 .wk-toggle :deep(.anticon) {
   font-size: 10px;
@@ -301,6 +315,12 @@ const ext = () => props.file.split(".").pop() ?? "";
   padding: 8px 12px;
   font-size: 12px;
   color: var(--text-tertiary);
+  cursor: pointer;
+  transition: color var(--transition-fast), background var(--transition-fast);
+}
+.wk-collapsed:hover {
+  color: var(--color-primary);
+  background: var(--bg-input);
 }
 .wk-truncated {
   padding: 4px 12px;

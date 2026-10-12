@@ -34,6 +34,8 @@ import { DataSet, Network } from "vis-network/standalone";
 import { api } from "@/api";
 import type { CallgraphData, CallGraphNode, CallgraphEdge } from "@/api/callchain";
 import { useThemeStore } from "@/stores/theme";
+import { useAiStore } from "@/stores/ai";
+import type { EditorContextMenuItem } from "@/components/editor/SnippetEditor.vue";
 import { monaco } from "@/monaco/setup";
 import EmptyState from "@/components/common/EmptyState.vue";
 import SnippetEditor from "@/components/editor/SnippetEditor.vue";
@@ -41,6 +43,7 @@ import SnippetEditor from "@/components/editor/SnippetEditor.vue";
 const props = defineProps<{ repoPath: string }>();
 
 const themeStore = useThemeStore();
+const ai = useAiStore();
 
 /** 画布配色跟随主题（固定色在浅色主题下不可读） */
 const canvasColors = computed(() =>
@@ -168,6 +171,26 @@ const sourceState = reactive({
 // ===== 画布对象（非响应式）=====
 const canvasEl = ref<HTMLDivElement>();
 const editorEl = ref<InstanceType<typeof SnippetEditor>>();
+
+// ===== AI 侧栏联动：源码抽屉内选中代码右键「解释 / 添加到 AI 对话」=====
+function sendSelection(mode: "explain" | "append") {
+  const ed = editorEl.value?.getEditor();
+  const sel = ed?.getSelection();
+  const model = ed?.getModel();
+  if (!ed || !sel || !model || sel.isEmpty()) {
+    message.warning("请先选中一段代码");
+    return;
+  }
+  const code = model.getValueInRange(sel).trim();
+  if (!code) return;
+  const ctx = { code, file: sourceState.file, startLine: sel.startLineNumber, endLine: sel.endLineNumber };
+  if (mode === "explain") ai.explainSelection(ctx);
+  else ai.appendSelection(ctx);
+}
+const aiMenuItems = computed<EditorContextMenuItem[]>(() => [
+  { id: "ai-explain-selection", label: "解释这段代码", run: () => sendSelection("explain") },
+  { id: "ai-append-selection", label: "添加到 AI 对话", run: () => sendSelection("append") },
+]);
 let network: Network | null = null;
 let vnodes: DataSet<Record<string, unknown>> | null = null;
 let vedges: DataSet<Record<string, unknown>> | null = null;
@@ -1052,6 +1075,7 @@ let srcDecorations: { clear(): void } | null = null;
           :language="sourceState.lang"
           :readonly="true"
           :auto-detect="false"
+          :context-menu-items="aiMenuItems"
         />
       </div>
     </a-drawer>

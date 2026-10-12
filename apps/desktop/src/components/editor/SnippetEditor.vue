@@ -124,10 +124,7 @@ function registerContextMenu() {
   for (const d of registeredActions) d.dispose();
   registeredActions = [];
   // 重新注册当前 props 的菜单项
-  const items = props.contextMenuItems;
-  // eslint-disable-next-line no-console
-  console.log("[SnippetEditor] registerContextMenu, items:", items.map(i => `${i.id}/${i.label}/keys=${i.keybindings?.join(",") ?? "none"}`));
-  for (const item of items) {
+  for (const item of props.contextMenuItems) {
     const d = editor.addAction({
       id: item.id,
       label: item.label,
@@ -139,13 +136,6 @@ function registerContextMenu() {
     registeredActions.push(d);
   }
 }
-
-// contextMenuItems 变化时重新注册（父组件 computed 切换 edit/view 菜单时触发）
-watch(
-  () => props.contextMenuItems,
-  () => registerContextMenu(),
-  { deep: true }
-);
 
 // 外部值变化时同步进编辑器（避免光标跳动：仅当值确实不同）
 watch(

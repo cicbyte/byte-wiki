@@ -1,13 +1,15 @@
 <script setup lang="ts">
 /**
- * 问答面板（项目空间 → 问答 tab）——参考 byte-writer AiDock 重做。
+ * AI 对话面板（项目空间 → 对话 tab / 右侧内嵌侧栏）——参考 byte-writer AiDock 重做。
  *
  * timeline 结构：user / assistant（含思考过程折叠块）。
  * 流式 Markdown 本地渲染（MdStreamPreview，120ms 节流）；思考过程独立通道
  * （wiki://chat-thinking，流式自动展开、结束折叠）；服务端真取消（chat_cancel，
  * token 边界中断 SSE）；出处芯片化可点跳文档。
+ * composer 底栏（byte-writer 式）：模型选择（provider 覆盖，经 repo_chat 的
+ * provider_id 路由）+ 思考级别（prompt 指令拼接，对不支持思考参数的模型也生效）。
  */
-import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { message } from "ant-design-vue";
@@ -20,9 +22,14 @@ import {
   RightOutlined,
   SearchOutlined,
   ApiOutlined,
-  RobotOutlined,
+  AppstoreOutlined,
+  CheckOutlined,
 } from "@ant-design/icons-vue";
 import { useThemeStore } from "@/stores/theme";
+import { useAiStore, type AiSelectionCtx } from "@/stores/ai";
+import { api } from "@/api";
+import type { LlmProvider } from "@/api/llm";
+import AiSparkIcon from "@/components/icons/AiSparkIcon.vue";
 import MdStreamPreview from "@/components/editor/MdStreamPreview.vue";
 
 const props = defineProps<{ repoPath: string }>();
@@ -62,6 +69,15 @@ let unDelta: (() => void) | null = null;
 let unThink: (() => void) | null = null;
 
 onMounted(async () => {
+  // 模型选择数据源（启用且配置了对话模型的供应商）
+  try {
+    const c = await api.getLlmConfig();
+    chatProviders.value = c.providers.filter((p) => p.enabled && p.chat_model);
+    // 记忆的供应商已不可用时回落默认
+    if (modelPick.value && !chatProviders.value.some((p) => p.id === modelPick.value)) {
+      pickModel(null);
+    }
+  } catch { /* 配置读取失败：chip 显示「默认」仍可用 */ }
   unDelta = await listen<string>("wiki://chat-delta", (ev) => {
     const last = timeline.value[timeline.value.length - 1];
     if (last?.kind === "assistant" && last.streaming) {
@@ -103,6 +119,10 @@ async function ask() {
     )
     .filter(([, t]) => t.length > 0);
 
+  // 思考级别指令拼进发送内容（对不支持思考参数的模型也生效）；timeline 显示原始问题
+  const directive = THINK_DIRECTIVES[thinkLevel.value as Exclude<ThinkLevel, "auto">];
+  const wire = directive ? `${q}${directive}` : q;
+
   timeline.value.push({ kind: "user", text: q }, ai);
   asking.value = true;
   requestId.value = `chat-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -111,9 +131,10 @@ async function ask() {
   try {
     const answer = await invoke<{ text: string; sources: string[] }>("repo_chat", {
       path: props.repoPath,
-      question: q,
+      question: wire,
       history,
       requestId: requestId.value,
+      providerId: modelPick.value ?? undefined,
     });
     ai.sources = answer.sources ?? [];
     if (!ai.text && answer.text) ai.text = answer.text;
@@ -147,6 +168,76 @@ function clearAll() {
   if (asking.value) return;
   timeline.value = [];
 }
+
+// ===== composer 底栏：模型选择 / 思考级别（参考 byte-writer AiDock）=====
+
+/** 模型选择：null = 跟随设置中的默认供应商；否则按供应商覆盖路由 */
+const PROVIDER_KEY = "bw-ai-chat-provider";
+const modelPick = ref<string | null>(localStorage.getItem(PROVIDER_KEY) || null);
+function pickModel(id: string | null) {
+  modelPick.value = id;
+  if (id) localStorage.setItem(PROVIDER_KEY, id);
+  else localStorage.removeItem(PROVIDER_KEY);
+  modelPopOpen.value = false;
+}
+const modelPopOpen = ref(false);
+
+const chatProviders = ref<LlmProvider[]>([]);
+const modelChipLabel = computed(() => {
+  const p = chatProviders.value.find((x) => x.id === modelPick.value);
+  return p ? p.name : "默认";
+});
+
+const THINKS = [
+  { v: "auto", label: "自动", desc: "跟随模型默认" },
+  { v: "off", label: "关", desc: "直接给结论，不展开推理" },
+  { v: "medium", label: "中", desc: "先简要分析再回答" },
+  { v: "high", label: "深", desc: "完整推演方案后回答" },
+] as const;
+type ThinkLevel = (typeof THINKS)[number]["v"];
+const THINK_KEY = "bw-ai-chat-think";
+const thinkLevel = ref<ThinkLevel>((localStorage.getItem(THINK_KEY) as ThinkLevel) || "auto");
+watch(thinkLevel, (v) => localStorage.setItem(THINK_KEY, v));
+const thinkLabel = computed(() => THINKS.find((t) => t.v === thinkLevel.value)?.label ?? "自动");
+
+/** 思考级别的提示词指令（wire 级参数之外，对不支持思考参数的模型仍生效） */
+const THINK_DIRECTIVES: Record<Exclude<ThinkLevel, "auto">, string> = {
+  off: "\n\n[思考级别:关] 直接给出结论与回答，不展开长推理。",
+  medium: "\n\n[思考级别:中] 先简要分析问题，再给出回答。",
+  high: "\n\n[思考级别:深] 先在内部完整推演（问题结构、边界情况），再给出最终回答。",
+};
+
+// ===== 编辑器选中注入（右键「解释这段代码 / 添加到 AI 对话」，ai store 总线）=====
+const ai = useAiStore();
+const taEl = ref<{ focus: () => void } | null>(null);
+
+const EXT_LANG: Record<string, string> = {
+  py: "python", pyi: "python",
+  js: "javascript", jsx: "javascript", mjs: "javascript", cjs: "javascript",
+  ts: "typescript", tsx: "typescript", mts: "typescript",
+  go: "go", java: "java", rs: "rust",
+  json: "json", yml: "yaml", yaml: "yaml", toml: "toml", md: "markdown", sql: "sql",
+};
+const langOf = (file: string) => EXT_LANG[file.split(".").pop() ?? ""] ?? "";
+const ctxBlock = (p: AiSelectionCtx) => `\`\`\`${langOf(p.file)}\n${p.code}\n\`\`\``;
+
+watch(
+  () => ai.pending?.seq,
+  () => {
+    const p = ai.consumePending();
+    if (!p) return;
+    if (p.mode === "explain") {
+      input.value = `请解释这段代码（${p.file}:${p.startLine}-${p.endLine}）的作用与逻辑：\n\n${ctxBlock(p)}`;
+      ask();
+    } else {
+      const ref = `（来自 ${p.file}:${p.startLine}-${p.endLine}）\n${ctxBlock(p)}`;
+      input.value = input.value ? `${input.value}\n\n${ref}` : ref;
+      nextTick(() => taEl.value?.focus());
+    }
+  },
+  // immediate：注入触发侧栏从关到开时，ChatPanel 挂载晚于 store 写入，需挂载即消费
+  { immediate: true },
+);
 
 function onComposerKey(e: KeyboardEvent) {
   if (e.key === "Enter" && !e.shiftKey) {
@@ -184,7 +275,7 @@ function fmtSource(p: string) {
         </div>
 
         <div v-else class="msg ai">
-          <div class="msg-role"><RobotOutlined class="msg-role-ico" />AI</div>
+          <div class="msg-role"><AiSparkIcon class="msg-role-ico" :size="12" />AI</div>
           <div v-if="item.thinking" class="think-block" @click.stop="item.thinkOpen = !item.thinkOpen">
             <div class="think-head">
               <BulbOutlined class="think-ico" />
@@ -210,15 +301,9 @@ function fmtSource(p: string) {
     </div>
 
     <div class="dock-foot">
-      <div class="composer-bar">
-        <button class="btn sm" title="清空会话" :disabled="asking || !timeline.length" @click="clearAll">
-          <ClearOutlined /> 清空
-        </button>
-        <span class="bar-spacer"></span>
-        <button v-if="asking" class="btn sm danger" @click="stop"><StopOutlined /> 停止</button>
-      </div>
       <div class="composer-row">
         <a-textarea
+          ref="taEl"
           v-model:value="input"
           :rows="2"
           :auto-size="{ minRows: 2, maxRows: 6 }"
@@ -229,6 +314,63 @@ function fmtSource(p: string) {
         <button class="btn primary send-btn" :disabled="asking || !input.trim()" @click="ask">
           <SendOutlined />
         </button>
+      </div>
+      <div class="composer-bar">
+        <!-- 模型选择：默认 = 设置中的供应商；按启用供应商覆盖 -->
+        <a-popover v-model:open="modelPopOpen" trigger="click" placement="topLeft">
+          <button class="chip" title="模型">
+            <AppstoreOutlined class="chip-ico" />{{ modelChipLabel }}<span class="chip-caret">▾</span>
+          </button>
+          <template #content>
+            <div class="mp-list">
+              <div class="mp-item" :class="{ cur: !modelPick }" @click="pickModel(null)">
+                <span>默认（设置中的供应商）</span>
+                <CheckOutlined v-if="!modelPick" class="mp-check" />
+              </div>
+              <div
+                v-for="p in chatProviders"
+                :key="p.id"
+                class="mp-item"
+                :class="{ cur: modelPick === p.id }"
+                @click="pickModel(p.id)"
+              >
+                <span class="mp-item-main">{{ p.name }}<em class="mp-model">{{ p.chat_model }}</em></span>
+                <CheckOutlined v-if="modelPick === p.id" class="mp-check" />
+              </div>
+              <div v-if="!chatProviders.length" class="mp-item dim">暂无可用供应商，请在设置中添加</div>
+            </div>
+          </template>
+        </a-popover>
+
+        <!-- 思考级别 -->
+        <a-popover trigger="click" placement="top">
+          <button class="chip" title="思考级别">
+            <BulbOutlined class="chip-ico" />思考·{{ thinkLabel }}<span class="chip-caret">▾</span>
+          </button>
+          <template #content>
+            <div class="mp-list narrow">
+              <div
+                v-for="t in THINKS"
+                :key="t.v"
+                class="mp-item stack"
+                :class="{ cur: thinkLevel === t.v }"
+                @click="thinkLevel = t.v"
+              >
+                <div class="mp-item-line">
+                  <span>思考·{{ t.label }}</span>
+                  <CheckOutlined v-if="thinkLevel === t.v" class="mp-check" />
+                </div>
+                <div class="mp-item-desc">{{ t.desc }}</div>
+              </div>
+            </div>
+          </template>
+        </a-popover>
+
+        <span class="bar-spacer"></span>
+        <button class="btn sm" title="清空会话" :disabled="asking || !timeline.length" @click="clearAll">
+          <ClearOutlined /> 清空
+        </button>
+        <button v-if="asking" class="btn sm danger" @click="stop"><StopOutlined /> 停止</button>
       </div>
     </div>
   </div>
@@ -420,6 +562,33 @@ function fmtSource(p: string) {
 .bar-spacer {
   flex: 1;
 }
+/* chip 工具按钮（模型 / 思考级别） */
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid var(--border-base);
+  background: var(--bg-input);
+  color: var(--text-secondary);
+  border-radius: 999px;
+  font-size: 11.5px;
+  padding: 1px 9px;
+  line-height: 1.7;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: color var(--transition-fast), border-color var(--transition-fast);
+}
+.chip:hover {
+  color: var(--text-primary);
+  border-color: var(--color-primary-border);
+}
+.chip-ico {
+  font-size: 11px;
+}
+.chip-caret {
+  font-size: 9px;
+  opacity: 0.55;
+}
 .composer-row {
   display: flex;
   gap: 8px;
@@ -432,6 +601,80 @@ function fmtSource(p: string) {
   height: 38px;
   width: 44px;
   justify-content: center;
+  flex-shrink: 0;
+}
+</style>
+
+<style>
+/* popover 内容经 teleport 挂 body，scoped 不命中——mp-* 前缀防泄漏 */
+.mp-list {
+  min-width: 230px;
+  max-height: 320px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.mp-list.narrow {
+  min-width: 200px;
+}
+.mp-item {
+  padding: 7px 10px;
+  font-size: 12.5px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  border-radius: var(--radius-sm);
+}
+.mp-item:hover {
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+}
+.mp-item.cur {
+  color: var(--color-primary);
+  font-weight: 600;
+}
+.mp-item.dim {
+  color: var(--text-tertiary);
+  cursor: default;
+}
+.mp-item.stack {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 2px;
+}
+.mp-item-line {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.mp-item-main {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+.mp-model {
+  font-style: normal;
+  font-size: 10.5px;
+  color: var(--text-tertiary);
+  font-family: "JetBrains Mono", monospace;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mp-item-desc {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  font-weight: 400;
+}
+.mp-check {
+  font-size: 11px;
+  color: var(--color-primary);
   flex-shrink: 0;
 }
 </style>

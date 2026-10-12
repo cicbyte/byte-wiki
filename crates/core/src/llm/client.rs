@@ -63,6 +63,19 @@ impl LlmClient {
         }
     }
 
+    /// 按对话供应商覆盖创建（AI 对话栏的模型选择）：provider_id 指定且可用时用之，
+    /// 否则回退当前供应商（全局默认）
+    pub fn for_chat(cfg: &LlmConfig, provider_id: Option<&str>) -> CoreResult<Self> {
+        let p = match provider_id {
+            Some(id) if !id.is_empty() => cfg.providers.iter().find(|p| p.id == id),
+            _ => None,
+        };
+        match p {
+            Some(p) if p.enabled => Self::for_provider(p),
+            _ => Self::new(cfg),
+        }
+    }
+
     /// 按当前使用的供应商创建
     pub fn new(cfg: &LlmConfig) -> CoreResult<Self> {
         let Some(p) = cfg.active() else {

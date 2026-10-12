@@ -24,12 +24,15 @@ import { api } from "@/api";
 import type { DirEntryInfo } from "@/api/repo";
 import { useWikiStore } from "@/stores/wiki";
 import { useThemeStore } from "@/stores/theme";
+import { useAiStore } from "@/stores/ai";
+import type { EditorContextMenuItem } from "@/components/editor/SnippetEditor.vue";
 import SnippetEditor from "@/components/editor/SnippetEditor.vue";
 import EmptyState from "@/components/common/EmptyState.vue";
 
 const route = useRoute();
 const wiki = useWikiStore();
 const themeStore = useThemeStore();
+const ai = useAiStore();
 
 // ===== 树状态（懒加载：点开目录才列子层） =====
 const tree = ref<Map<string, DirEntryInfo[]>>(new Map()); // dirPath -> children
@@ -55,6 +58,26 @@ watch(codeEditorEl, async (ed) => {
   await new Promise(r => setTimeout(r, 80));
   ed.getEditor()?.updateOptions({ padding: { top: 14, bottom: 14 } });
 });
+
+// ===== AI 侧栏联动：选中代码右键「解释 / 添加到 AI 对话」=====
+function sendSelection(mode: "explain" | "append") {
+  const ed = codeEditorEl.value?.getEditor();
+  const sel = ed?.getSelection();
+  const model = ed?.getModel();
+  if (!ed || !sel || !model || sel.isEmpty()) {
+    message.warning("请先选中一段代码");
+    return;
+  }
+  const code = model.getValueInRange(sel).trim();
+  if (!code) return;
+  const ctx = { code, file: selected.value, startLine: sel.startLineNumber, endLine: sel.endLineNumber };
+  if (mode === "explain") ai.explainSelection(ctx);
+  else ai.appendSelection(ctx);
+}
+const aiMenuItems = computed<EditorContextMenuItem[]>(() => [
+  { id: "ai-explain-selection", label: "解释这段代码", run: () => sendSelection("explain") },
+  { id: "ai-append-selection", label: "添加到 AI 对话", run: () => sendSelection("append") },
+]);
 
 const EXT_LANG: Record<string, string> = {
   py: "python", pyi: "python",
@@ -236,6 +259,7 @@ const visibleNodes = computed<VisibleNode[]>(() => {
               :language="lang"
               :readonly="true"
               :auto-detect="false"
+              :context-menu-items="aiMenuItems"
             />
           </div>
         </template>

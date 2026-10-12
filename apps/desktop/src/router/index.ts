@@ -47,7 +47,7 @@ const routes = [
     path: "/repo/:id/chat",
     name: "repo-chat",
     component: () => import("@/views/repo/RepoSpace.vue"),
-    meta: { title: "问答", tab: "chat", fullsize: true },
+    meta: { title: "对话", tab: "chat", fullsize: true },
   },
   {
     path: "/repo/:id/cards",

@@ -17,9 +17,6 @@ export const useLayoutStore = defineStore("layout", () => {
   /** 全局编辑/阅读模式（footer 切换，所有编辑器共用） */
   const editMode = ref(false);
 
-  /** AI 对话抽屉开关（顶栏按钮 ↔ RepoSpace 抽屉跨组件联动） */
-  const aiDockOpen = ref(false);
-
   function toggleSidebar() {
     sidebarCollapsed.value = !sidebarCollapsed.value;
   }
@@ -32,5 +29,5 @@ export const useLayoutStore = defineStore("layout", () => {
     editMode.value = !editMode.value;
   }
 
-  return { sidebarCollapsed, statusItems, editMode, aiDockOpen, toggleSidebar, setStatusItems, toggleEditMode };
+  return { sidebarCollapsed, statusItems, editMode, toggleSidebar, setStatusItems, toggleEditMode };
 });

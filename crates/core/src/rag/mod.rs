@@ -164,16 +164,19 @@ impl AppService {
         history: &[(String, String)], // (role, content)，多轮上下文
         on_delta: &(dyn Fn(&str) + Send + Sync),
     ) -> CoreResult<ChatAnswer> {
-        self.chat_with_repo_ext(repo_path, question, history, on_delta, &|_| {}, &|| false)
+        self.chat_with_repo_ext(repo_path, question, history, None, on_delta, &|_| {}, &|| false)
             .await
     }
 
-    /// 仓库问答（扩展）：思考过程通道 + 取消（取消经 __CHAT_CANCELLED__ 哨兵向上传播）
+    /// 仓库问答（扩展）：思考过程通道 + 取消（取消经 __CHAT_CANCELLED__ 哨兵向上传播）；
+    /// provider_id 为 AI 对话栏的模型选择覆盖（None = 全局默认供应商）
+    #[allow(clippy::too_many_arguments)]
     pub async fn chat_with_repo_ext(
         &self,
         repo_path: &str,
         question: &str,
         history: &[(String, String)],
+        provider_id: Option<&str>,
         on_delta: &(dyn Fn(&str) + Send + Sync),
         on_thinking: &(dyn Fn(&str) + Send + Sync),
         is_cancelled: &(dyn Fn() -> bool + Send + Sync),
@@ -195,7 +198,7 @@ impl AppService {
             ctx.push_str(&piece);
         }
 
-        let client = LlmClient::new(&self.llm_config()?)?;
+        let client = LlmClient::for_chat(&self.llm_config()?, provider_id)?;
         let mut messages: Vec<crate::llm::ChatMessage> =
             vec![crate::llm::ChatMessage::system(CHAT_SYSTEM_PROMPT)];
         for (role, content) in history.iter().take(8) {
