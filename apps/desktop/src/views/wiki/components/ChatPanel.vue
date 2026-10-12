@@ -258,6 +258,13 @@ function fmtSource(p: string) {
 
 <template>
   <div class="chat-dock">
+    <!-- 顶部：清空会话 -->
+    <div v-show="timeline.length" class="dock-top">
+      <button class="btn sm" title="清空会话" :disabled="asking" @click="clearAll">
+        <ClearOutlined /> 清空
+      </button>
+    </div>
+
     <div ref="listEl" class="dock-timeline">
       <div v-if="!timeline.length" class="dock-hint">
         <p>基于本仓库 Wiki 与代码的 RAG 问答——先「一键生成」建立索引。</p>
@@ -301,76 +308,76 @@ function fmtSource(p: string) {
     </div>
 
     <div class="dock-foot">
-      <div class="composer-row">
+      <!-- 输入容器：textarea + 内嵌工具行（模型 / 思考级别 / 发送） -->
+      <div class="composer-box">
         <a-textarea
           ref="taEl"
           v-model:value="input"
+          class="cb-input"
+          :bordered="false"
           :rows="2"
           :auto-size="{ minRows: 2, maxRows: 6 }"
           placeholder="问点什么… Enter 发送（Shift+Enter 换行）"
           :disabled="asking"
           @keydown="onComposerKey"
         />
-        <button class="btn primary send-btn" :disabled="asking || !input.trim()" @click="ask">
-          <SendOutlined />
-        </button>
-      </div>
-      <div class="composer-bar">
-        <!-- 模型选择：默认 = 设置中的供应商；按启用供应商覆盖 -->
-        <a-popover v-model:open="modelPopOpen" trigger="click" placement="topLeft">
-          <button class="chip" title="模型">
-            <AppstoreOutlined class="chip-ico" />{{ modelChipLabel }}<span class="chip-caret">▾</span>
-          </button>
-          <template #content>
-            <div class="mp-list">
-              <div class="mp-item" :class="{ cur: !modelPick }" @click="pickModel(null)">
-                <span>默认（设置中的供应商）</span>
-                <CheckOutlined v-if="!modelPick" class="mp-check" />
-              </div>
-              <div
-                v-for="p in chatProviders"
-                :key="p.id"
-                class="mp-item"
-                :class="{ cur: modelPick === p.id }"
-                @click="pickModel(p.id)"
-              >
-                <span class="mp-item-main">{{ p.name }}<em class="mp-model">{{ p.chat_model }}</em></span>
-                <CheckOutlined v-if="modelPick === p.id" class="mp-check" />
-              </div>
-              <div v-if="!chatProviders.length" class="mp-item dim">暂无可用供应商，请在设置中添加</div>
-            </div>
-          </template>
-        </a-popover>
-
-        <!-- 思考级别 -->
-        <a-popover trigger="click" placement="top">
-          <button class="chip" title="思考级别">
-            <BulbOutlined class="chip-ico" />思考·{{ thinkLabel }}<span class="chip-caret">▾</span>
-          </button>
-          <template #content>
-            <div class="mp-list narrow">
-              <div
-                v-for="t in THINKS"
-                :key="t.v"
-                class="mp-item stack"
-                :class="{ cur: thinkLevel === t.v }"
-                @click="thinkLevel = t.v"
-              >
-                <div class="mp-item-line">
-                  <span>思考·{{ t.label }}</span>
-                  <CheckOutlined v-if="thinkLevel === t.v" class="mp-check" />
+        <div class="cb-tools">
+          <!-- 模型选择：默认 = 设置中的供应商；按启用供应商覆盖 -->
+          <a-popover v-model:open="modelPopOpen" trigger="click" placement="topLeft">
+            <button class="chip ghost" title="模型">
+              <AppstoreOutlined class="chip-ico" />{{ modelChipLabel }}<span class="chip-caret">▾</span>
+            </button>
+            <template #content>
+              <div class="mp-list">
+                <div class="mp-item" :class="{ cur: !modelPick }" @click="pickModel(null)">
+                  <span>默认（设置中的供应商）</span>
+                  <CheckOutlined v-if="!modelPick" class="mp-check" />
                 </div>
-                <div class="mp-item-desc">{{ t.desc }}</div>
+                <div
+                  v-for="p in chatProviders"
+                  :key="p.id"
+                  class="mp-item"
+                  :class="{ cur: modelPick === p.id }"
+                  @click="pickModel(p.id)"
+                >
+                  <span class="mp-item-main">{{ p.name }}<em class="mp-model">{{ p.chat_model }}</em></span>
+                  <CheckOutlined v-if="modelPick === p.id" class="mp-check" />
+                </div>
+                <div v-if="!chatProviders.length" class="mp-item dim">暂无可用供应商，请在设置中添加</div>
               </div>
-            </div>
-          </template>
-        </a-popover>
+            </template>
+          </a-popover>
 
-        <span class="bar-spacer"></span>
-        <button class="btn sm" title="清空会话" :disabled="asking || !timeline.length" @click="clearAll">
-          <ClearOutlined /> 清空
-        </button>
-        <button v-if="asking" class="btn sm danger" @click="stop"><StopOutlined /> 停止</button>
+          <!-- 思考级别 -->
+          <a-popover trigger="click" placement="top">
+            <button class="chip ghost" title="思考级别">
+              <BulbOutlined class="chip-ico" />思考·{{ thinkLabel }}<span class="chip-caret">▾</span>
+            </button>
+            <template #content>
+              <div class="mp-list narrow">
+                <div
+                  v-for="t in THINKS"
+                  :key="t.v"
+                  class="mp-item stack"
+                  :class="{ cur: thinkLevel === t.v }"
+                  @click="thinkLevel = t.v"
+                >
+                  <div class="mp-item-line">
+                    <span>思考·{{ t.label }}</span>
+                    <CheckOutlined v-if="thinkLevel === t.v" class="mp-check" />
+                  </div>
+                  <div class="mp-item-desc">{{ t.desc }}</div>
+                </div>
+              </div>
+            </template>
+          </a-popover>
+
+          <span class="bar-spacer"></span>
+          <button v-if="asking" class="btn sm danger" title="停止" @click="stop"><StopOutlined /></button>
+          <button v-else class="btn sm primary cb-send" :disabled="!input.trim()" title="发送" @click="ask">
+            <SendOutlined />
+          </button>
+        </div>
       </div>
     </div>
   </div>
@@ -383,11 +390,18 @@ function fmtSource(p: string) {
   flex-direction: column;
   background: var(--bg-card);
 }
+/* 顶部清空行 */
+.dock-top {
+  display: flex;
+  justify-content: flex-end;
+  padding: 6px 10px 0;
+  flex-shrink: 0;
+}
 .dock-timeline {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding: 16px 18px;
+  padding: 10px 18px 16px;
 }
 .dock-hint {
   color: var(--text-tertiary);
@@ -547,17 +561,33 @@ function fmtSource(p: string) {
 
 /* 底部输入区 */
 .dock-foot {
-  border-top: 1px solid var(--border-light);
   padding: 8px 12px 10px;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
   flex-shrink: 0;
 }
-.composer-bar {
+/* 输入容器：textarea + 内嵌工具行 */
+.composer-box {
+  border: 1px solid var(--border-base);
+  border-radius: var(--radius-md);
+  background: var(--bg-input);
+  display: flex;
+  flex-direction: column;
+  transition: border-color var(--transition-fast);
+}
+.composer-box:focus-within {
+  border-color: var(--color-primary-border);
+}
+.composer-box :deep(.cb-input) {
+  background: transparent;
+  padding: 8px 12px 4px;
+}
+.composer-box :deep(.cb-input:focus) {
+  box-shadow: none;
+}
+.cb-tools {
   display: flex;
   align-items: center;
   gap: 6px;
+  padding: 4px 6px 6px 8px;
 }
 .bar-spacer {
   flex: 1;
@@ -576,11 +606,18 @@ function fmtSource(p: string) {
   line-height: 1.7;
   cursor: pointer;
   white-space: nowrap;
-  transition: color var(--transition-fast), border-color var(--transition-fast);
+  transition: color var(--transition-fast), border-color var(--transition-fast), background var(--transition-fast);
 }
-.chip:hover {
+/* 内嵌输入框的 ghost 变体：无边框透明底 */
+.chip.ghost {
+  border-color: transparent;
+  background: transparent;
+  color: var(--text-tertiary);
+}
+.chip.ghost:hover {
+  background: var(--bg-surface);
   color: var(--text-primary);
-  border-color: var(--color-primary-border);
+  border-color: transparent;
 }
 .chip-ico {
   font-size: 11px;
@@ -589,18 +626,12 @@ function fmtSource(p: string) {
   font-size: 9px;
   opacity: 0.55;
 }
-.composer-row {
-  display: flex;
-  gap: 8px;
-  align-items: flex-end;
-}
-.composer-row :deep(.ant-input) {
-  background: var(--bg-input);
-}
-.send-btn {
-  height: 38px;
-  width: 44px;
+/* 发送：方形小按钮贴工具行右端 */
+.cb-send {
+  height: 24px;
+  width: 28px;
   justify-content: center;
+  padding: 0;
   flex-shrink: 0;
 }
 </style>
