@@ -6,13 +6,12 @@
  * 中：全局搜索框（保留布局位，Wiki 搜索在后续版本接入）
  * 右：AI 问答（项目空间）+ 明暗切换 + 设置 + 窗口控制
  */
-import { computed, ref } from "vue";
+import { computed } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import {
   MinusOutlined,
   BorderOutlined,
   CloseOutlined,
-  SearchOutlined,
   SettingOutlined,
   MenuFoldOutlined,
   MenuUnfoldOutlined,
@@ -33,7 +32,6 @@ const ai = useAiStore();
 /** 项目空间才显示 AI 入口（对话需要仓库上下文） */
 const inProjectSpace = computed(() => route.path.startsWith("/repo/"));
 const wiki = useWikiStore();
-const q = ref("");
 const appWindow = getCurrentWindow();
 
 /**
@@ -90,21 +88,8 @@ const breadcrumbItems = computed(() => {
       </a-breadcrumb>
     </div>
 
-    <div class="navbar-center" data-tauri-drag-region>
-      <div class="search-wrapper" data-tauri-drag-region="false">
-        <a-input
-          v-model:value="q"
-          placeholder="搜索 Wiki…"
-          class="search-box"
-          allow-clear
-          disabled
-        >
-          <template #prefix>
-            <SearchOutlined style="color: var(--text-tertiary)" />
-          </template>
-        </a-input>
-      </div>
-    </div>
+    <!-- 中部留空（原搜索 Wiki 占位已移除，搜索功能后续再立项）；可拖拽区由右侧补足 -->
+    <div class="navbar-center" data-tauri-drag-region></div>
 
     <div class="navbar-right" data-tauri-drag-region>
       <button
@@ -194,19 +179,7 @@ const breadcrumbItems = computed(() => {
 }
 .navbar-center {
   flex: 1;
-  display: flex;
-  justify-content: center;
-  padding: 0 var(--spacing-md);
-}
-.search-box {
-  max-width: 420px;
-  width: 100%;
-}
-/* 搜索框容器（Wiki 搜索接入后在此挂下拉浮层） */
-.search-wrapper {
-  position: relative;
-  width: 100%;
-  max-width: 420px;
+  min-width: 0;
 }
 .icon-btn.ai-toggle {
   color: var(--text-tertiary);
