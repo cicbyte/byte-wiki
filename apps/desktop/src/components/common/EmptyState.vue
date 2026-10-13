@@ -24,17 +24,21 @@ withDefaults(defineProps<{
   icon?: any;
   /** 主文字 */
   text: string;
-  /** 副标题（可选） */
+  /** 副标题（可选，比主文字小、更淡） */
   hint?: string;
   /** 尺寸：default=面板级（28px图标）；small=图表/内嵌（20px图标） */
   size?: "default" | "small";
   /** 内嵌模式：不用 absolute 撑满，跟随父容器（用于列表/表格内、chart 区） */
   inline?: boolean;
+  /** 提示条变体：横向轻量一行（图标+文字+hint 左对齐、bg-input 底、虚线边框），
+   * 流式布局不遮挡内容——用于「页面仍有正常功能区，仅局部为空」的场景 */
+  banner?: boolean;
 }>(), {
   icon: null,
   hint: "",
   size: "default",
   inline: false,
+  banner: false,
 });
 
 // 入场弹入：图标 scale 弹出 + 文字错峰淡入。只动子元素，不碰外层 transform
@@ -63,11 +67,18 @@ onMounted(() => {
   <div
     ref="rootRef"
     class="empty-state"
-    :class="[size, { inline, absolute: !inline }]"
+    :class="[size, { inline, absolute: !inline && !banner, banner }]"
   >
-    <component :is="icon" v-if="icon" class="empty-icon" />
-    <div class="empty-text">{{ text }}</div>
-    <div v-if="hint" class="empty-hint">{{ hint }}</div>
+    <div v-if="banner" class="banner-row">
+      <component :is="icon" v-if="icon" class="empty-icon" />
+      <span class="empty-text">{{ text }}</span>
+      <span v-if="hint" class="empty-hint">{{ hint }}</span>
+    </div>
+    <template v-else>
+      <component :is="icon" v-if="icon" class="empty-icon" />
+      <div class="empty-text">{{ text }}</div>
+      <div v-if="hint" class="empty-hint">{{ hint }}</div>
+    </template>
   </div>
 </template>
 
@@ -138,5 +149,38 @@ onMounted(() => {
   font-size: 11px;
   color: var(--text-disabled);
   opacity: 0.85;
+}
+
+/* ============ banner：轻量提示条（流式一行，不遮挡页面功能区） ============ */
+.empty-state.banner {
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+  padding: 10px 14px;
+  background: var(--bg-input);
+  border: 1px dashed var(--border-base);
+  border-radius: var(--radius-md);
+  pointer-events: auto;
+}
+.banner-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+  flex-wrap: wrap;
+  row-gap: 2px;
+}
+.empty-state.banner .empty-icon {
+  font-size: 16px;
+  color: var(--text-tertiary);
+}
+.empty-state.banner .empty-text {
+  font-size: 12.5px;
+  font-weight: 550;
+  color: var(--text-secondary);
+}
+.empty-state.banner .empty-hint {
+  font-size: 11.5px;
+  color: var(--text-tertiary);
 }
 </style>

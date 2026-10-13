@@ -362,6 +362,8 @@ const busy = computed(() => generating.value || updating.value);
 
             <EmptyState
               v-if="!wikiDocs.length"
+              banner
+              :icon="BookOutlined"
               text="尚未生成 Wiki"
               hint="一键生成 = 索引 → 规划 → 逐模块文档 → 组装写入 .bytewiki/"
             />
@@ -481,6 +483,8 @@ const busy = computed(() => generating.value || updating.value);
           </div>
           <EmptyState
             v-if="!cards.length"
+            banner
+            :icon="BookOutlined"
             text="暂无知识卡"
             hint="记录部署要点、踩坑经验、接口约定等高密度知识"
           />
