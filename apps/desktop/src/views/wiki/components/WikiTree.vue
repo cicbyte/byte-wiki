@@ -1,15 +1,19 @@
 <script setup lang="ts">
 /**
- * Wiki 导航树：架构 / 模块（分组）/ 图谱 三区（FR-03）
+ * Wiki 导航树：总览 / 文档（页面按章节路径嵌套）/ 知识卡 / 图谱
  *
- * 按现有样式规范自研（两层层级列表 + active 高亮），不引入新组件库。
+ * 页面化管线（kind=page，path 形如 pages/系统架构/核心库.md）由目录结构
+ * 自然成树；旧版模块文档（kind=module）作为兼容分组兜底展示。
  */
-import { computed } from "vue";
+import { computed, ref } from "vue";
 import {
   ApartmentOutlined,
   AppstoreOutlined,
   NodeIndexOutlined,
   BookOutlined,
+  FileTextOutlined,
+  FolderOutlined,
+  CaretRightOutlined,
 } from "@ant-design/icons-vue";
 import type { WikiDocEntry } from "@/api/generate";
 
@@ -20,31 +24,158 @@ const props = defineProps<{
 
 const emit = defineEmits<{ (e: "select", path: string): void }>();
 
-const groups = computed(() => {
-  const arch = props.docs.filter(([, kind]) => kind === "architecture");
-  const modules = props.docs.filter(([, kind]) => kind === "module");
-  const graphs = props.docs.filter(([, kind]) => kind === "graph");
-  const cards = props.docs.filter(([, kind]) => kind === "card");
-  return [
-    { key: "arch", label: "架构", icon: ApartmentOutlined, items: arch },
-    { key: "card", label: "知识卡", icon: BookOutlined, items: cards },
-    { key: "module", label: "模块", icon: AppstoreOutlined, items: modules },
-    { key: "graph", label: "图谱", icon: NodeIndexOutlined, items: graphs },
-  ].filter((g) => g.items.length > 0);
-});
+interface VisibleNode {
+  label: string;
+  path: string; // dir 节点为合成 key
+  isDir: boolean;
+  depth: number;
+}
+
+/** 文档树：由 pages/ 路径构建目录层级（默认全展开，记录用户折叠项） */
+const collapsed = ref(new Set<string>());
+
+function buildPageNodes(entries: WikiDocEntry[]): VisibleNode[] {
+  if (!entries.length) return [];
+  const out: VisibleNode[] = [];
+  const walk = (prefix: string, depth: number) => {
+    const dirs = new Map<string, true>();
+    const files: WikiDocEntry[] = [];
+    for (const e of entries) {
+      const rel = e[0].slice(prefix.length ? prefix.length + 1 : 0);
+      const slash = rel.indexOf("/");
+      if (slash < 0) {
+        files.push(e);
+      } else {
+        dirs.set(rel.slice(0, slash), true);
+      }
+    }
+    for (const d of [...dirs.keys()].sort()) {
+      const dirPath = prefix ? `${prefix}/${d}` : d;
+      out.push({ label: d, path: dirPath, isDir: true, depth });
+      if (!collapsed.value.has(dirPath)) walk(dirPath, depth + 1);
+    }
+    for (const f of files.sort((a, b) => a[0].localeCompare(b[0]))) {
+      out.push({ label: f[2] || f[0], path: f[0], isDir: false, depth });
+    }
+  };
+  walk("pages", 0);
+  return out;
+}
+
+const pageEntries = computed(() => props.docs.filter(([, kind]) => kind === "page"));
+const pageNodes = computed(() => buildPageNodes(pageEntries.value));
+
+function toggleDir(path: string) {
+  const next = new Set(collapsed.value);
+  if (next.has(path)) {
+    next.delete(path);
+  } else {
+    next.add(path);
+  }
+  collapsed.value = next;
+}
+
+const arch = computed(() => props.docs.filter(([, kind]) => kind === "architecture"));
+const cards = computed(() => props.docs.filter(([, kind]) => kind === "card"));
+const graphs = computed(() => props.docs.filter(([, kind]) => kind === "graph"));
+const modules = computed(() => props.docs.filter(([, kind]) => kind === "module")); // 旧版兼容
 </script>
 
 <template>
   <nav class="wiki-tree">
-    <div v-for="g in groups" :key="g.key" class="tree-group">
+    <div v-if="arch.length" class="tree-group">
       <div class="group-head">
-        <component :is="g.icon" />
-        <span>{{ g.label }}</span>
-        <span class="group-count">{{ g.items.length }}</span>
+        <ApartmentOutlined />
+        <span>总览</span>
+        <span class="group-count">{{ arch.length }}</span>
       </div>
       <ul class="group-list">
         <li
-          v-for="[path, , title] in g.items"
+          v-for="[path, , title] in arch"
+          :key="path"
+          class="tree-item"
+          :class="{ active: current === path }"
+          :title="path"
+          @click="emit('select', path)"
+        >
+          {{ title }}
+        </li>
+      </ul>
+    </div>
+
+    <div v-if="pageNodes.length" class="tree-group">
+      <div class="group-head">
+        <AppstoreOutlined />
+        <span>文档</span>
+        <span class="group-count">{{ pageEntries.length }}</span>
+      </div>
+      <ul class="group-list">
+        <li
+          v-for="n in pageNodes"
+          :key="n.path"
+          class="tree-item node"
+          :class="{ active: !n.isDir && current === n.path }"
+          :style="{ paddingLeft: 10 + n.depth * 14 + 'px' }"
+          :title="n.path"
+          @click="n.isDir ? toggleDir(n.path) : emit('select', n.path)"
+        >
+          <CaretRightOutlined v-if="n.isDir" class="node-caret" :class="{ open: !collapsed.has(n.path) }" />
+          <FolderOutlined v-if="n.isDir" class="node-icon dir" />
+          <FileTextOutlined v-else class="node-icon" />
+          <span class="node-label">{{ n.label }}</span>
+        </li>
+      </ul>
+    </div>
+
+    <div v-if="cards.length" class="tree-group">
+      <div class="group-head">
+        <BookOutlined />
+        <span>知识卡</span>
+        <span class="group-count">{{ cards.length }}</span>
+      </div>
+      <ul class="group-list">
+        <li
+          v-for="[path, , title] in cards"
+          :key="path"
+          class="tree-item"
+          :class="{ active: current === path }"
+          :title="path"
+          @click="emit('select', path)"
+        >
+          {{ title }}
+        </li>
+      </ul>
+    </div>
+
+    <div v-if="modules.length" class="tree-group">
+      <div class="group-head">
+        <AppstoreOutlined />
+        <span>模块（旧版）</span>
+        <span class="group-count">{{ modules.length }}</span>
+      </div>
+      <ul class="group-list">
+        <li
+          v-for="[path, , title] in modules"
+          :key="path"
+          class="tree-item"
+          :class="{ active: current === path }"
+          :title="path"
+          @click="emit('select', path)"
+        >
+          {{ title }}
+        </li>
+      </ul>
+    </div>
+
+    <div v-if="graphs.length" class="tree-group">
+      <div class="group-head">
+        <NodeIndexOutlined />
+        <span>图谱</span>
+        <span class="group-count">{{ graphs.length }}</span>
+      </div>
+      <ul class="group-list">
+        <li
+          v-for="[path, , title] in graphs"
           :key="path"
           class="tree-item"
           :class="{ active: current === path }"
@@ -95,7 +226,7 @@ const groups = computed(() => {
   padding: 0;
 }
 .tree-item {
-  padding: 6px 10px 6px 26px;
+  padding: 5px 10px 5px 26px;
   font-size: 13px;
   color: var(--text-secondary);
   border-radius: var(--radius-sm);
@@ -113,5 +244,34 @@ const groups = computed(() => {
   background: var(--color-primary-bg);
   color: var(--color-primary);
   font-weight: 600;
+}
+.tree-item.node {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding-top: 4px;
+  padding-bottom: 4px;
+}
+.node-caret {
+  font-size: 9px;
+  color: var(--text-tertiary);
+  transition: transform var(--transition-fast);
+  flex-shrink: 0;
+}
+.node-caret.open {
+  transform: rotate(90deg);
+}
+.node-icon {
+  font-size: 13px;
+  color: var(--text-tertiary);
+  flex-shrink: 0;
+}
+.node-icon.dir {
+  color: var(--color-warning);
+}
+.node-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 </style>

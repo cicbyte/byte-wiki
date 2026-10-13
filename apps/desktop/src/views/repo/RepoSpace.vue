@@ -29,7 +29,7 @@ import { useAiStore } from "@/stores/ai";
 import { useWikiStore } from "@/stores/wiki";
 import { api } from "@/api";
 import type { IndexSummary } from "@/api/repo";
-import type { WikiDocEntry, GenerateEvent } from "@/api/generate";
+import type { WikiDocEntry, GenerateEvent, PageProgress } from "@/api/generate";
 import type { StaleReport } from "@/api/watch";
 import Panel from "@/components/shared/Panel.vue";
 import EmptyState from "@/components/common/EmptyState.vue";
@@ -38,6 +38,7 @@ import WikiViewer from "@/views/wiki/components/WikiViewer.vue";
 import ChatPanel from "@/views/wiki/components/ChatPanel.vue";
 import CallGraphPanel from "@/views/wiki/components/CallGraphPanel.vue";
 import FileBrowse from "@/views/wiki/components/FileBrowse.vue";
+import GenProgress from "@/views/wiki/components/GenProgress.vue";
 
 const route = useRoute();
 const router = useRouter();
@@ -53,7 +54,9 @@ const wikiDocs = ref<WikiDocEntry[]>([]);
 const currentDoc = ref("");
 const staleReport = ref<StaleReport | null>(null);
 const genProgress = ref<GenerateEvent | null>(null);
-const genSummary = ref<{ modules: number; prompt: number; completion: number; ms: number } | null>(null);
+/** 页面级进度清单（大纲确定建骨架，此后按 id 合并增量） */
+const genPages = ref<Map<string, PageProgress>>(new Map());
+const genSummary = ref<{ pages: number; failed: number; prompt: number; completion: number; ms: number } | null>(null);
 const indexSummary = ref<IndexSummary | null>(null);
 const generating = ref(false);
 const updating = ref(false);
@@ -67,11 +70,37 @@ const loadFailed = ref(false);
 
 const cards = computed(() => wikiDocs.value.filter(([, kind]) => kind === "card"));
 
+/** 页面清单按章节分组（保持大纲顺序） */
+const genPageGroups = computed(() => {
+  const groups: { section: string; items: PageProgress[] }[] = [];
+  for (const p of genPages.value.values()) {
+    const last = groups[groups.length - 1];
+    if (last && last.section === p.section) {
+      last.items.push(p);
+    } else {
+      groups.push({ section: p.section, items: [p] });
+    }
+  }
+  return groups;
+});
+
+/** 大纲骨架折叠态（页多时默认收起，只看进度条） */
+const pagesPanelOpen = ref(false);
+
 // ===== 事件订阅 =====
 let unlisten: Awaited<ReturnType<typeof api.onGenerateEvent>> | null = null;
 onMounted(async () => {
   unlisten = await api.onGenerateEvent((e) => {
     genProgress.value = e;
+    if (e.pages?.length) {
+      // 大纲确定（outlining 带骨架）重置清单；其余为单页增量合并
+      const isSkeleton = e.phase === "outlining";
+      if (isSkeleton) genPages.value = new Map();
+      const next = isSkeleton ? new Map<string, PageProgress>() : new Map(genPages.value);
+      for (const p of e.pages) next.set(p.id, p);
+      genPages.value = next;
+      if (isSkeleton) pagesPanelOpen.value = true;
+    }
   });
 });
 onUnmounted(() => {
@@ -146,10 +175,12 @@ async function runGenerate() {
   generating.value = true;
   genProgress.value = null;
   genSummary.value = null;
+  genPages.value = new Map();
   try {
     const s = await api.generateWiki(wiki.currentRepo.path);
     genSummary.value = {
-      modules: s.modules_generated,
+      pages: s.pages_generated,
+      failed: s.pages_failed,
       prompt: s.prompt_tokens,
       completion: s.completion_tokens,
       ms: s.elapsed_ms,
@@ -157,7 +188,8 @@ async function runGenerate() {
     await refreshRepoInfo();
     await refreshDocs();
     await refreshStaleness();
-    message.success(`Wiki 已生成：${s.modules_generated} 个模块文档`);
+    const failNote = s.pages_failed ? `（${s.pages_failed} 页失败）` : "";
+    message.success(`Wiki 已生成：${s.pages_generated} 个页面文档${failNote}`);
   } catch (e: any) {
     message.error(typeof e === "string" ? e : "生成失败");
   } finally {
@@ -169,12 +201,13 @@ async function runUpdate() {
   if (!wiki.currentRepo || updating.value) return;
   updating.value = true;
   genProgress.value = null;
+  genPages.value = new Map();
   try {
     const s = await api.updateWiki(wiki.currentRepo.path);
     if (s.unchanged) {
       message.info("代码无变更，无需更新");
     } else {
-      message.success(`已更新 ${s.regenerated_modules} 个模块文档（${s.changed_files} 个文件变更）`);
+      message.success(`已更新 ${s.regenerated_pages} 个页面文档（${s.changed_files} 个文件变更）`);
     }
     await refreshRepoInfo();
     await refreshDocs();
@@ -240,16 +273,11 @@ function openDocInDocs(docPath: string) {
   }
 }
 
-const PHASE_TEXT: Record<string, string> = {
-  indexing: "建立索引",
-  checking: "检测变更",
-  planning: "规划文档结构",
-  generating: "生成模块文档",
-  assembling: "组装写入",
-  embedding: "重建向量索引",
-  done: "完成",
-  error: "失败",
-};
+/** wiki 引用链接（bw-file://）→ 文件浏览页定位 */
+function openFileAt(target: { path: string; startLine?: number; endLine?: number }) {
+  wiki.revealFile(target.path, target.startLine, target.endLine);
+  router.push(`/repo/${repoId.value}/files`);
+}
 
 function fmtTime(iso: string | null): string {
   if (!iso) return "—";
@@ -337,27 +365,18 @@ const busy = computed(() => generating.value || updating.value);
               </button>
             </div>
 
-            <!-- 生成进度 -->
-            <div v-if="genProgress && (busy || genProgress.phase === 'done')" class="gen-progress">
-              <div class="gen-phase">
-                <span class="phase-chip" :class="{ active: genProgress.phase === 'generating' }">
-                  {{ PHASE_TEXT[genProgress.phase] || genProgress.phase }}
-                </span>
-                <span v-if="genProgress.total" class="phase-count">
-                  {{ Math.min(genProgress.current, genProgress.total) }} / {{ genProgress.total }}
-                </span>
-                <span class="phase-msg">{{ genProgress.message }}</span>
-              </div>
-              <div v-if="genProgress.total" class="progress-track">
-                <div
-                  class="progress-fill"
-                  :style="{ width: `${Math.round((Math.min(genProgress.current, genProgress.total) / genProgress.total) * 100)}%` }"
-                ></div>
-              </div>
-            </div>
+            <!-- 生成进度（大纲骨架 + 页面级清单） -->
+            <GenProgress
+              v-if="genProgress && (busy || genProgress.phase === 'done')"
+              :progress="genProgress"
+              :groups="genPageGroups"
+              :panel-open="pagesPanelOpen"
+              @toggle-panel="pagesPanelOpen = !pagesPanelOpen"
+            />
             <p v-if="genSummary" class="hint">
-              生成完成：{{ genSummary.modules }} 个模块文档 · prompt {{ genSummary.prompt }} /
-              completion {{ genSummary.completion }} tokens · 耗时 {{ (genSummary.ms / 1000).toFixed(1) }}s
+              生成完成：{{ genSummary.pages }} 个页面文档{{ genSummary.failed ? `（${genSummary.failed} 失败）` : "" }} ·
+              prompt {{ genSummary.prompt }} / completion {{ genSummary.completion }} tokens · 耗时
+              {{ (genSummary.ms / 1000).toFixed(1) }}s
             </p>
 
             <EmptyState
@@ -365,7 +384,7 @@ const busy = computed(() => generating.value || updating.value);
               banner
               :icon="BookOutlined"
               text="尚未生成 Wiki"
-              hint="一键生成 = 索引 → 规划 → 逐模块文档 → 组装写入 .bytewiki/"
+              hint="一键生成 = 索引 → LLM 设计大纲 → 逐页深度撰写（绑定真实源码）→ 组装写入 .bytewiki/"
             />
             <div v-if="indexSummary" class="index-summary">
               <p class="hint">
@@ -417,28 +436,27 @@ const busy = computed(() => generating.value || updating.value);
             </button>
           </div>
         </div>
-        <div v-if="genProgress && busy" class="gen-progress browse-progress">
-          <div class="gen-phase">
-            <span class="phase-chip active">{{ PHASE_TEXT[genProgress.phase] || genProgress.phase }}</span>
-            <span v-if="genProgress.total" class="phase-count">
-              {{ Math.min(genProgress.current, genProgress.total) }} / {{ genProgress.total }}
-            </span>
-            <span class="phase-msg">{{ genProgress.message }}</span>
-          </div>
-          <div v-if="genProgress.total" class="progress-track">
-            <div
-              class="progress-fill"
-              :style="{ width: `${Math.round((Math.min(genProgress.current, genProgress.total) / genProgress.total) * 100)}%` }"
-            ></div>
-          </div>
-        </div>
+        <GenProgress
+          v-if="genProgress && busy"
+          class="browse-progress"
+          :progress="genProgress"
+          :groups="genPageGroups"
+          :panel-open="pagesPanelOpen"
+          @toggle-panel="pagesPanelOpen = !pagesPanelOpen"
+        />
 
         <div class="browse-layout">
           <aside class="tree-pane">
             <WikiTree :docs="wikiDocs" :current="currentDoc" @select="currentDoc = $event" />
           </aside>
           <section class="viewer-pane">
-            <WikiViewer v-if="currentDoc" :repo-path="wiki.currentRepo.path" :doc-path="currentDoc" />
+            <WikiViewer
+              v-if="currentDoc"
+              :repo-path="wiki.currentRepo.path"
+              :doc-path="currentDoc"
+              @open-doc="openDocInDocs"
+              @open-file="openFileAt"
+            />
             <EmptyState v-else text="暂无文档" hint="左侧选择文档，或先生成 Wiki" />
           </section>
         </div>
@@ -834,54 +852,9 @@ const busy = computed(() => generating.value || updating.value);
 }
 
 /* 进度与徽标 */
-.gen-progress {
-  padding: var(--spacing-xs) 0 var(--spacing-sm);
-}
 .browse-progress {
   padding: 0;
   flex-shrink: 0;
-}
-.gen-phase {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-bottom: 6px;
-}
-.phase-chip {
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--text-secondary);
-  background: var(--bg-input);
-  padding: 2px 10px;
-  border-radius: var(--radius-xs);
-}
-.phase-chip.active {
-  color: var(--color-primary);
-  background: var(--color-primary-bg);
-}
-.phase-count {
-  font-size: 12px;
-  color: var(--text-primary);
-  font-family: "JetBrains Mono", monospace;
-}
-.phase-msg {
-  font-size: 12px;
-  color: var(--text-tertiary);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.progress-track {
-  height: 4px;
-  background: var(--bg-input);
-  border-radius: 2px;
-  overflow: hidden;
-}
-.progress-fill {
-  height: 100%;
-  background: var(--color-primary);
-  border-radius: 2px;
-  transition: width var(--transition-normal);
 }
 .stale-badge {
   font-size: 11px;

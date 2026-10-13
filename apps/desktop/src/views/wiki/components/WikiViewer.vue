@@ -2,6 +2,8 @@
 /**
  * Wiki 文档渲染：markdown（md-editor-v3 MdPreview，项目既有依赖）
  * + mermaid（.mmd 图谱包成 mermaid 代码块渲染，支持缩放/平移）
+ * + 链接拦截：`bw-file://路径?L=起-止`（生成器产出的源码引用）→ 文件浏览页定位；
+ *   相对 `.md` 链接（总览页目录）→ 文档切换
  */
 import { computed, ref, watch } from "vue";
 import { MdPreview } from "md-editor-v3";
@@ -16,6 +18,11 @@ import { useThemeStore } from "@/stores/theme";
 const props = defineProps<{
   repoPath: string;
   docPath: string;
+}>();
+
+const emit = defineEmits<{
+  (e: "open-doc", path: string): void;
+  (e: "open-file", target: { path: string; startLine?: number; endLine?: number }): void;
 }>();
 
 const themeStore = useThemeStore();
@@ -51,6 +58,49 @@ watch(() => props.docPath, load, { immediate: true });
 function zoomBy(delta: number) {
   zoom.value = Math.min(3, Math.max(0.3, Math.round((zoom.value + delta) * 10) / 10));
 }
+
+// ===== 链接拦截 =====
+function safeDecode(s: string): string {
+  try {
+    return decodeURIComponent(s);
+  } catch {
+    return s;
+  }
+}
+
+function onBodyClick(ev: MouseEvent) {
+  const anchor = (ev.target as HTMLElement).closest?.("a");
+  if (!anchor) return;
+  const href = anchor.getAttribute("href") || "";
+  if (href.startsWith("bw-file://")) {
+    ev.preventDefault();
+    let rest = href.slice("bw-file://".length);
+    let query = "";
+    const qi = rest.indexOf("?");
+    if (qi >= 0) {
+      query = rest.slice(qi + 1);
+      rest = rest.slice(0, qi);
+    }
+    const target: { path: string; startLine?: number; endLine?: number } = { path: safeDecode(rest) };
+    const m = /(?:^|&)L=(\d+)(?:-(\d+))?/.exec(query);
+    if (m) {
+      target.startLine = Number(m[1]);
+      target.endLine = m[2] ? Number(m[2]) : target.startLine;
+    }
+    emit("open-file", target);
+    return;
+  }
+  // 相对 .md 链接（总览页目录）：相对当前文档目录解析
+  if (!/^[a-z][a-z0-9+.-]*:/i.test(href) && !href.startsWith("#") && href.endsWith(".md")) {
+    ev.preventDefault();
+    const base = props.docPath.split("/").slice(0, -1);
+    for (const part of safeDecode(href).split("/")) {
+      if (part === "..") base.pop();
+      else if (part && part !== ".") base.push(part);
+    }
+    emit("open-doc", base.join("/"));
+  }
+}
 </script>
 
 <template>
@@ -65,7 +115,7 @@ function zoomBy(delta: number) {
         <span class="zoom-label">{{ Math.round(zoom * 100) }}%</span>
       </template>
     </div>
-    <div class="viewer-body" :class="{ graph: isGraph }">
+    <div class="viewer-body" :class="{ graph: isGraph }" @click.capture="onBodyClick">
       <div
         class="md-host"
         :style="isGraph ? { transform: `scale(${zoom})`, 'transform-origin': 'top left' } : undefined"

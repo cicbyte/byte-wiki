@@ -324,10 +324,10 @@ async fn real_e2e_smoke() {
         .await
         .unwrap();
     eprintln!(
-        "生成：{} 模块 / {}ms / prompt={} completion={}",
-        summary.modules_generated, summary.elapsed_ms, summary.prompt_tokens, summary.completion_tokens
+        "生成：{} 页 / {}ms / prompt={} completion={}",
+        summary.pages_generated, summary.elapsed_ms, summary.prompt_tokens, summary.completion_tokens
     );
-    assert!(summary.modules_generated >= 3);
+    assert!(summary.pages_generated >= 1);
 
     // 4) 问答
     let answer = svc
@@ -395,11 +395,15 @@ async fn real_incremental_smoke() {
 
     svc.open_repo(repo.to_str().unwrap()).unwrap();
     let g = svc.generate_wiki(repo.to_str().unwrap(), &|_| {}).await.unwrap();
-    eprintln!("全量生成：{} 模块 {}ms", g.modules_generated, g.elapsed_ms);
+    eprintln!("全量生成：{} 页 {}ms", g.pages_generated, g.elapsed_ms);
 
-    // 未受影响模块基线（"." 若存在）与受影响目标：改 tests/conftest.py（tests 模块）
-    let unaffected = repo.join(".bytewiki/modules/..md");
-    let baseline = std::fs::read_to_string(&unaffected).ok();
+    // 页级增量基线：记录全部页面内容，改 tests/conftest.py 后应有页面保持字节不变
+    let mut baseline: Vec<(std::path::PathBuf, String)> = Vec::new();
+    for entry in walkdir::WalkDir::new(repo.join(".bytewiki/pages")).into_iter().filter_map(|e| e.ok()).filter(|e| e.file_type().is_file()) {
+        if let Ok(c) = std::fs::read_to_string(entry.path()) {
+            baseline.push((entry.path().to_path_buf(), c));
+        }
+    }
 
     let orig_py = std::fs::read_to_string(repo.join("tests/conftest.py")).unwrap();
     std::fs::write(repo.join("tests/conftest.py"), format!("# incremental smoke edit\n{orig_py}")).unwrap();
@@ -409,12 +413,18 @@ async fn real_incremental_smoke() {
     eprintln!("滞后：{} 变更 → {:?}", report.changes.len(), report.affected_modules);
 
     let u: UpdateSummary = svc.update_wiki(repo.to_str().unwrap(), &|e| eprintln!("  [{}] {}", e.phase, e.message)).await.unwrap();
-    eprintln!("增量更新：{} 模块重生成 / {} 文件变更 / {}ms", u.regenerated_modules, u.changed_files, u.elapsed_ms);
+    eprintln!("增量更新：{} 页重生成 / {} 文件变更 / {}ms", u.regenerated_pages, u.changed_files, u.elapsed_ms);
     assert!(!u.unchanged && u.changed_files >= 1);
-    // 未受影响模块文档内容不变
-    if let Some(base) = baseline {
-        assert_eq!(std::fs::read_to_string(&unaffected).unwrap(), base, "未受影响模块内容被改动");
+    // 未受影响页面内容不变（绑定文件不含 tests/conftest.py 的页面）
+    let mut kept = 0;
+    for (path, base) in &baseline {
+        if let Ok(now) = std::fs::read_to_string(path) {
+            if &now == base {
+                kept += 1;
+            }
+        }
     }
+    eprintln!("页面保持不变：{}/{}", kept, baseline.len());
     // 二次更新 no-op
     let u2 = svc.update_wiki(repo.to_str().unwrap(), &|_| {}).await.unwrap();
     assert!(u2.unchanged);

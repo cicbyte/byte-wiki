@@ -140,6 +140,17 @@ impl Database {
         Ok(rows)
     }
 
+    /// 向量分块数（RAG 补充检索的启用探测：0 = 无索引跳过）
+    pub fn count_chunks(&self, repo_id: i64) -> CoreResult<usize> {
+        let conn = self.lock()?;
+        let n: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM chunks WHERE repo_id = ?1",
+            params![repo_id],
+            |r| r.get(0),
+        )?;
+        Ok(n.max(0) as usize)
+    }
+
     /// 替换式写入向量分块 (doc_path, content, embedding BLOB, dim)
     pub fn replace_chunks(
         &self,

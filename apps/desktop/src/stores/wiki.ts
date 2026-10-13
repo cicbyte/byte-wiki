@@ -8,10 +8,29 @@ import { ref } from "vue";
 import { api } from "@/api";
 import type { RepoInfo } from "@/api/repo";
 
+/** 文件定位请求（wiki 引用跳转 → 文件浏览页展开并滚到行） */
+export interface RevealTarget {
+  seq: number;
+  path: string;
+  startLine?: number;
+  endLine?: number;
+}
+
 export const useWikiStore = defineStore("wiki", () => {
   const currentRepo = ref<RepoInfo | null>(null);
   const recentRepos = ref<RepoInfo[]>([]);
   const opening = ref(false);
+  const revealTarget = ref<RevealTarget | null>(null);
+
+  /** 请求在文件浏览页定位到某文件（可选行区间）；seq 保证同目标可重复触发 */
+  function revealFile(path: string, startLine?: number, endLine?: number) {
+    revealTarget.value = {
+      seq: (revealTarget.value?.seq ?? 0) + 1,
+      path,
+      startLine,
+      endLine,
+    };
+  }
 
   async function refreshRecent(limit = 50) {
     try {
@@ -53,5 +72,5 @@ export const useWikiStore = defineStore("wiki", () => {
     currentRepo.value = null;
   }
 
-  return { currentRepo, recentRepos, opening, openRepo, ensureRepo, closeRepo, refreshRecent };
+  return { currentRepo, recentRepos, opening, revealTarget, revealFile, openRepo, ensureRepo, closeRepo, refreshRecent };
 });

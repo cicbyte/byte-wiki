@@ -23,6 +23,7 @@ import {
 import { api } from "@/api";
 import type { DirEntryInfo } from "@/api/repo";
 import { useWikiStore } from "@/stores/wiki";
+import type { RevealTarget } from "@/stores/wiki";
 import { useThemeStore } from "@/stores/theme";
 import { useAiStore } from "@/stores/ai";
 import type { EditorContextMenuItem } from "@/components/editor/SnippetEditor.vue";
@@ -57,7 +58,98 @@ watch(codeEditorEl, async (ed) => {
   if (!ed) return;
   await new Promise(r => setTimeout(r, 80));
   ed.getEditor()?.updateOptions({ padding: { top: 14, bottom: 14 } });
+  applyReveal();
 });
+
+// ===== wiki 引用跳转定位（bw-file:// 链接 → 展开祖先 + 打开 + 滚到行）=====
+const pendingReveal = ref<RevealTarget | null>(null);
+
+watch(
+  () => wiki.revealTarget?.seq,
+  async () => {
+    const t = wiki.revealTarget;
+    if (!t || !wiki.currentRepo) return;
+    pendingReveal.value = t;
+    // 展开祖先目录并加载各层
+    const parts = t.path.split("/");
+    const next = new Set(expanded.value);
+    next.add("");
+    for (let i = 1; i < parts.length; i++) {
+      const dir = parts.slice(0, i).join("/");
+      next.add(dir);
+      await loadDir(dir);
+    }
+    expanded.value = next;
+    await openByPath(t.path);
+    applyReveal();
+  },
+);
+
+/** 按路径打开文件（不经过目录树节点；体积尽力从目录清单取） */
+async function openByPath(path: string) {
+  if (!wiki.currentRepo) return;
+  selected.value = path;
+  fileLoading.value = true;
+  content.value = "";
+  fileInfo.value = null;
+  mdSourceMode.value = false;
+  try {
+    const text = await api.readRepoFile(wiki.currentRepo.path, path);
+    const parent = path.split("/").slice(0, -1).join("/");
+    const name = path.split("/").pop() || path;
+    const entry = (tree.value.get(parent) || []).find(e => e.name === name);
+    content.value = text;
+    fileInfo.value = { path, size: entry?.size ?? 0, lines: text.split("\n").length };
+  } catch (e) {
+    message.error(typeof e === "string" ? e : "读取失败");
+    selected.value = "";
+  } finally {
+    fileLoading.value = false;
+  }
+}
+
+/** 应用行定位：markdown 切源码模式；编辑器就绪后滚动 + 整行高亮 */
+async function applyReveal() {
+  const t = pendingReveal.value;
+  if (!t || selected.value !== t.path) return;
+  if (isMarkdown.value) {
+    mdSourceMode.value = true; // 源码视图才能定位行
+    await new Promise(r => setTimeout(r, 60));
+  }
+  const ed = codeEditorEl.value?.getEditor();
+  if (!ed) {
+    // 编辑器尚在挂载（SnippetEditor 内部有重试初始化），轮询等待
+    for (let i = 0; i < 10; i++) {
+      await new Promise(r => setTimeout(r, 150));
+      const e2 = codeEditorEl.value?.getEditor();
+      if (e2) {
+        doReveal(e2, t);
+        return;
+      }
+    }
+    return;
+  }
+  doReveal(ed, t);
+}
+
+function doReveal(ed: any, t: RevealTarget) {
+  pendingReveal.value = null;
+  const start = t.startLine;
+  if (!start) return;
+  const end = t.endLine ?? start;
+  ed.revealLineInCenter(start);
+  ed.setPosition({ lineNumber: start, column: 1 });
+  try {
+    ed.createDecorationsCollection([
+      {
+        range: { startLineNumber: start, endLineNumber: end, startColumn: 1, endColumn: 1 },
+        options: { isWholeLine: true, className: "bw-reveal-line", linesDecorationsClassName: "bw-reveal-gutter" },
+      },
+    ]);
+  } catch {
+    /* decorations 为增强体验，失败可忽略 */
+  }
+}
 
 // ===== AI 侧栏联动：选中代码右键「解释 / 添加到 AI 对话」=====
 function sendSelection(mode: "explain" | "append") {
@@ -424,5 +516,17 @@ const visibleNodes = computed<VisibleNode[]>(() => {
   flex: 1;
   min-width: 0;
   overflow-y: auto;
+}
+</style>
+
+<style>
+/* wiki 引用定位高亮（Monaco 装饰类，必须全局） */
+.bw-reveal-line {
+  background: color-mix(in oklch, var(--color-primary) 15%, transparent) !important;
+}
+.bw-reveal-gutter {
+  background: var(--color-primary) !important;
+  margin-left: 3px;
+  width: 3px !important;
 }
 </style>

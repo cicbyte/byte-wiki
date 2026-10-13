@@ -20,7 +20,7 @@ export interface StaleReport {
 
 /** 增量更新摘要（与 Rust `UpdateSummary` 对应） */
 export interface UpdateSummary {
-  regenerated_modules: number;
+  regenerated_pages: number;
   changed_files: number;
   prompt_tokens: number;
   completion_tokens: number;

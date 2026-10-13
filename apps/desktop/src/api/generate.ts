@@ -4,20 +4,33 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
+/** 页面级进度（后端按 id 推增量，前端合并出清单） */
+export interface PageProgress {
+  id: string;
+  title: string;
+  /** 章节链展示（"系统架构 / 后端"） */
+  section: string;
+  importance: "high" | "medium" | "low" | string;
+  status: "pending" | "generating" | "done" | "failed";
+}
+
 /** 生成进度事件（与 Rust `GenerateEvent` 对应） */
 export interface GenerateEvent {
-  phase: "indexing" | "planning" | "generating" | "assembling" | "done" | "error" | string;
+  phase: "indexing" | "outlining" | "generating" | "assembling" | "done" | "error" | string;
   current: number;
   total: number;
   message: string;
   prompt_tokens: number;
   completion_tokens: number;
+  /** 大纲确定事件携带全量骨架；此后每页携带单条变更 */
+  pages?: PageProgress[];
 }
 
 /** 生成结果摘要（与 Rust `GenerateSummary` 对应） */
 export interface GenerateSummary {
   output_dir: string;
-  modules_generated: number;
+  pages_generated: number;
+  pages_failed: number;
   prompt_tokens: number;
   completion_tokens: number;
   elapsed_ms: number;

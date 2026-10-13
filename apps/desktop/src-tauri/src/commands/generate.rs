@@ -53,12 +53,12 @@ pub fn list_wiki_docs(
     path: String,
 ) -> Result<Vec<(String, String, String)>, String> {
     let svc = state.svc();
-    let repo_root = std::path::Path::new(&path)
-        .canonicalize()
+    // canonical_key 剥 verbatim 前缀（裸 canonicalize 的 \\?\ 前缀查库必落空）
+    let repo_root = byte_wiki_core::canonical_key(std::path::Path::new(&path))
         .map_err(|e| e.to_string())?;
     let Some(repo) = svc
         .db
-        .get_repo_by_path(&repo_root.to_string_lossy())
+        .get_repo_by_path(&repo_root)
         .map_err(|e| e.to_string())?
     else {
         return Ok(vec![]);
@@ -67,7 +67,7 @@ pub fn list_wiki_docs(
     let mut docs = svc.db.list_wiki_docs(repo.id).map_err(|e| e.to_string())?;
     if docs.is_empty() {
         docs = svc
-            .scan_existing_wiki(&repo_root)
+            .scan_existing_wiki(std::path::Path::new(&repo_root))
             .map_err(|e| e.to_string())?;
     }
     docs.sort();
@@ -186,6 +186,7 @@ pub async fn rebuild_embeddings(
             message: msg.to_string(),
             prompt_tokens: 0,
             completion_tokens: 0,
+            pages: None,
         });
     })
     .await
