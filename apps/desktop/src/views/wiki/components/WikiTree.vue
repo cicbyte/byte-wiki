@@ -1,16 +1,15 @@
 <script setup lang="ts">
 /**
- * Wiki 导航树：总览 / 文档（页面按章节路径嵌套）/ 知识卡 / 图谱
+ * Wiki 导航树：总览 / 文档（页面按章节路径嵌套）
  *
- * 页面化管线（kind=page，path 形如 pages/系统架构/核心库.md）由目录结构
- * 自然成树；旧版模块文档（kind=module）作为兼容分组兜底展示。
+ * 只放文档类内容：知识卡有独立 tab、调用链图谱有独立面板、
+ * 依赖图在新版总览页内以 Mermaid 呈现，不进文档树。
+ * 旧版模块文档（kind=module）作为兼容分组兜底展示。
  */
 import { computed, ref } from "vue";
 import {
   ApartmentOutlined,
   AppstoreOutlined,
-  NodeIndexOutlined,
-  BookOutlined,
   FileTextOutlined,
   FolderOutlined,
   CaretRightOutlined,
@@ -76,8 +75,6 @@ function toggleDir(path: string) {
 }
 
 const arch = computed(() => props.docs.filter(([, kind]) => kind === "architecture"));
-const cards = computed(() => props.docs.filter(([, kind]) => kind === "card"));
-const graphs = computed(() => props.docs.filter(([, kind]) => kind === "graph"));
 const modules = computed(() => props.docs.filter(([, kind]) => kind === "module")); // 旧版兼容
 </script>
 
@@ -127,26 +124,6 @@ const modules = computed(() => props.docs.filter(([, kind]) => kind === "module"
       </ul>
     </div>
 
-    <div v-if="cards.length" class="tree-group">
-      <div class="group-head">
-        <BookOutlined />
-        <span>知识卡</span>
-        <span class="group-count">{{ cards.length }}</span>
-      </div>
-      <ul class="group-list">
-        <li
-          v-for="[path, , title] in cards"
-          :key="path"
-          class="tree-item"
-          :class="{ active: current === path }"
-          :title="path"
-          @click="emit('select', path)"
-        >
-          {{ title }}
-        </li>
-      </ul>
-    </div>
-
     <div v-if="modules.length" class="tree-group">
       <div class="group-head">
         <AppstoreOutlined />
@@ -156,26 +133,6 @@ const modules = computed(() => props.docs.filter(([, kind]) => kind === "module"
       <ul class="group-list">
         <li
           v-for="[path, , title] in modules"
-          :key="path"
-          class="tree-item"
-          :class="{ active: current === path }"
-          :title="path"
-          @click="emit('select', path)"
-        >
-          {{ title }}
-        </li>
-      </ul>
-    </div>
-
-    <div v-if="graphs.length" class="tree-group">
-      <div class="group-head">
-        <NodeIndexOutlined />
-        <span>图谱</span>
-        <span class="group-count">{{ graphs.length }}</span>
-      </div>
-      <ul class="group-list">
-        <li
-          v-for="[path, , title] in graphs"
           :key="path"
           class="tree-item"
           :class="{ active: current === path }"

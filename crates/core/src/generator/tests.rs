@@ -77,7 +77,8 @@ fn bump(state: &MockState, tag: &str) {
     }
 }
 
-/// mock ollama：按 user 消息内容路由（大纲 / 页面 / 总览）
+/// mock ollama：按 user 消息内容路由（大纲 / 页面 / 总览），NDJSON 流式返回
+/// （管线 LLM 调用统一走 chat_stream，按行解析）
 async fn start_mock_llm() -> (String, MockState) {
     let state = MockState::default();
     let app_state = state.clone();
@@ -104,11 +105,22 @@ async fn start_mock_llm() -> (String, MockState) {
                 bump(&s, "page");
                 MOCK_PAGE_MD.to_string()
             };
-            axum::Json(serde_json::json!({
+            let mut ndjson = serde_json::to_string(&serde_json::json!({
                 "message": { "role": "assistant", "content": content },
-                "prompt_eval_count": 100,
-                "eval_count": 20,
             }))
+            .unwrap();
+            ndjson.push('\n');
+            ndjson.push_str(
+                &serde_json::to_string(&serde_json::json!({
+                    "done": true, "prompt_eval_count": 100, "eval_count": 20,
+                }))
+                .unwrap(),
+            );
+            ndjson.push('\n');
+            (
+                [(axum::http::header::CONTENT_TYPE, "application/x-ndjson")],
+                ndjson,
+            )
         }),
     )
     .with_state(app_state);

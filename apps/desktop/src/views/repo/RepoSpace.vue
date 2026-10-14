@@ -86,6 +86,8 @@ const genPageGroups = computed(() => {
 
 /** 大纲骨架折叠态（页多时默认收起，只看进度条） */
 const pagesPanelOpen = ref(false);
+/** 本次生成/更新开始时间（进度面板耗时计时） */
+const genStartedAt = ref<number | null>(null);
 
 // ===== 事件订阅 =====
 let unlisten: Awaited<ReturnType<typeof api.onGenerateEvent>> | null = null;
@@ -176,6 +178,7 @@ async function runGenerate() {
   genProgress.value = null;
   genSummary.value = null;
   genPages.value = new Map();
+  genStartedAt.value = Date.now();
   try {
     const s = await api.generateWiki(wiki.currentRepo.path);
     genSummary.value = {
@@ -202,6 +205,7 @@ async function runUpdate() {
   updating.value = true;
   genProgress.value = null;
   genPages.value = new Map();
+  genStartedAt.value = Date.now();
   try {
     const s = await api.updateWiki(wiki.currentRepo.path);
     if (s.unchanged) {
@@ -371,6 +375,7 @@ const busy = computed(() => generating.value || updating.value);
               :progress="genProgress"
               :groups="genPageGroups"
               :panel-open="pagesPanelOpen"
+              :started-at="genStartedAt"
               @toggle-panel="pagesPanelOpen = !pagesPanelOpen"
             />
             <p v-if="genSummary" class="hint">
@@ -442,6 +447,7 @@ const busy = computed(() => generating.value || updating.value);
           :progress="genProgress"
           :groups="genPageGroups"
           :panel-open="pagesPanelOpen"
+          :started-at="genStartedAt"
           @toggle-panel="pagesPanelOpen = !pagesPanelOpen"
         />
 

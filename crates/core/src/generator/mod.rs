@@ -164,7 +164,7 @@ impl AppService {
         // ---- 阶段 2：LLM 大纲设计 ----
         on_event(ev("outlining", 0, 0, format!("设计 Wiki 大纲（{} 个文件）", known_files.len())));
         let outline = self
-            .design_outline(&client, &repo.name, &modules, &known_files, repo_path)
+            .design_outline(&client, &repo.name, &modules, &known_files, repo_path, on_event)
             .await?;
         let total = outline.pages.len();
         on_event(GenerateEvent {
@@ -187,7 +187,7 @@ impl AppService {
         // ---- 阶段 4：总览页 ----
         on_event(ev("generating", total, total, "生成总览页"));
         let (overview, out) = match self
-            .generate_overview(&client, &repo.name, &outline, &results, &modules, repo_path)
+            .generate_overview(&client, &repo.name, &outline, &results, &modules, repo_path, on_event)
             .await
         {
             Ok(v) => v,
@@ -277,7 +277,7 @@ impl AppService {
             Some(o) if !o.pages.is_empty() => o,
             _ => {
                 on_event(ev("outlining", 0, 0, "未找到既有大纲，重新设计"));
-                self.design_outline(&client, &repo.name, &modules, &known_files, repo_path)
+                self.design_outline(&client, &repo.name, &modules, &known_files, repo_path, on_event)
                     .await?
             }
         };
@@ -311,7 +311,7 @@ impl AppService {
         // ---- 5）总览 + 组装 + 向量 ----
         on_event(ev("generating", total, total, "重新生成总览页"));
         let (overview, out) = match self
-            .generate_overview(&client, &repo.name, &outline, &results, &modules, repo_path)
+            .generate_overview(&client, &repo.name, &outline, &results, &modules, repo_path, on_event)
             .await
         {
             Ok(v) => v,
@@ -347,7 +347,7 @@ impl AppService {
 
     // ============ 内部：阶段实现 ============
 
-    /// LLM 大纲设计（解析失败带错误重试一次）
+    /// LLM 大纲设计（流式输出 + 心跳事件；解析失败带错误重试一次）
     async fn design_outline(
         &self,
         client: &LlmClient,
@@ -355,6 +355,7 @@ impl AppService {
         modules: &[ModuleCtx],
         known_files: &HashSet<String>,
         repo_path: &str,
+        on_event: &(dyn Fn(GenerateEvent) + Send + Sync),
     ) -> CoreResult<WikiOutline> {
         let files: Vec<(String, String, u64)> = self.indexed_files(repo_path)?;
         let edges: Vec<(String, String, i64)> = modules
@@ -380,7 +381,10 @@ impl AppService {
                 ));
             }
             let messages = vec![ChatMessage::system(system), ChatMessage::user(user.clone())];
-            let out = client.chat_detailed(&messages, &ChatOptions::default()).await?;
+            let out = stream_llm(
+                client, &messages, "outlining", 0, 0, "大纲生成中", on_event,
+            )
+            .await?;
             match parse_outline(&out.text) {
                 Ok(o) => {
                     let normalized = normalize_outline(o, known_files);
@@ -469,7 +473,7 @@ impl AppService {
                 if attempt > 0 {
                     tracing::warn!("页面「{}」第 {attempt} 次重试", page.title);
                 }
-                match self.generate_one_page(client, repo_path, root, outline, page, known_files, file_module, modules, &edges).await {
+                match self.generate_one_page(client, repo_path, root, outline, page, known_files, file_module, modules, &edges, done, total, on_event).await {
                     Ok((c, out)) => {
                         tokens.0 += out.prompt_tokens;
                         tokens.1 += out.completion_tokens;
@@ -510,7 +514,7 @@ impl AppService {
         Ok((results, failed))
     }
 
-    /// 单页生成：上下文（绑定文件 + RAG）→ prompt → LLM → 后处理
+    /// 单页生成：上下文（绑定文件 + RAG）→ prompt → LLM（流式 + 心跳）→ 后处理
     #[allow(clippy::too_many_arguments)]
     async fn generate_one_page(
         &self,
@@ -523,6 +527,9 @@ impl AppService {
         file_module: &HashMap<String, String>,
         modules: &[ModuleCtx],
         edges: &[(String, String, i64)],
+        current: usize,
+        total: usize,
+        on_event: &(dyn Fn(GenerateEvent) + Send + Sync),
     ) -> CoreResult<(String, crate::llm::ChatOutcome)> {
         // 相关页（标题 + 定位）
         let related: Vec<String> = page
@@ -564,7 +571,11 @@ impl AppService {
         let messages = page_messages(
             &page.title, &page.brief, &page.description, &related, &module_ctx, &file_ctx, &rag_ctx, min_files,
         );
-        let out = client.chat_detailed(&messages, &ChatOptions::default()).await?;
+        let out = stream_llm(
+            client, &messages, "generating", current, total,
+            &format!("《{}》撰写中", page.title), on_event,
+        )
+        .await?;
         Ok((postprocess_page(&out.text, known_files), out))
     }
 
@@ -595,7 +606,7 @@ impl AppService {
         }
     }
 
-    /// 总览页：页面目录（真实相对链接）+ README + 依赖图
+    /// 总览页：页面目录（真实相对链接）+ README + 依赖图（流式 + 心跳）
     async fn generate_overview(
         &self,
         client: &LlmClient,
@@ -604,6 +615,7 @@ impl AppService {
         results: &[PageOutcome],
         modules: &[ModuleCtx],
         repo_path: &str,
+        on_event: &(dyn Fn(GenerateEvent) + Send + Sync),
     ) -> CoreResult<(String, crate::llm::ChatOutcome)> {
         // results 与 outline.pages 顺序一致（plan_jobs 保证），zip 得 id → rel
         let rel_of: HashMap<&str, &str> = outline
@@ -661,7 +673,10 @@ impl AppService {
             &outline::render_modules(&modules_tri, &edges),
             &dependency_mmd,
         );
-        let out = client.chat_detailed(&messages, &ChatOptions::default()).await?;
+        let out = stream_llm(
+            client, &messages, "generating", results.len(), results.len(), "总览页撰写中", on_event,
+        )
+        .await?;
         Ok((postprocess::sanitize_md(&out.text), out))
     }
 
@@ -875,6 +890,45 @@ impl AppService {
 }
 
 // ============ 辅助函数 ============
+
+/// LLM 调用统一走流式：输出增量节流推「已输出 N 字」心跳事件，
+/// 避免单次数分钟的静默期（前端看起来像卡死）
+async fn stream_llm(
+    client: &LlmClient,
+    messages: &[ChatMessage],
+    phase: &str,
+    current: usize,
+    total: usize,
+    label: &str,
+    on_event: &(dyn Fn(GenerateEvent) + Send + Sync),
+) -> CoreResult<crate::llm::ChatOutcome> {
+    // (上次心跳时间, 累计字数)
+    let state = std::sync::Arc::new(std::sync::Mutex::new((std::time::Instant::now(), 0usize)));
+    let st = std::sync::Arc::clone(&state);
+    let phase_owned = phase.to_string();
+    let label_owned = label.to_string();
+    client
+        .chat_stream(messages, &ChatOptions::default(), &move |delta: &str| {
+            let mut g = st.lock().unwrap();
+            g.1 += delta.chars().count();
+            if g.0.elapsed() >= std::time::Duration::from_millis(1000) {
+                let n = g.1;
+                *g = (std::time::Instant::now(), n);
+                drop(g);
+                on_event(GenerateEvent {
+                    phase: phase_owned.clone(),
+                    current,
+                    total,
+                    message: format!("{label_owned} · 已输出 {n} 字"),
+                    prompt_tokens: 0,
+                    completion_tokens: 0,
+                    pages: None,
+                });
+            }
+        })
+        .await
+}
+
 
 fn ev(phase: &str, current: usize, total: usize, message: impl Into<String>) -> GenerateEvent {
     GenerateEvent {

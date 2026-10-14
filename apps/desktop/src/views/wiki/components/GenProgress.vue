@@ -1,11 +1,12 @@
 <script setup lang="ts">
 /**
- * 生成进度面板：阶段条 + 进度 + 页面级清单
+ * 生成进度面板：阶段条 + 进度 + 耗时 + 页面级清单
  *
  * 大纲确定后后端推全量页面骨架（pending），此后每页推单条增量
  * （generating/done/failed），父组件按 id 合并后传入分组清单。
+ * LLM 输出期间后端每秒推「已输出 N 字」心跳，静默期由耗时计时器兜底。
  */
-import { computed } from "vue";
+import { computed, onMounted, onUnmounted, ref } from "vue";
 import {
   LoadingOutlined,
   CheckCircleOutlined,
@@ -19,6 +20,8 @@ const props = defineProps<{
   progress: GenerateEvent | null;
   groups: { section: string; items: PageProgress[] }[];
   panelOpen: boolean;
+  /** 本次生成开始时间（ms 时间戳） */
+  startedAt: number | null;
 }>();
 
 const emit = defineEmits<{ (e: "toggle-panel"): void }>();
@@ -34,14 +37,39 @@ const PHASE_TEXT: Record<string, string> = {
   error: "失败",
 };
 
+const RUNNING_PHASES = new Set(["checking", "indexing", "outlining", "generating", "assembling", "embedding"]);
+
+const running = computed(() => RUNNING_PHASES.has(props.progress?.phase || ""));
+
 const doneCount = computed(() => props.groups.reduce((n, g) => n + g.items.filter((p) => p.status === "done" || p.status === "failed").length, 0));
 const totalCount = computed(() => props.groups.reduce((n, g) => n + g.items.length, 0));
+
+// 耗时计时：运行中每秒跳动，静默阶段也有「活着」的反馈
+const elapsedSec = ref(0);
+let timer: ReturnType<typeof setInterval> | null = null;
+onMounted(() => {
+  timer = setInterval(() => {
+    if (running.value && props.startedAt) {
+      elapsedSec.value = Math.floor((Date.now() - props.startedAt) / 1000);
+    }
+  }, 1000);
+});
+onUnmounted(() => {
+  if (timer) clearInterval(timer);
+});
+const elapsedText = computed(() => {
+  if (!props.startedAt || !running.value) return "";
+  const s = elapsedSec.value;
+  const mm = String(Math.floor(s / 60)).padStart(2, "0");
+  const ss = String(s % 60).padStart(2, "0");
+  return `${mm}:${ss}`;
+});
 </script>
 
 <template>
   <div v-if="progress" class="gen-progress">
     <div class="gen-phase">
-      <span class="phase-chip" :class="{ active: progress.phase === 'generating' || progress.phase === 'outlining' }">
+      <span class="phase-chip" :class="{ active: running }">
         {{ PHASE_TEXT[progress.phase] || progress.phase }}
       </span>
       <span v-if="progress.total" class="phase-count">
@@ -50,6 +78,7 @@ const totalCount = computed(() => props.groups.reduce((n, g) => n + g.items.leng
       <span v-if="totalCount && progress.phase === 'generating'" class="phase-count">
         （{{ doneCount }} 页完成）
       </span>
+      <span v-if="elapsedText" class="phase-count elapsed">{{ elapsedText }}</span>
       <span class="phase-msg">{{ progress.message }}</span>
       <button
         v-if="groups.length"
@@ -61,11 +90,15 @@ const totalCount = computed(() => props.groups.reduce((n, g) => n + g.items.leng
         页面清单
       </button>
     </div>
+    <!-- 有总量走精确进度；大纲等无总量阶段走不定态动画 -->
     <div v-if="progress.total" class="progress-track">
       <div
         class="progress-fill"
         :style="{ width: `${Math.round((Math.min(progress.current, progress.total) / progress.total) * 100)}%` }"
       ></div>
+    </div>
+    <div v-else-if="running" class="progress-track indeterminate">
+      <div class="progress-fill indet"></div>
     </div>
 
     <!-- 页面级清单：大纲骨架即时渲染，状态实时刷新 -->
@@ -146,12 +179,29 @@ const totalCount = computed(() => props.groups.reduce((n, g) => n + g.items.leng
   background: var(--bg-input);
   border-radius: 2px;
   overflow: hidden;
+  position: relative;
 }
 .progress-fill {
   height: 100%;
   background: var(--color-primary);
   border-radius: 2px;
   transition: width var(--transition-normal);
+}
+/* 无总量阶段（大纲设计等）：不定态滑动条 */
+.progress-fill.indet {
+  width: 32%;
+  animation: bw-indet 1.4s ease-in-out infinite;
+}
+@keyframes bw-indet {
+  0% {
+    margin-left: -32%;
+  }
+  100% {
+    margin-left: 100%;
+  }
+}
+.elapsed {
+  color: var(--text-tertiary);
 }
 .page-checklist {
   margin-top: 8px;
