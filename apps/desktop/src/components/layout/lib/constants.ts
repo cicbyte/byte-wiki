@@ -20,6 +20,7 @@ import {
   NodeIndexOutlined,
   MessageOutlined,
   BookOutlined,
+  FileSearchOutlined,
 } from "@ant-design/icons-vue";
 
 /** 单个菜单项（key = 路由 path，高亮按精确匹配） */
@@ -80,6 +81,7 @@ export function repoMenu(repoId: string): { topItems: MenuItem[]; menuGroups: Me
       { key: `${base}/callgraph`, icon: NodeIndexOutlined, label: "调用链" },
       { key: `${base}/chat`, icon: MessageOutlined, label: "对话" },
       { key: `${base}/cards`, icon: BookOutlined, label: "知识卡" },
+      { key: `${base}/llm-logs`, icon: FileSearchOutlined, label: "模型日志" },
     ],
     menuGroups: [],
   };

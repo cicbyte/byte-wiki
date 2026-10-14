@@ -26,6 +26,7 @@ use crate::generator::outline::{
 use crate::generator::pages::{page_messages, overview_messages};
 use crate::generator::postprocess::{postprocess_page, safe_name, unique_name};
 use crate::llm::{ChatMessage, ChatOptions, LlmClient};
+use crate::llm_log::LlmLogEntry;
 use crate::service::AppService;
 use crate::{CoreError, CoreResult};
 
@@ -164,7 +165,7 @@ impl AppService {
         // ---- 阶段 2：LLM 大纲设计 ----
         on_event(ev("outlining", 0, 0, format!("设计 Wiki 大纲（{} 个文件）", known_files.len())));
         let outline = self
-            .design_outline(&client, &repo.name, &modules, &known_files, repo_path, on_event)
+            .design_outline(&client, repo.id, &repo.name, &modules, &known_files, repo_path, on_event)
             .await?;
         let total = outline.pages.len();
         on_event(GenerateEvent {
@@ -181,13 +182,13 @@ impl AppService {
         let mut tokens = (0u64, 0u64);
         let jobs = self.plan_jobs(&outline);
         let (results, failed) = self
-            .run_page_jobs(&client, repo_path, root, &outline, &jobs, &known_files, &file_module, &modules, on_event, &mut tokens)
+            .run_page_jobs(&client, repo.id, &repo.name, repo_path, root, &outline, &jobs, &known_files, &file_module, &modules, on_event, &mut tokens)
             .await?;
 
         // ---- 阶段 4：总览页 ----
         on_event(ev("generating", total, total, "生成总览页"));
         let (overview, out) = match self
-            .generate_overview(&client, &repo.name, &outline, &results, &modules, repo_path, on_event)
+            .generate_overview(&client, repo.id, &repo.name, &outline, &results, &modules, repo_path, on_event)
             .await
         {
             Ok(v) => v,
@@ -277,7 +278,7 @@ impl AppService {
             Some(o) if !o.pages.is_empty() => o,
             _ => {
                 on_event(ev("outlining", 0, 0, "未找到既有大纲，重新设计"));
-                self.design_outline(&client, &repo.name, &modules, &known_files, repo_path, on_event)
+                self.design_outline(&client, repo.id, &repo.name, &modules, &known_files, repo_path, on_event)
                     .await?
             }
         };
@@ -305,13 +306,13 @@ impl AppService {
         let regen = jobs.iter().filter(|j| matches!(j.action, PageAction::Generate)).count();
         let mut tokens = (0u64, 0u64);
         let (results, failed) = self
-            .run_page_jobs(&client, repo_path, root, &outline, &jobs, &known_files, &file_module, &modules, on_event, &mut tokens)
+            .run_page_jobs(&client, repo.id, &repo.name, repo_path, root, &outline, &jobs, &known_files, &file_module, &modules, on_event, &mut tokens)
             .await?;
 
         // ---- 5）总览 + 组装 + 向量 ----
         on_event(ev("generating", total, total, "重新生成总览页"));
         let (overview, out) = match self
-            .generate_overview(&client, &repo.name, &outline, &results, &modules, repo_path, on_event)
+            .generate_overview(&client, repo.id, &repo.name, &outline, &results, &modules, repo_path, on_event)
             .await
         {
             Ok(v) => v,
@@ -351,6 +352,7 @@ impl AppService {
     async fn design_outline(
         &self,
         client: &LlmClient,
+        repo_id: i64,
         repo_name: &str,
         modules: &[ModuleCtx],
         known_files: &HashSet<String>,
@@ -381,10 +383,10 @@ impl AppService {
                 ));
             }
             let messages = vec![ChatMessage::system(system), ChatMessage::user(user.clone())];
-            let out = stream_llm(
-                client, &messages, "outlining", 0, 0, "大纲生成中", on_event,
-            )
-            .await?;
+            let out = self
+                .llm_call_logged(client, repo_id, repo_name, "outline", "Wiki 大纲", attempt + 1,
+                    &messages, "outlining", 0, 0, "大纲生成中", on_event)
+                .await?;
             match parse_outline(&out.text) {
                 Ok(o) => {
                     let normalized = normalize_outline(o, known_files);
@@ -421,6 +423,8 @@ impl AppService {
     async fn run_page_jobs(
         &self,
         client: &LlmClient,
+        repo_id: i64,
+        repo_name: &str,
         repo_path: &str,
         root: &Path,
         outline: &WikiOutline,
@@ -473,7 +477,7 @@ impl AppService {
                 if attempt > 0 {
                     tracing::warn!("页面「{}」第 {attempt} 次重试", page.title);
                 }
-                match self.generate_one_page(client, repo_path, root, outline, page, known_files, file_module, modules, &edges, done, total, on_event).await {
+                match self.generate_one_page(client, repo_id, repo_name, repo_path, root, outline, page, known_files, file_module, modules, &edges, done, total, attempt as u32 + 1, on_event).await {
                     Ok((c, out)) => {
                         tokens.0 += out.prompt_tokens;
                         tokens.1 += out.completion_tokens;
@@ -519,6 +523,8 @@ impl AppService {
     async fn generate_one_page(
         &self,
         client: &LlmClient,
+        repo_id: i64,
+        repo_name: &str,
         repo_path: &str,
         root: &Path,
         outline: &WikiOutline,
@@ -529,6 +535,7 @@ impl AppService {
         edges: &[(String, String, i64)],
         current: usize,
         total: usize,
+        attempt: u32,
         on_event: &(dyn Fn(GenerateEvent) + Send + Sync),
     ) -> CoreResult<(String, crate::llm::ChatOutcome)> {
         // 相关页（标题 + 定位）
@@ -571,12 +578,60 @@ impl AppService {
         let messages = page_messages(
             &page.title, &page.brief, &page.description, &related, &module_ctx, &file_ctx, &rag_ctx, min_files,
         );
-        let out = stream_llm(
-            client, &messages, "generating", current, total,
-            &format!("《{}》撰写中", page.title), on_event,
-        )
-        .await?;
+        let out = self
+            .llm_call_logged(client, repo_id, repo_name, "page", &page.title, attempt,
+                &messages, "generating", current, total,
+                &format!("《{}》撰写中", page.title), on_event)
+            .await?;
         Ok((postprocess_page(&out.text, known_files), out))
+    }
+
+    /// 带日志的 LLM 调用：流式 + 心跳 + 全量 JSONL 留痕（失败也记一条）
+    #[allow(clippy::too_many_arguments)]
+    async fn llm_call_logged(
+        &self,
+        client: &LlmClient,
+        repo_id: i64,
+        repo_name: &str,
+        stage: &str,
+        title: &str,
+        attempt: u32,
+        messages: &[ChatMessage],
+        phase: &str,
+        current: usize,
+        total: usize,
+        label: &str,
+        on_event: &(dyn Fn(GenerateEvent) + Send + Sync),
+    ) -> CoreResult<crate::llm::ChatOutcome> {
+        let started = std::time::Instant::now();
+        let system = messages.first().filter(|m| m.role == "system").map(|m| m.content.clone()).unwrap_or_default();
+        let user = messages
+            .iter()
+            .filter(|m| m.role != "system")
+            .map(|m| m.content.as_str())
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        let result = stream_llm(client, messages, phase, current, total, label, on_event).await;
+        let entry = LlmLogEntry {
+            ts: crate::db::now_iso(),
+            repo_id,
+            repo_name: repo_name.to_string(),
+            stage: stage.to_string(),
+            provider: client.provider_desc(),
+            model: client.model_name().to_string(),
+            title: title.to_string(),
+            attempt,
+            duration_ms: started.elapsed().as_millis() as u64,
+            prompt_tokens: result.as_ref().map(|o| o.prompt_tokens).unwrap_or(0),
+            completion_tokens: result.as_ref().map(|o| o.completion_tokens).unwrap_or(0),
+            ok: result.is_ok(),
+            error: result.as_ref().err().map(|e| e.to_string()).unwrap_or_default(),
+            system,
+            user,
+            response: result.as_ref().map(|o| o.text.clone()).unwrap_or_default(),
+        };
+        self.append_llm_log(&entry);
+        result
     }
 
     /// RAG 补充检索（best-effort：无索引/失败返回空）
@@ -610,6 +665,7 @@ impl AppService {
     async fn generate_overview(
         &self,
         client: &LlmClient,
+        repo_id: i64,
         repo_name: &str,
         outline: &WikiOutline,
         results: &[PageOutcome],
@@ -673,10 +729,10 @@ impl AppService {
             &outline::render_modules(&modules_tri, &edges),
             &dependency_mmd,
         );
-        let out = stream_llm(
-            client, &messages, "generating", results.len(), results.len(), "总览页撰写中", on_event,
-        )
-        .await?;
+        let out = self
+            .llm_call_logged(client, repo_id, repo_name, "overview", "Wiki 总览", 1,
+                &messages, "generating", results.len(), results.len(), "总览页撰写中", on_event)
+            .await?;
         Ok((postprocess::sanitize_md(&out.text), out))
     }
 

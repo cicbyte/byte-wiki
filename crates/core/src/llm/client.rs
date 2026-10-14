@@ -87,6 +87,16 @@ impl LlmClient {
         Self::for_provider(p)
     }
 
+    /// 模型名（日志/调试展示）
+    pub fn model_name(&self) -> &str {
+        &self.cfg.chat_model
+    }
+
+    /// 供应商描述（id · 名称，日志用）
+    pub fn provider_desc(&self) -> String {
+        format!("{} · {}", self.cfg.id, self.cfg.name)
+    }
+
     /// 按指定供应商创建
     pub fn for_provider(p: &LlmProvider) -> CoreResult<Self> {
         let http = reqwest::Client::builder()

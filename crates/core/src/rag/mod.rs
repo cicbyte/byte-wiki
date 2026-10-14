@@ -182,6 +182,10 @@ impl AppService {
         is_cancelled: &(dyn Fn() -> bool + Send + Sync),
     ) -> CoreResult<ChatAnswer> {
         let hits = self.search_similar(repo_path, question, DEFAULT_TOP_K).await?;
+        let canon = crate::canonical_key(Path::new(repo_path))?;
+        let Some(repo) = self.db.get_repo_by_path(&canon)? else {
+            return Err(CoreError::Other(anyhow::anyhow!("仓库未登记：{repo_path}")));
+        };
         if hits.is_empty() {
             return Err(CoreError::Other(anyhow::anyhow!(
                 "该仓库尚无向量索引（先「一键生成」或在浏览模式点「重建索引」）"
@@ -211,9 +215,38 @@ impl AppService {
             "仓库检索上下文：\n{ctx}\n问题：{question}"
         )));
 
+        let started = std::time::Instant::now();
         let outcome = client
             .chat_stream_ext(&messages, &Default::default(), on_delta, on_thinking, is_cancelled)
-            .await?;
+            .await;
+        // 模型日志：完整输入输出留痕（取消哨兵不记）
+        let cancelled = outcome
+            .as_ref()
+            .err()
+            .map(|e| e.to_string().contains("__CHAT_CANCELLED__"))
+            .unwrap_or(false);
+        if !cancelled {
+            let title: String = question.chars().take(60).collect();
+            self.append_llm_log(&crate::llm_log::LlmLogEntry {
+                ts: crate::db::now_iso(),
+                repo_id: repo.id,
+                repo_name: repo.name.clone(),
+                stage: "chat".into(),
+                provider: client.provider_desc(),
+                model: client.model_name().to_string(),
+                title,
+                attempt: 1,
+                duration_ms: started.elapsed().as_millis() as u64,
+                prompt_tokens: outcome.as_ref().map(|o| o.prompt_tokens).unwrap_or(0),
+                completion_tokens: outcome.as_ref().map(|o| o.completion_tokens).unwrap_or(0),
+                ok: outcome.is_ok(),
+                error: outcome.as_ref().err().map(|e| e.to_string()).unwrap_or_default(),
+                system: messages.first().map(|m| m.content.clone()).unwrap_or_default(),
+                user: question.to_string(),
+                response: outcome.as_ref().map(|o| o.text.clone()).unwrap_or_default(),
+            });
+        }
+        let outcome = outcome?;
         let sources: Vec<String> = {
             let mut seen = std::collections::BTreeSet::new();
             hits.iter()

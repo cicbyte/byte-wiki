@@ -38,6 +38,7 @@ import WikiViewer from "@/views/wiki/components/WikiViewer.vue";
 import ChatPanel from "@/views/wiki/components/ChatPanel.vue";
 import CallGraphPanel from "@/views/wiki/components/CallGraphPanel.vue";
 import FileBrowse from "@/views/wiki/components/FileBrowse.vue";
+import LlmLogPanel from "@/views/wiki/components/LlmLogPanel.vue";
 import GenProgress from "@/views/wiki/components/GenProgress.vue";
 
 const route = useRoute();
@@ -473,6 +474,11 @@ const busy = computed(() => generating.value || updating.value);
         <FileBrowse />
       </div>
 
+      <!-- ============ 模型日志 ============ -->
+      <div v-else-if="tab === 'llm-logs'" class="llm-logs-pane">
+        <LlmLogPanel :repo-path="wiki.currentRepo.path" />
+      </div>
+
       <!-- ============ 调用链 ============ -->
       <div v-else-if="tab === 'callgraph'" class="callgraph-pane">
         <CallGraphPanel :repo-path="wiki.currentRepo.path" />
@@ -769,6 +775,15 @@ const busy = computed(() => generating.value || updating.value);
 
 /* 文件浏览 */
 .files-pane {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: var(--spacing-md);
+}
+
+/* 模型日志 */
+.llm-logs-pane {
   flex: 1;
   min-height: 0;
   display: flex;

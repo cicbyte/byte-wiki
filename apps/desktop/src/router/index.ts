@@ -56,6 +56,12 @@ const routes = [
     meta: { title: "知识卡", tab: "cards", fullsize: true },
   },
   {
+    path: "/repo/:id/llm-logs",
+    name: "repo-llm-logs",
+    component: () => import("@/views/repo/RepoSpace.vue"),
+    meta: { title: "模型日志", tab: "llm-logs", fullsize: true },
+  },
+  {
     path: "/mcp-service",
     name: "mcp-service",
     component: () => import("@/views/mcp-service/index.vue"),

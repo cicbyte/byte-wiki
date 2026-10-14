@@ -18,6 +18,7 @@ import { repoApi, fileBrowseApi } from "./repo";
 import { generateApi } from "./generate";
 import { callchainApi } from "./callchain";
 import { watchApi, cardsApi } from "./watch";
+import { llmLogApi } from "./llm-logs";
 
 export const api = {
   ...dialogApi,
@@ -28,6 +29,7 @@ export const api = {
   ...apiServerApi,
   ...systemApi,
   ...llmApi,
+  ...llmLogApi,
   ...repoApi,
   ...fileBrowseApi,
   ...generateApi,

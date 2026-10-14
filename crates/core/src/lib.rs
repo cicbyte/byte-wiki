@@ -13,6 +13,7 @@ pub mod generator;
 pub mod indexer;
 pub mod lang_ext;
 pub mod llm;
+pub mod llm_log;
 pub mod model;
 pub mod rag;
 pub mod repo;
