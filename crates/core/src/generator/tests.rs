@@ -291,9 +291,10 @@ async fn generate_failure_preserves_old_wiki() {
     let wiki = repo.join(".bytewiki");
     let old_overview = std::fs::read_to_string(wiki.join("overview.md")).unwrap();
 
-    // 第二次换坏 LLM：失败且旧 wiki 保留
+    // 第二次换坏 LLM：失败且旧 wiki 保留（关缓存，否则同 prompt 命中缓存绕过坏 LLM）
     let broken = start_broken_llm().await;
     let svc = svc_with_llm(dir.path(), &broken);
+    svc.set_llm_cache_enabled(false);
     svc.open_repo(repo.to_str().unwrap()).unwrap();
     let err = svc
         .generate_wiki(repo.to_str().unwrap(), &|_| {})
@@ -327,6 +328,7 @@ async fn incremental_update_touches_only_affected_pages() {
     let repo = make_repo(dir.path());
     let (base, state) = start_mock_llm().await;
     let svc = svc_with_llm(dir.path(), &base);
+    svc.set_llm_cache_enabled(false); // 关缓存：保持「重生成必走 LLM」的严格断言语义
     svc.open_repo(repo.to_str().unwrap()).unwrap();
     svc.generate_wiki(repo.to_str().unwrap(), &|_| {}).await.unwrap();
 
@@ -402,6 +404,49 @@ fn scan_existing_wiki_registers_clone() {
     let plain = dir.path().join("plain-repo");
     std::fs::create_dir_all(plain.join(".git")).unwrap();
     assert!(svc.scan_existing_wiki(&plain).unwrap().is_empty());
+}
+
+/// 缓存命中：同 prompt 的二次全量生成不发起任何 LLM 请求，
+/// 产物字节一致，token 汇总为 0（未真实消耗）。
+#[tokio::test]
+async fn cached_regenerate_hits_cache() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = make_repo(dir.path());
+    let (base, state) = start_mock_llm().await;
+    let svc = svc_with_llm(dir.path(), &base);
+    svc.open_repo(repo.to_str().unwrap()).unwrap();
+
+    let s1 = svc.generate_wiki(repo.to_str().unwrap(), &|_| {}).await.unwrap();
+    assert!(s1.prompt_tokens > 0);
+    let (outline_calls, page_calls, overview_calls) = (
+        mock_counts(&state, "outline"),
+        mock_counts(&state, "page"),
+        mock_counts(&state, "overview"),
+    );
+    assert_eq!((outline_calls, page_calls, overview_calls), (1, 3, 1));
+
+    // 二次全量生成：全部命中缓存，mock 零新增调用
+    let page_before = std::fs::read(repo.join(".bytewiki/pages/系统架构/核心库.md")).unwrap();
+    let s2 = svc.generate_wiki(repo.to_str().unwrap(), &|_| {}).await.unwrap();
+    assert_eq!(mock_counts(&state, "outline"), 1, "大纲不应重复请求");
+    assert_eq!(mock_counts(&state, "page"), 3, "页面不应重复请求");
+    assert_eq!(mock_counts(&state, "overview"), 1, "总览不应重复请求");
+    assert_eq!(s2.prompt_tokens, 0, "缓存命中不消耗 token");
+    assert_eq!(s2.completion_tokens, 0);
+    // 产物一致
+    assert_eq!(std::fs::read(repo.join(".bytewiki/pages/系统架构/核心库.md")).unwrap(), page_before);
+
+    // 缓存统计与清空
+    let (count, bytes) = svc.llm_cache_stats(repo.to_str().unwrap()).unwrap();
+    assert_eq!(count, 5, "应缓存 5 条（大纲+3页+总览）");
+    assert!(bytes > 0);
+    svc.clear_llm_cache(repo.to_str().unwrap()).unwrap();
+    assert_eq!(svc.llm_cache_stats(repo.to_str().unwrap()).unwrap().0, 0);
+
+    // 清空后第三次生成：重新走 LLM
+    let _s3 = svc.generate_wiki(repo.to_str().unwrap(), &|_| {}).await.unwrap();
+    assert_eq!(mock_counts(&state, "outline"), 2);
+    assert_eq!(mock_counts(&state, "page"), 6);
 }
 
 /// 真实端到端生成冒烟（默认忽略）：本机 ollama + minicpm5 对临时小仓库生成。

@@ -56,6 +56,8 @@ pub fn run() {
             commands::generate::repo_chat,
             commands::llm_logs::list_llm_logs,
             commands::llm_logs::clear_llm_logs,
+            commands::llm_logs::llm_cache_stats,
+            commands::llm_logs::clear_llm_cache,
             commands::generate::chat_cancel,
             commands::generate::rebuild_embeddings,
             // 调用链（函数级视图）

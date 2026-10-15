@@ -18,6 +18,8 @@ export interface LlmLogEntry {
   prompt_tokens: number;
   completion_tokens: number;
   ok: boolean;
+  /** 响应来自缓存回放（未真实请求） */
+  cached?: boolean;
   error: string;
   system: string;
   user: string;
@@ -30,4 +32,9 @@ export const llmLogApi = {
     invoke<[LlmLogEntry[], number]>("list_llm_logs", { path, limit }),
 
   clearLlmLogs: (path: string) => invoke<void>("clear_llm_logs", { path }),
+
+  /** LLM 响应缓存统计（条数， 总字节） */
+  llmCacheStats: (path: string) => invoke<[number, number]>("llm_cache_stats", { path }),
+
+  clearLlmCache: (path: string) => invoke<void>("clear_llm_cache", { path }),
 };

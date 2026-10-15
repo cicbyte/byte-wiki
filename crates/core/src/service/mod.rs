@@ -102,6 +102,8 @@ pub struct AppService {
     data_root: PathBuf,
     /// 数据目录（db/ 在此之下）
     data_dir: PathBuf,
+    /// LLM 响应缓存开关（默认开；测试与强制重生成时关闭）
+    pub llm_cache_enabled: std::sync::atomic::AtomicBool,
 }
 
 impl AppService {
@@ -125,7 +127,12 @@ impl AppService {
         let db = Database::open(&db_path)?;
         // 首次启动写默认 config.toml
         ensure_config(&app_root)?;
-        Ok(Self { db, data_root: app_root, data_dir })
+        Ok(Self {
+            db,
+            data_root: app_root,
+            data_dir,
+            llm_cache_enabled: std::sync::atomic::AtomicBool::new(true),
+        })
     }
 
     /// app 根目录（config/ 在此之下）
@@ -136,5 +143,11 @@ impl AppService {
     /// 数据目录（db/ 在此之下）
     pub fn data_dir(&self) -> &Path {
         &self.data_dir
+    }
+
+    /// 开关 LLM 响应缓存（关闭后查询永远未命中）
+    pub fn set_llm_cache_enabled(&self, enabled: bool) {
+        self.llm_cache_enabled
+            .store(enabled, std::sync::atomic::Ordering::Relaxed);
     }
 }

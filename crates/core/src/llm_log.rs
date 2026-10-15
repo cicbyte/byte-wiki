@@ -37,6 +37,9 @@ pub struct LlmLogEntry {
     pub prompt_tokens: u64,
     pub completion_tokens: u64,
     pub ok: bool,
+    /// 响应来自缓存回放（未真实请求）
+    #[serde(default)]
+    pub cached: bool,
     #[serde(default)]
     pub error: String,
     /// 完整 system prompt
@@ -162,6 +165,7 @@ mod tests {
             prompt_tokens: 100,
             completion_tokens: 20,
             ok: true,
+            cached: false,
             error: String::new(),
             system: "SYS".into(),
             user: format!("USER-{n}"),

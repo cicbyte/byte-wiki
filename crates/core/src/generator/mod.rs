@@ -611,7 +611,61 @@ impl AppService {
             .map(|m| m.content.as_str())
             .collect::<Vec<_>>()
             .join("\n\n");
+
+        // 缓存命中：直接回放文本（token 记 0——未真实消耗；日志带 cached 标记）
+        let key = crate::llm_cache::cache_key(
+            &client.provider_desc(),
+            client.model_name(),
+            &system,
+            &user,
+        );
+        if let Some(hit) = self.cache_get(repo_id, &key) {
+            self.append_llm_log(&LlmLogEntry {
+                ts: crate::db::now_iso(),
+                repo_id,
+                repo_name: repo_name.to_string(),
+                stage: stage.to_string(),
+                provider: client.provider_desc(),
+                model: client.model_name().to_string(),
+                title: title.to_string(),
+                attempt,
+                duration_ms: started.elapsed().as_millis() as u64,
+                prompt_tokens: hit.prompt_tokens,
+                completion_tokens: hit.completion_tokens,
+                ok: true,
+                cached: true,
+                error: String::new(),
+                system,
+                user,
+                response: hit.response.clone(),
+            });
+            tracing::debug!("LLM 缓存命中：{stage} / {title}");
+            return Ok(crate::llm::ChatOutcome {
+                text: hit.response,
+                prompt_tokens: 0,
+                completion_tokens: 0,
+            });
+        }
+
         let result = stream_llm(client, messages, phase, current, total, label, on_event).await;
+        // 成功才缓存（失败结果不进缓存，重跑即重试）
+        if let Ok(out) = &result {
+            let timestamp = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            self.cache_set(
+                repo_id,
+                &crate::llm_cache::LlmCacheEntry {
+                    prompt_hash: key,
+                    response: out.text.clone(),
+                    prompt_tokens: out.prompt_tokens,
+                    completion_tokens: out.completion_tokens,
+                    model: client.model_name().to_string(),
+                    timestamp,
+                },
+            );
+        }
         let entry = LlmLogEntry {
             ts: crate::db::now_iso(),
             repo_id,
@@ -625,6 +679,7 @@ impl AppService {
             prompt_tokens: result.as_ref().map(|o| o.prompt_tokens).unwrap_or(0),
             completion_tokens: result.as_ref().map(|o| o.completion_tokens).unwrap_or(0),
             ok: result.is_ok(),
+            cached: false,
             error: result.as_ref().err().map(|e| e.to_string()).unwrap_or_default(),
             system,
             user,

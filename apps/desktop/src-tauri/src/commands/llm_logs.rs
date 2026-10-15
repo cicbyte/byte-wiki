@@ -25,3 +25,17 @@ pub fn clear_llm_logs(state: tauri::State<'_, AppState>, path: String) -> Result
     let svc: Arc<AppService> = Arc::clone(&state.svc);
     svc.clear_llm_logs(&path).map_err(|e| e.to_string())
 }
+
+/// LLM 响应缓存统计（条数， 总字节）
+#[tauri::command]
+pub fn llm_cache_stats(state: tauri::State<'_, AppState>, path: String) -> Result<(usize, u64), String> {
+    let svc: Arc<AppService> = Arc::clone(&state.svc);
+    svc.llm_cache_stats(&path).map_err(|e| e.to_string())
+}
+
+/// 清空项目 LLM 响应缓存（下次生成将全部真实请求）
+#[tauri::command]
+pub fn clear_llm_cache(state: tauri::State<'_, AppState>, path: String) -> Result<(), String> {
+    let svc: Arc<AppService> = Arc::clone(&state.svc);
+    svc.clear_llm_cache(&path).map_err(|e| e.to_string())
+}

@@ -22,6 +22,7 @@ const props = defineProps<{ repoPath: string }>();
 
 const logs = ref<LlmLogEntry[]>([]);
 const size = ref(0);
+const cacheStats = ref<{ count: number; bytes: number }>({ count: 0, bytes: 0 });
 const loading = ref(false);
 const selected = ref<LlmLogEntry | null>(null);
 const stageFilter = ref("all");
@@ -74,6 +75,25 @@ async function load() {
   }
 }
 
+async function loadCache() {
+  try {
+    const [count, bytes] = await api.llmCacheStats(props.repoPath);
+    cacheStats.value = { count, bytes };
+  } catch {
+    cacheStats.value = { count: 0, bytes: 0 };
+  }
+}
+
+async function clearCache() {
+  try {
+    await api.clearLlmCache(props.repoPath);
+    message.success("缓存已清空（下次生成将全部真实请求）");
+    await loadCache();
+  } catch (e: any) {
+    message.error(typeof e === "string" ? e : "清空失败");
+  }
+}
+
 async function clearAll() {
   try {
     await api.clearLlmLogs(props.repoPath);
@@ -103,7 +123,10 @@ function fmtTokens(e: LlmLogEntry): string {
   return `${e.prompt_tokens}/${e.completion_tokens}`;
 }
 
-onMounted(load);
+onMounted(() => {
+  load();
+  loadCache();
+});
 </script>
 
 <template>
@@ -131,8 +154,14 @@ onMounted(load);
         <button class="btn sm" :disabled="loading" @click="load">
           <ReloadOutlined :spin="loading" /> 刷新
         </button>
+        <span class="cache-info" title="同一 prompt 不重复请求（键=供应商+模型+prompt 哈希）；开发期反复重跑的未变更页面直接回放">
+          缓存 {{ cacheStats.count }} 条 · {{ fmtSize(cacheStats.bytes) }}
+        </span>
+        <button class="btn sm" :disabled="!cacheStats.count" @click="clearCache">
+          <ClearOutlined /> 清缓存
+        </button>
         <button class="btn sm danger" :disabled="!logs.length" @click="clearAll">
-          <ClearOutlined /> 清空
+          <ClearOutlined /> 清日志
         </button>
       </div>
     </div>
@@ -170,8 +199,11 @@ onMounted(load);
             <span class="col-dur">{{ fmtDur(l.duration_ms) }}</span>
             <span class="col-tok">{{ fmtTokens(l) }}</span>
             <span class="col-ok">
-              <CheckCircleOutlined v-if="l.ok" class="ok" />
-              <CloseCircleOutlined v-else class="bad" />
+              <em v-if="l.cached" class="cached">缓存</em>
+              <template v-else>
+                <CheckCircleOutlined v-if="l.ok" class="ok" />
+                <CloseCircleOutlined v-else class="bad" />
+              </template>
               <em v-if="l.attempt > 1">重试{{ l.attempt }}</em>
             </span>
           </div>
@@ -187,6 +219,7 @@ onMounted(load);
               {{ fmtTs(selected.ts) }} · {{ selected.provider }} · {{ selected.model }}
               · {{ fmtDur(selected.duration_ms) }}
               · prompt {{ selected.prompt_tokens }} / completion {{ selected.completion_tokens }}
+              <em v-if="selected.cached" class="cached-tag">缓存回放（未真实请求）</em>
               <em v-if="selected.attempt > 1" class="retry">第 {{ selected.attempt }} 次尝试</em>
             </span>
           </div>
@@ -374,6 +407,24 @@ onMounted(load);
   font-style: normal;
   font-size: 10px;
   color: var(--color-warning);
+}
+.col-ok em.cached {
+  color: var(--color-primary);
+  border: 1px solid currentColor;
+  border-radius: var(--radius-xs);
+  padding: 0 4px;
+  line-height: 14px;
+}
+.cache-info {
+  font-size: 11.5px;
+  color: var(--text-tertiary);
+  font-family: "JetBrains Mono", monospace;
+  white-space: nowrap;
+}
+.detail-meta .cached-tag {
+  font-style: normal;
+  color: var(--color-primary);
+  margin-left: 6px;
 }
 
 .log-detail {

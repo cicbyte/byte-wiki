@@ -27,6 +27,8 @@ toml = "0.8"
 # 索引仓库时遵循 .gitignore（ripgrep 同源）
 ignore = "0.4"
 regex = "1"
+# LLM 响应缓存键（prompt 哈希，deepwiki-rs 同款算法）
+md-5 = "0.10"
 # LLM 接入（Ollama / OpenAI 兼容端点；调用方自带异步运行时）
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 

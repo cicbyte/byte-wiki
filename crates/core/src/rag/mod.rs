@@ -240,6 +240,7 @@ impl AppService {
                 prompt_tokens: outcome.as_ref().map(|o| o.prompt_tokens).unwrap_or(0),
                 completion_tokens: outcome.as_ref().map(|o| o.completion_tokens).unwrap_or(0),
                 ok: outcome.is_ok(),
+                cached: false,
                 error: outcome.as_ref().err().map(|e| e.to_string()).unwrap_or_default(),
                 system: messages.first().map(|m| m.content.clone()).unwrap_or_default(),
                 user: question.to_string(),
