@@ -55,6 +55,9 @@ pub struct GenerateEvent {
     /// 流式增量（携带时为终端事件，不参与进度展示）
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stream: Option<StreamChunk>,
+    /// 归属项目（前端按项目过滤；本进程内事件必填）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repo_id: Option<i64>,
 }
 
 /// 流式增量（右下角终端实时显示；高频小事件，与进度事件同回调、异通道）
@@ -68,6 +71,9 @@ pub struct StreamChunk {
     /// 页面 id（正文流式按页累积，前端「点击实时查看」用）
     #[serde(default)]
     pub page_id: Option<String>,
+    /// 归属项目
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repo_id: Option<i64>,
 }
 
 /// 单页进度（前端按 id 合并出页面清单）
@@ -213,6 +219,19 @@ impl AppService {
         let provider = self.active_llm()?;
         let client = LlmClient::for_provider(&provider)?;
 
+        // 后台任务注册 + 事件包裹：标注 repo_id（前端按项目过滤）并同步注册表
+        let task_repo_id = repo.id;
+        self.tasks.begin(task_repo_id, &repo.name, repo_path, "generate");
+        let wrapped = |mut e: GenerateEvent| {
+            e.repo_id = Some(task_repo_id);
+            if let Some(chunk) = &mut e.stream {
+                chunk.repo_id = Some(task_repo_id);
+            }
+            self.tasks.update(task_repo_id, &e);
+            on_event(e);
+        };
+        let on_event: &(dyn Fn(GenerateEvent) + Send + Sync) = &wrapped;
+
         // ---- 阶段 2：LLM 大纲设计 ----
         on_event(ev("outlining", 0, 0, format!("设计 Wiki 大纲（{} 个文件）", known_files.len())));
         let outline = self
@@ -234,6 +253,7 @@ impl AppService {
             completion_tokens: 0,
             pages: Some(skeleton(&outline, &path_of)),
             stream: None,
+            repo_id: None,
         });
         persist_outline(root, &outline);
         write_gen_meta(root, &provider.id, &provider.chat_model);
@@ -333,6 +353,19 @@ impl AppService {
         let client = LlmClient::for_provider(&provider)?;
         let wiki_dir = root.join(".bytewiki");
 
+        // 后台任务注册 + 事件包裹：标注 repo_id（前端按项目过滤）并同步注册表
+        let task_repo_id = repo.id;
+        self.tasks.begin(task_repo_id, &repo.name, repo_path, "update");
+        let wrapped = |mut e: GenerateEvent| {
+            e.repo_id = Some(task_repo_id);
+            if let Some(chunk) = &mut e.stream {
+                chunk.repo_id = Some(task_repo_id);
+            }
+            self.tasks.update(task_repo_id, &e);
+            on_event(e);
+        };
+        let on_event: &(dyn Fn(GenerateEvent) + Send + Sync) = &wrapped;
+
         // ---- 3）大纲：优先复用（保持文档结构稳定），无则全量重建 ----
         let outline = match read_outline(&wiki_dir) {
             Some(o) if !o.pages.is_empty() => o,
@@ -356,6 +389,7 @@ impl AppService {
             completion_tokens: 0,
             pages: Some(skeleton(&outline, &path_of)),
             stream: None,
+            repo_id: None,
         });
         persist_outline(root, &outline);
 
@@ -528,6 +562,7 @@ impl AppService {
                     completion_tokens: 0,
                     pages: Some(vec![page_progress(page, &chain, "done", Some(job.rel_path.clone()))]),
                     stream: None,
+                    repo_id: None,
                 });
                 results.push(PageOutcome {
                     rel_path: job.rel_path.clone(),
@@ -548,6 +583,7 @@ impl AppService {
                 completion_tokens: 0,
                 pages: Some(vec![page_progress(page, &chain, "generating", Some(job.rel_path.clone()))]),
                 stream: None,
+                repo_id: None,
             });
 
             let mut last_err: Option<String> = None;
@@ -605,6 +641,7 @@ impl AppService {
                 completion_tokens: tokens.1,
                 pages: Some(vec![page_progress(page, &chain, if ok { "done" } else { "failed" }, Some(job.rel_path.clone()))]),
                 stream: None,
+                repo_id: None,
             });
         }
         Ok((results, failed))
@@ -750,6 +787,7 @@ impl AppService {
             prompt_tokens: 0,
             completion_tokens: 0,
             pages: None,
+            repo_id: None,
             stream: Some(StreamChunk {
                 call: label.to_string(),
                 channel: "meta".into(),
@@ -757,6 +795,7 @@ impl AppService {
 ▶ [{stage}] {title}（第 {attempt} 次尝试）
 "),
                 page_id: page_id.map(str::to_string),
+                repo_id: None,
             }),
         });
         let result = stream_llm(client, messages, phase, current, total, label, page_id, on_event).await;
@@ -768,6 +807,7 @@ impl AppService {
             prompt_tokens: 0,
             completion_tokens: 0,
             pages: None,
+            repo_id: None,
             stream: Some(StreamChunk {
                 call: label.to_string(),
                 channel: "meta".into(),
@@ -783,6 +823,7 @@ impl AppService {
 "),
                 },
                 page_id: page_id.map(str::to_string),
+                repo_id: None,
             }),
         });
         // 成功才缓存（失败结果不进缓存，重跑即重试）
@@ -1241,6 +1282,7 @@ async fn stream_llm(
             completion_tokens: 0,
             pages: None,
             stream: None,
+            repo_id: None,
         });
     };
 
@@ -1257,11 +1299,13 @@ async fn stream_llm(
             prompt_tokens: 0,
             completion_tokens: 0,
             pages: None,
+            repo_id: None,
             stream: Some(StreamChunk {
                 call: call_label.clone(),
                 channel: channel.to_string(),
                 delta: delta.to_string(),
                 page_id: page_id.map(str::to_string),
+                repo_id: None,
             }),
         });
     };
@@ -1320,6 +1364,7 @@ fn ev(phase: &str, current: usize, total: usize, message: impl Into<String>) -> 
         completion_tokens: 0,
         pages: None,
         stream: None,
+        repo_id: None,
     }
 }
 

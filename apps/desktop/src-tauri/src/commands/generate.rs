@@ -23,15 +23,32 @@ pub async fn generate_wiki(
 ) -> Result<GenerateSummary, String> {
     let svc: Arc<AppService> = Arc::clone(&state.svc);
     let app_handle = app.clone();
-    svc.generate_wiki(&path, &move |e: GenerateEvent| {
-        if let Some(chunk) = &e.stream {
-            let _ = app_handle.emit(LLM_STREAM_EVENT, chunk);
-        } else {
-            let _ = app_handle.emit(GENERATE_EVENT, &e);
+    let emitter = &app_handle;
+    let result = svc
+        .generate_wiki(&path, &move |e: GenerateEvent| {
+            if let Some(chunk) = &e.stream {
+                let _ = emitter.emit(LLM_STREAM_EVENT, chunk);
+            } else {
+                let _ = emitter.emit(GENERATE_EVENT, &e);
+            }
+        })
+        .await;
+    if let Err(e) = &result {
+        // 命令失败：任务注册表标记 error（前端 promise 可能已随页面销毁丢失）
+        if let Some(repo) = svc.db.get_repo_by_path(
+            &byte_wiki_core::canonical_key(std::path::Path::new(&path)).unwrap_or_default(),
+        ).ok().flatten() {
+            svc.tasks.fail(repo.id, &e.to_string());
         }
-    })
-    .await
-    .map_err(|e| e.to_string())
+        let _ = app_handle.emit(GENERATE_EVENT, &GenerateEvent {
+            phase: "error".into(),
+            current: 0, total: 0,
+            message: e.to_string(),
+            prompt_tokens: 0, completion_tokens: 0,
+            pages: None, stream: None, repo_id: Some(repo_id_of(&svc, &path)),
+        });
+    }
+    result.map_err(|e| e.to_string())
 }
 
 /// 增量更新（FR-06：仅重生成受影响模块 + 反向依赖），进度实时 emit
@@ -43,15 +60,23 @@ pub async fn update_wiki(
 ) -> Result<byte_wiki_core::generator::UpdateSummary, String> {
     let svc: Arc<AppService> = Arc::clone(&state.svc);
     let app_handle = app.clone();
-    svc.update_wiki(&path, &move |e: GenerateEvent| {
-        if let Some(chunk) = &e.stream {
-            let _ = app_handle.emit(LLM_STREAM_EVENT, chunk);
-        } else {
-            let _ = app_handle.emit(GENERATE_EVENT, &e);
+    let result = svc
+        .update_wiki(&path, &move |e: GenerateEvent| {
+            if let Some(chunk) = &e.stream {
+                let _ = app_handle.emit(LLM_STREAM_EVENT, chunk);
+            } else {
+                let _ = app_handle.emit(GENERATE_EVENT, &e);
+            }
+        })
+        .await;
+    if let Err(e) = &result {
+        if let Some(repo) = svc.db.get_repo_by_path(
+            &byte_wiki_core::canonical_key(std::path::Path::new(&path)).unwrap_or_default(),
+        ).ok().flatten() {
+            svc.tasks.fail(repo.id, &e.to_string());
         }
-    })
-    .await
-    .map_err(|e| e.to_string())
+    }
+    result.map_err(|e| e.to_string())
 }
 
 /// wiki 文档清单 (path, kind, title)
@@ -199,6 +224,7 @@ pub async fn rebuild_embeddings(
             completion_tokens: 0,
             pages: None,
             stream: None,
+            repo_id: None,
         });
     })
     .await
@@ -213,4 +239,30 @@ pub fn wiki_outline_paths(
 ) -> Result<Vec<(String, String)>, String> {
     let svc: Arc<AppService> = Arc::clone(&state.svc);
     svc.outline_page_paths(&path).map_err(|e| e.to_string())
+}
+
+/// 后台生成任务快照（全局任务页/页面重入水合）
+#[tauri::command]
+pub fn list_gen_tasks(state: tauri::State<'_, AppState>) -> Result<Vec<byte_wiki_core::tasks::GenTask>, String> {
+    let svc: Arc<AppService> = Arc::clone(&state.svc);
+    Ok(svc.tasks.list())
+}
+
+/// 清除已结束任务
+#[tauri::command]
+pub fn clear_gen_tasks(state: tauri::State<'_, AppState>) -> Result<(), String> {
+    let svc: Arc<AppService> = Arc::clone(&state.svc);
+    svc.tasks.clear_finished();
+    Ok(())
+}
+
+fn repo_id_of(svc: &AppService, path: &str) -> i64 {
+    svc.db
+        .get_repo_by_path(
+            &byte_wiki_core::canonical_key(std::path::Path::new(path)).unwrap_or_default(),
+        )
+        .ok()
+        .flatten()
+        .map(|r| r.id)
+        .unwrap_or(0)
 }

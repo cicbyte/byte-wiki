@@ -20,6 +20,7 @@ pub mod rag;
 pub mod repo;
 pub mod service;
 pub mod shortid;
+pub mod tasks;
 pub mod watch;
 
 #[cfg(feature = "mcp")]

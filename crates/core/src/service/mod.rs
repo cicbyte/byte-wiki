@@ -104,6 +104,8 @@ pub struct AppService {
     data_dir: PathBuf,
     /// LLM 响应缓存开关（默认开；测试与强制重生成时关闭）
     pub llm_cache_enabled: std::sync::atomic::AtomicBool,
+    /// 生成任务注册表（后台任务页/页面重入水合）
+    pub tasks: crate::tasks::TaskManager,
 }
 
 impl AppService {
@@ -132,6 +134,7 @@ impl AppService {
             data_root: app_root,
             data_dir,
             llm_cache_enabled: std::sync::atomic::AtomicBool::new(true),
+            tasks: crate::tasks::TaskManager::default(),
         })
     }
 

@@ -65,6 +65,8 @@ const genSummary = ref<{ pages: number; failed: number; prompt: number; completi
 const indexSummary = ref<IndexSummary | null>(null);
 const generating = ref(false);
 const updating = ref(false);
+/** 外部运行中的任务（本组件未发起——重入水合或后台任务页并行） */
+const externalRunning = ref(false);
 const indexing = ref(false);
 const rebuilding = ref(false);
 const cardModalOpen = ref(false);
@@ -145,7 +147,20 @@ onMounted(async () => {
     }
   });
   unlisten = await api.onGenerateEvent((e) => {
+    // 按项目过滤：其它项目的任务事件不进本视图（后台多任务并行时互不污染）
+    if (e.repo_id != null && wiki.currentRepo && e.repo_id !== wiki.currentRepo.id) return;
+    const external = !generating.value && !updating.value; // 本组件未发起（其它页面/重入前的运行）
     genProgress.value = e;
+    if (e.phase === "done" && external) {
+      // 外部任务完成：刷新文档并清骨架（原发起页面可能已销毁）
+      refreshDocs().then(() => {
+        genPages.value = new Map();
+        externalRunning.value = false;
+      });
+    }
+    if (e.phase === "error" && external) {
+      externalRunning.value = false;
+    }
     if (e.pages?.length) {
       // 大纲确定（outlining 带骨架）重置清单；其余为单页增量合并
       const isSkeleton = e.phase === "outlining";
@@ -172,6 +187,32 @@ async function enterRepo() {
   }
   await refreshDocs();
   await refreshStaleness();
+  await hydrateExternalTask();
+}
+
+/** 水合外部运行中的任务快照（页面销毁后重入：恢复进度树/计时） */
+async function hydrateExternalTask() {
+  try {
+    const tasks = await api.listGenTasks();
+    const t = tasks.find((x) => !x.finished && x.repo_path === wiki.currentRepo?.path);
+    if (!t) {
+      externalRunning.value = false;
+      return;
+    }
+    externalRunning.value = true;
+    genStartedAt.value = t.started_ms;
+    genPages.value = new Map(t.pages.map((p) => [p.id, { ...p }]));
+    genProgress.value = {
+      phase: t.phase,
+      current: t.current,
+      total: t.total,
+      message: t.message,
+      prompt_tokens: t.prompt_tokens,
+      completion_tokens: t.completion_tokens,
+    };
+  } catch {
+    /* 快照失败不影响页面 */
+  }
 }
 
 function tabLabel(): string {
@@ -357,7 +398,7 @@ function fmtTime(iso: string | null): string {
   if (!iso) return "—";
   return iso.replace("T", " ").replace("Z", "");
 }
-const busy = computed(() => generating.value || updating.value);
+const busy = computed(() => generating.value || updating.value || externalRunning.value);
 </script>
 
 <template>

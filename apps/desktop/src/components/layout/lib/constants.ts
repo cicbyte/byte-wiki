@@ -10,6 +10,7 @@
 import type { Component } from "vue";
 import {
   ProjectOutlined,
+  UnorderedListOutlined,
   FolderOutlined,
   CloudServerOutlined,
   ClusterOutlined,
@@ -46,6 +47,7 @@ export function labelOfItem(item: MenuItem): string {
 /** 全局层：顶层独立项 */
 export const topItems: MenuItem[] = [
   { key: "/", icon: ProjectOutlined, label: "项目" },
+  { key: "/tasks", icon: UnorderedListOutlined, label: "后台任务" },
 ];
 
 /** 全局层：分组菜单（服务 / 系统） */

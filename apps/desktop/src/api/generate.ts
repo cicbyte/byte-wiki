@@ -28,6 +28,8 @@ export interface GenerateEvent {
   completion_tokens: number;
   /** 大纲确定事件携带全量骨架；此后每页携带单条变更 */
   pages?: PageProgress[];
+  /** 归属项目（前端按项目过滤；本进程内事件必填） */
+  repo_id?: number | null;
 }
 
 /** 生成结果摘要（与 Rust `GenerateSummary` 对应） */
@@ -66,13 +68,37 @@ export interface LlmStreamChunk {
   delta: string;
   /** 页面 id（正文按页累积，实时查看用） */
   page_id?: string | null;
+  repo_id?: number | null;
 }
 
 export const GENERATE_EVENT = "wiki://generate";
 export const LLM_STREAM_EVENT = "wiki://llm-stream";
 
+/** 后台生成任务快照（与 Rust `GenTask` 对应） */
+export interface GenTask {
+  repo_id: number;
+  repo_name: string;
+  repo_path: string;
+  kind: "generate" | "update" | string;
+  phase: string;
+  current: number;
+  total: number;
+  message: string;
+  pages: PageProgress[];
+  started_ms: number;
+  finished: boolean;
+  error: string;
+  prompt_tokens: number;
+  completion_tokens: number;
+}
+
 export const generateApi = {
   generateWiki: (path: string) => invoke<GenerateSummary>("generate_wiki", { path }),
+
+  /** 后台生成任务快照（全局任务页/页面重入水合） */
+  listGenTasks: () => invoke<GenTask[]>("list_gen_tasks"),
+
+  clearGenTasks: () => invoke<void>("clear_gen_tasks"),
 
   listWikiDocs: (path: string) => invoke<WikiDocEntry[]>("list_wiki_docs", { path }),
 

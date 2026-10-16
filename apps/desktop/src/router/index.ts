@@ -62,6 +62,12 @@ const routes = [
     meta: { title: "模型日志", tab: "llm-logs", fullsize: true },
   },
   {
+    path: "/tasks",
+    name: "gen-tasks",
+    component: () => import("@/views/tasks/TasksPage.vue"),
+    meta: { title: "后台任务", fullsize: true },
+  },
+  {
     path: "/mcp-service",
     name: "mcp-service",
     component: () => import("@/views/mcp-service/index.vue"),
