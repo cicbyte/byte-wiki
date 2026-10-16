@@ -39,7 +39,6 @@ import ChatPanel from "@/views/wiki/components/ChatPanel.vue";
 import CallGraphPanel from "@/views/wiki/components/CallGraphPanel.vue";
 import FileBrowse from "@/views/wiki/components/FileBrowse.vue";
 import LlmLogPanel from "@/views/wiki/components/LlmLogPanel.vue";
-import GenProgress from "@/views/wiki/components/GenProgress.vue";
 import LlmStreamTerminal from "@/views/wiki/components/LlmStreamTerminal.vue";
 import { useLlmStreamStore } from "@/stores/llmStream";
 
@@ -74,30 +73,75 @@ const loadFailed = ref(false);
 
 const cards = computed(() => wikiDocs.value.filter(([, kind]) => kind === "card"));
 
-/** 页面清单按章节分组（保持大纲顺序） */
-const genPageGroups = computed(() => {
-  const groups: { section: string; items: PageProgress[] }[] = [];
-  for (const p of genPages.value.values()) {
-    const last = groups[groups.length - 1];
-    if (last && last.section === p.section) {
-      last.items.push(p);
-    } else {
-      groups.push({ section: p.section, items: [p] });
-    }
-  }
-  return groups;
+/** 本次生成/更新开始时间（耗时计时） */
+const genStartedAt = ref<number | null>(null);
+
+/**
+ * 骨架页实时内容：不依赖 busy 态（失败后骨架保留，已完成页仍可回看）。
+ * 未落盘路径（含 overview.md）返回空串占位——绝不读盘，避免「文档不存在」。
+ */
+const liveContent = computed(() => {
+  const cur = currentDoc.value;
+  if (!cur || !genPages.value.size) return null;
+  const hit = [...genPages.value.values()].find((g) => g.path === cur);
+  if (hit) return hit.content || "";
+  if (!wikiDocs.value.some(([d]) => d === cur)) return "";
+  return null;
 });
 
-/** 大纲骨架折叠态（页多时默认收起，只看进度条） */
-const pagesPanelOpen = ref(false);
-/** 本次生成/更新开始时间（进度面板耗时计时） */
-const genStartedAt = ref<number | null>(null);
+/** 当前页的骨架状态（徽标只在 generating 时亮——收尾期 done 页不误报） */
+const liveStatus = computed(() => {
+  const cur = currentDoc.value;
+  if (!cur || !genPages.value.size) return null;
+  return [...genPages.value.values()].find((g) => g.path === cur)?.status ?? null;
+});
+
+const PHASE_TEXT: Record<string, string> = {
+  indexing: "建立索引",
+  checking: "检测变更",
+  outlining: "设计大纲",
+  generating: "生成页面",
+  assembling: "组装写入",
+  embedding: "重建向量索引",
+  done: "完成",
+  error: "失败",
+};
+
+// 耗时计时（运行中每秒跳动）
+const elapsedSec = ref(0);
+let elapsedTimer: ReturnType<typeof setInterval> | null = null;
+onMounted(() => {
+  elapsedTimer = setInterval(() => {
+    if (busy.value && genStartedAt.value) {
+      elapsedSec.value = Math.floor((Date.now() - genStartedAt.value) / 1000);
+    }
+  }, 1000);
+});
+onUnmounted(() => {
+  if (elapsedTimer) clearInterval(elapsedTimer);
+});
+const elapsedText = computed(() => {
+  if (!busy.value || !genStartedAt.value) return "";
+  const s = elapsedSec.value;
+  return `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
+});
 
 // ===== 事件订阅 =====
 let unlisten: Awaited<ReturnType<typeof api.onGenerateEvent>> | null = null;
 let unlistenStream: Awaited<ReturnType<typeof api.onLlmStream>> | null = null;
 onMounted(async () => {
-  unlistenStream = await api.onLlmStream((c) => llmStream.append(c));
+  unlistenStream = await api.onLlmStream((c) => {
+    llmStream.append(c);
+    // 页面正文按页累积（骨架点击实时查看）
+    if (c.page_id && c.channel === "content") {
+      const next = new Map(genPages.value);
+      const hit = next.get(c.page_id);
+      if (hit) {
+        hit.content = (hit.content || "") + c.delta;
+        genPages.value = next;
+      }
+    }
+  });
   unlisten = await api.onGenerateEvent((e) => {
     genProgress.value = e;
     if (e.pages?.length) {
@@ -107,7 +151,6 @@ onMounted(async () => {
       const next = isSkeleton ? new Map<string, PageProgress>() : new Map(genPages.value);
       for (const p of e.pages) next.set(p.id, p);
       genPages.value = next;
-      if (isSkeleton) pagesPanelOpen.value = true;
     }
   });
 });
@@ -208,6 +251,7 @@ async function runGenerate() {
     await refreshRepoInfo();
     await refreshDocs();
     await refreshStaleness();
+    genPages.value = new Map(); // 树切回磁盘文档
     const failNote = s.pages_failed ? `（${s.pages_failed} 页失败）` : "";
     message.success(`Wiki 已生成：${s.pages_generated} 个页面文档${failNote}`);
   } catch (e: any) {
@@ -233,6 +277,7 @@ async function runUpdate() {
     await refreshRepoInfo();
     await refreshDocs();
     await refreshStaleness();
+    genPages.value = new Map();
   } catch (e: any) {
     message.error(typeof e === "string" ? e : "更新失败");
   } finally {
@@ -386,15 +431,17 @@ const busy = computed(() => generating.value || updating.value);
               </button>
             </div>
 
-            <!-- 生成进度（大纲骨架 + 页面级清单） -->
-            <GenProgress
-              v-if="genProgress && (busy || genProgress.phase === 'done')"
-              :progress="genProgress"
-              :groups="genPageGroups"
-              :panel-open="pagesPanelOpen"
-              :started-at="genStartedAt"
-              @toggle-panel="pagesPanelOpen = !pagesPanelOpen"
-            />
+            <!-- 轻量状态行：进度详情在左侧文档树 -->
+            <div v-if="genProgress && (busy || genProgress.phase === 'done')" class="gen-inline">
+              <span class="phase-chip" :class="{ active: busy }">
+                {{ PHASE_TEXT[genProgress.phase] || genProgress.phase }}
+              </span>
+              <span v-if="genProgress.total" class="mono">
+                {{ Math.min(genProgress.current, genProgress.total) }}/{{ genProgress.total }}
+              </span>
+              <span v-if="elapsedText" class="mono dim">{{ elapsedText }}</span>
+              <span class="gen-msg">{{ genProgress.message }}</span>
+            </div>
             <p v-if="genSummary" class="hint">
               生成完成：{{ genSummary.pages }} 个页面文档{{ genSummary.failed ? `（${genSummary.failed} 失败）` : "" }} ·
               prompt {{ genSummary.prompt }} / completion {{ genSummary.completion }} tokens · 耗时
@@ -458,25 +505,24 @@ const busy = computed(() => generating.value || updating.value);
             </button>
           </div>
         </div>
-        <GenProgress
-          v-if="genProgress && busy"
-          class="browse-progress"
-          :progress="genProgress"
-          :groups="genPageGroups"
-          :panel-open="pagesPanelOpen"
-          :started-at="genStartedAt"
-          @toggle-panel="pagesPanelOpen = !pagesPanelOpen"
-        />
-
         <div class="browse-layout">
           <aside class="tree-pane">
-            <WikiTree :docs="wikiDocs" :current="currentDoc" @select="currentDoc = $event" />
+            <WikiTree
+              :docs="wikiDocs"
+              :current="currentDoc"
+              :gen-pages="[...genPages.values()]"
+              :generating="busy"
+              :gen-hint="genProgress?.message"
+              @select="currentDoc = $event"
+            />
           </aside>
           <section class="viewer-pane">
             <WikiViewer
               v-if="currentDoc"
               :repo-path="wiki.currentRepo.path"
               :doc-path="currentDoc"
+              :live-content="liveContent"
+              :live-status="liveStatus"
               @open-doc="openDocInDocs"
               @open-file="openFileAt"
             />
@@ -892,9 +938,41 @@ const busy = computed(() => generating.value || updating.value);
 }
 
 /* 进度与徽标 */
-.browse-progress {
-  padding: 0;
-  flex-shrink: 0;
+.gen-inline {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 2px 0 var(--spacing-sm);
+  min-width: 0;
+}
+.gen-inline .phase-chip {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  background: var(--bg-input);
+  padding: 2px 10px;
+  border-radius: var(--radius-xs);
+  white-space: nowrap;
+}
+.gen-inline .phase-chip.active {
+  color: var(--color-primary);
+  background: var(--color-primary-bg);
+}
+.gen-inline .mono {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 12px;
+  color: var(--text-primary);
+  white-space: nowrap;
+}
+.gen-inline .mono.dim {
+  color: var(--text-tertiary);
+}
+.gen-inline .gen-msg {
+  font-size: 12px;
+  color: var(--text-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .stale-badge {
   font-size: 11px;

@@ -65,6 +65,9 @@ pub struct StreamChunk {
     /// meta（调用开始/结束标记）/ think / content
     pub channel: String,
     pub delta: String,
+    /// 页面 id（正文流式按页累积，前端「点击实时查看」用）
+    #[serde(default)]
+    pub page_id: Option<String>,
 }
 
 /// 单页进度（前端按 id 合并出页面清单）
@@ -78,6 +81,9 @@ pub struct PageProgress {
     pub importance: String,
     /// pending / generating / done / failed
     pub status: String,
+    /// .bytewiki/ 内目标路径（前端文档树骨架定位 + 生成后无缝衔接磁盘文档）
+    #[serde(default)]
+    pub path: Option<String>,
 }
 
 /// 生成结果摘要
@@ -181,6 +187,10 @@ impl AppService {
             .design_outline(&client, repo.id, &repo.name, &modules, &known_files, repo_path, on_event)
             .await?;
         let total = outline.pages.len();
+        // 路径分配先行：骨架事件即带目标路径（前端树骨架与生成后磁盘文档无缝衔接）
+        let jobs = self.plan_jobs(&outline);
+        let path_of: HashMap<String, String> =
+            jobs.iter().map(|j| (j.page.id.clone(), j.rel_path.clone())).collect();
         on_event(GenerateEvent {
             phase: "outlining".into(),
             current: 0,
@@ -188,32 +198,33 @@ impl AppService {
             message: format!("大纲确定：{} 章节 · {} 个页面", outline.sections.len(), total),
             prompt_tokens: 0,
             completion_tokens: 0,
-            pages: Some(skeleton(&outline)),
+            pages: Some(skeleton(&outline, &path_of)),
             stream: None,
         });
+        persist_outline(root, &outline);
 
-        // ---- 阶段 3：逐页生成 ----
-        let mut tokens = (0u64, 0u64);
-        let jobs = self.plan_jobs(&outline);
-        let (results, failed) = self
-            .run_page_jobs(&client, repo.id, &repo.name, repo_path, root, &outline, &jobs, &known_files, &file_module, &modules, on_event, &mut tokens)
-            .await?;
-
-        // ---- 阶段 4：总览页 ----
-        on_event(ev("generating", total, total, "生成总览页"));
+        // ---- 阶段 3：总览页（仅依赖大纲与路径；提前生成——
+        //      逐页可能耗时很久，避免「全部页面完成后还剩一次长调用」的最后一公里静默，
+        //      且中途重启时总览与已完成页面均已进缓存，重跑零成本） ----
+        on_event(ev("generating", 0, total, "生成总览页"));
+        let rel_paths: Vec<String> = jobs.iter().map(|j| j.rel_path.clone()).collect();
         let (overview, out) = match self
-            .generate_overview(&client, repo.id, &repo.name, &outline, &results, &modules, repo_path, on_event)
+            .generate_overview(&client, repo.id, &repo.name, &outline, &rel_paths, &modules, repo_path, on_event)
             .await
         {
             Ok(v) => v,
             Err(e) => {
                 tracing::warn!("总览页生成失败（用占位替代）：{e}");
-                on_event(ev("generating", total, total, format!("总览页生成失败（占位）：{e}")));
+                on_event(ev("generating", 0, total, format!("总览页生成失败（占位）：{e}")));
                 ("# Wiki 总览\n\n> 总览页生成失败，可稍后重新生成。\n".to_string(), Default::default())
             }
         };
-        tokens.0 += out.prompt_tokens;
-        tokens.1 += out.completion_tokens;
+        let mut tokens = (out.prompt_tokens, out.completion_tokens);
+
+        // ---- 阶段 4：逐页生成 ----
+        let (results, failed) = self
+            .run_page_jobs(&client, repo.id, &repo.name, repo_path, root, &outline, &jobs, &known_files, &file_module, &modules, on_event, &mut tokens)
+            .await?;
 
         // ---- 阶段 5：组装落盘（全量成功后原子替换）----
         on_event(ev("assembling", 0, 0, "写入 .bytewiki/"));
@@ -297,6 +308,10 @@ impl AppService {
             }
         };
         let total = outline.pages.len();
+        // 路径分配先行：骨架事件即带目标路径
+        let mut jobs = self.plan_jobs(&outline);
+        let path_of: HashMap<String, String> =
+            jobs.iter().map(|j| (j.page.id.clone(), j.rel_path.clone())).collect();
         on_event(GenerateEvent {
             phase: "outlining".into(),
             current: 0,
@@ -304,12 +319,12 @@ impl AppService {
             message: format!("大纲就绪：{} 个页面", total),
             prompt_tokens: 0,
             completion_tokens: 0,
-            pages: Some(skeleton(&outline)),
+            pages: Some(skeleton(&outline, &path_of)),
             stream: None,
         });
+        persist_outline(root, &outline);
 
         // ---- 4）页任务：绑定文件 ∩ 变更 → 重生成；其余从磁盘沿用 ----
-        let mut jobs = self.plan_jobs(&outline);
         for job in &mut jobs {
             let untouched = !job.page.files.iter().any(|f| changed.contains(f));
             if untouched {
@@ -319,15 +334,12 @@ impl AppService {
             }
         }
         let regen = jobs.iter().filter(|j| matches!(j.action, PageAction::Generate)).count();
-        let mut tokens = (0u64, 0u64);
-        let (results, failed) = self
-            .run_page_jobs(&client, repo.id, &repo.name, repo_path, root, &outline, &jobs, &known_files, &file_module, &modules, on_event, &mut tokens)
-            .await?;
 
-        // ---- 5）总览 + 组装 + 向量 ----
-        on_event(ev("generating", total, total, "重新生成总览页"));
+        // ---- 5）总览（提前：仅依赖大纲与路径）+ 逐页 + 组装 ----
+        on_event(ev("generating", 0, total, "重新生成总览页"));
+        let rel_paths: Vec<String> = jobs.iter().map(|j| j.rel_path.clone()).collect();
         let (overview, out) = match self
-            .generate_overview(&client, repo.id, &repo.name, &outline, &results, &modules, repo_path, on_event)
+            .generate_overview(&client, repo.id, &repo.name, &outline, &rel_paths, &modules, repo_path, on_event)
             .await
         {
             Ok(v) => v,
@@ -336,8 +348,10 @@ impl AppService {
                 ("# Wiki 总览\n\n> 总览页生成失败，可稍后重新生成。\n".to_string(), Default::default())
             }
         };
-        tokens.0 += out.prompt_tokens;
-        tokens.1 += out.completion_tokens;
+        let mut tokens = (out.prompt_tokens, out.completion_tokens);
+        let (results, failed) = self
+            .run_page_jobs(&client, repo.id, &repo.name, repo_path, root, &outline, &jobs, &known_files, &file_module, &modules, on_event, &mut tokens)
+            .await?;
 
         on_event(ev("assembling", 0, 0, "写入 .bytewiki/"));
         self.assemble_wiki(&canon, repo.id, &outline, &results, &overview, &modules, &provider.chat_model)?;
@@ -364,6 +378,7 @@ impl AppService {
     // ============ 内部：阶段实现 ============
 
     /// LLM 大纲设计（流式输出 + 心跳事件；解析失败带错误重试一次）
+    #[allow(clippy::too_many_arguments)]
     async fn design_outline(
         &self,
         client: &LlmClient,
@@ -400,7 +415,7 @@ impl AppService {
             let messages = vec![ChatMessage::system(system), ChatMessage::user(user.clone())];
             let out = self
                 .llm_call_logged(client, repo_id, repo_name, "outline", "Wiki 大纲", attempt + 1,
-                    &messages, "outlining", 0, 0, "大纲生成中", on_event)
+                    &messages, "outlining", 0, 0, "大纲生成中", None, on_event)
                 .await?;
             match parse_outline(&out.text) {
                 Ok(o) => {
@@ -466,6 +481,17 @@ impl AppService {
             let chain = outline.section_chain(page).join(" / ");
             if let PageAction::Keep(content) = &job.action {
                 done += 1;
+                // 沿用页也推状态（否则骨架里恒灰，用户无法分辨「没轮到」与「跳过」）
+                on_event(GenerateEvent {
+                    phase: "generating".into(),
+                    current: done,
+                    total,
+                    message: format!("沿用页面：{}", page.title),
+                    prompt_tokens: 0,
+                    completion_tokens: 0,
+                    pages: Some(vec![page_progress(page, &chain, "done", Some(job.rel_path.clone()))]),
+                    stream: None,
+                });
                 results.push(PageOutcome {
                     rel_path: job.rel_path.clone(),
                     title: page.title.clone(),
@@ -483,7 +509,7 @@ impl AppService {
                 message: format!("生成页面：{}", page.title),
                 prompt_tokens: 0,
                 completion_tokens: 0,
-                pages: Some(vec![page_progress(page, &chain, "generating")]),
+                pages: Some(vec![page_progress(page, &chain, "generating", Some(job.rel_path.clone()))]),
                 stream: None,
             });
 
@@ -511,6 +537,18 @@ impl AppService {
                     (placeholder_page(page, last_err.as_deref().unwrap_or("未知错误")), false)
                 }
             };
+            // 实时落盘：页面完成即写入正式目录并登记——长任务（数十页 × 分钟级）
+            // 中断时进度持久（重开即见，重跑未完成页即可）；最终组装以相同内容
+            // 幂等替换，Keep 页内容本就来自磁盘不再重写
+            let target = root.join(".bytewiki").join(&job.rel_path);
+            if let Some(parent) = target.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            if let Err(e) = std::fs::write(&target, &final_content) {
+                tracing::warn!("页面实时落盘失败（最终组装时会重写）：{e}");
+            } else {
+                let _ = self.db.upsert_generated_doc(repo_id, "page", &job.rel_path, &page.title);
+            }
             results.push(PageOutcome {
                 rel_path: job.rel_path.clone(),
                 title: page.title.clone(),
@@ -528,7 +566,7 @@ impl AppService {
                 },
                 prompt_tokens: tokens.0,
                 completion_tokens: tokens.1,
-                pages: Some(vec![page_progress(page, &chain, if ok { "done" } else { "failed" })]),
+                pages: Some(vec![page_progress(page, &chain, if ok { "done" } else { "failed" }, Some(job.rel_path.clone()))]),
                 stream: None,
             });
         }
@@ -542,7 +580,7 @@ impl AppService {
         client: &LlmClient,
         repo_id: i64,
         repo_name: &str,
-        repo_path: &str,
+        _repo_path: &str,
         root: &Path,
         outline: &WikiOutline,
         page: &OutlinePage,
@@ -588,8 +626,10 @@ impl AppService {
         // 源文件档案（带行号）
         let (file_ctx, _full, _skipped) = crate::generator::pages::build_file_context(root, &page.files);
 
-        // RAG 补充（有向量索引才启用；失败静默跳过）
-        let rag_ctx = self.rag_supplement(repo_path, &format!("{} {}", page.title, page.description)).await;
+        // 注意：页面管线不拼 RAG 补充——chunks 是否存在会让 prompt 漂移，
+        // 缓存键随之全变（曾导致重建向量索引后 38 页全部 miss 从 0 生成）。
+        // 页上下文已含绑定文件全文，RAG 增量价值有限；确定性优先。
+        let rag_ctx = String::new();
 
         let min_files = page.files.len().min(5);
         let messages = page_messages(
@@ -598,7 +638,7 @@ impl AppService {
         let out = self
             .llm_call_logged(client, repo_id, repo_name, "page", &page.title, attempt,
                 &messages, "generating", current, total,
-                &format!("《{}》撰写中", page.title), on_event)
+                &format!("《{}》撰写中", page.title), Some(&page.id), on_event)
             .await?;
         Ok((postprocess_page(&out.text, known_files), out))
     }
@@ -618,6 +658,7 @@ impl AppService {
         current: usize,
         total: usize,
         label: &str,
+        page_id: Option<&str>,
         on_event: &(dyn Fn(GenerateEvent) + Send + Sync),
     ) -> CoreResult<crate::llm::ChatOutcome> {
         let started = std::time::Instant::now();
@@ -678,9 +719,10 @@ impl AppService {
                 delta: format!("
 ▶ [{stage}] {title}（第 {attempt} 次尝试）
 "),
+                page_id: page_id.map(str::to_string),
             }),
         });
-        let result = stream_llm(client, messages, phase, current, total, label, on_event).await;
+        let result = stream_llm(client, messages, phase, current, total, label, page_id, on_event).await;
         on_event(GenerateEvent {
             phase: phase.to_string(),
             current,
@@ -703,6 +745,7 @@ impl AppService {
 ✘ [{stage}] 失败：{e}
 "),
                 },
+                page_id: page_id.map(str::to_string),
             }),
         });
         // 成功才缓存（失败结果不进缓存，重跑即重试）
@@ -746,7 +789,10 @@ impl AppService {
         result
     }
 
-    /// RAG 补充检索（best-effort：无索引/失败返回空）
+    /// RAG 补充检索（best-effort：无索引/失败返回空）。
+    /// 目前不接入页面管线（见 generate_one_page 注释）；预留给问答/未来
+    /// 显式「RAG 增强生成」模式。
+    #[allow(dead_code)]
     async fn rag_supplement(&self, repo_path: &str, query: &str) -> String {
         let Ok(canon) = crate::canonical_key(Path::new(repo_path)) else {
             return String::new();
@@ -773,24 +819,26 @@ impl AppService {
         }
     }
 
-    /// 总览页：页面目录（真实相对链接）+ README + 依赖图（流式 + 心跳）
+    /// 总览页：页面目录（真实相对链接）+ README + 依赖图（流式 + 心跳）。
+    /// 只依赖大纲与页面路径（不依赖页面内容），可在逐页生成前调用。
+    #[allow(clippy::too_many_arguments)]
     async fn generate_overview(
         &self,
         client: &LlmClient,
         repo_id: i64,
         repo_name: &str,
         outline: &WikiOutline,
-        results: &[PageOutcome],
+        rel_paths: &[String],
         modules: &[ModuleCtx],
         repo_path: &str,
         on_event: &(dyn Fn(GenerateEvent) + Send + Sync),
     ) -> CoreResult<(String, crate::llm::ChatOutcome)> {
-        // results 与 outline.pages 顺序一致（plan_jobs 保证），zip 得 id → rel
+        // rel_paths 与 outline.pages 顺序一致（plan_jobs 保证），zip 得 id → rel
         let rel_of: HashMap<&str, &str> = outline
             .pages
             .iter()
             .map(|p| p.id.as_str())
-            .zip(results.iter().map(|r| r.rel_path.as_str()))
+            .zip(rel_paths.iter().map(|r| r.as_str()))
             .collect();
 
         // 目录：按章节组织；无章节页面归入「其他」
@@ -843,7 +891,7 @@ impl AppService {
         );
         let out = self
             .llm_call_logged(client, repo_id, repo_name, "overview", "Wiki 总览", 1,
-                &messages, "generating", results.len(), results.len(), "总览页撰写中", on_event)
+                &messages, "generating", rel_paths.len(), rel_paths.len(), "总览页撰写中", None, on_event)
             .await?;
         Ok((postprocess::sanitize_md(&out.text), out))
     }
@@ -1061,6 +1109,7 @@ impl AppService {
 
 /// LLM 调用统一走流式：输出增量节流推「已输出 N 字」心跳事件，
 /// 避免单次数分钟的静默期（前端看起来像卡死）
+#[allow(clippy::too_many_arguments)]
 async fn stream_llm(
     client: &LlmClient,
     messages: &[ChatMessage],
@@ -1068,6 +1117,7 @@ async fn stream_llm(
     current: usize,
     total: usize,
     label: &str,
+    page_id: Option<&str>,
     on_event: &(dyn Fn(GenerateEvent) + Send + Sync),
 ) -> CoreResult<crate::llm::ChatOutcome> {
     // (上次心跳时间, 累计思考字数, 累计输出字数)
@@ -1114,6 +1164,7 @@ async fn stream_llm(
                 call: call_label.clone(),
                 channel: channel.to_string(),
                 delta: delta.to_string(),
+                page_id: page_id.map(str::to_string),
             }),
         });
     };
@@ -1148,6 +1199,20 @@ async fn stream_llm(
 }
 
 
+/// 大纲确定即持久化 outline.json：中断后重开应用，增量更新可按既有大纲续跑
+fn persist_outline(root: &Path, outline: &WikiOutline) {
+    let wiki = root.join(".bytewiki");
+    let _ = std::fs::create_dir_all(&wiki);
+    match serde_json::to_string_pretty(outline) {
+        Ok(text) => {
+            if let Err(e) = std::fs::write(wiki.join("outline.json"), text) {
+                tracing::warn!("outline.json 提前落盘失败（组装时会重写）：{e}");
+            }
+        }
+        Err(e) => tracing::warn!("outline 序列化失败：{e}"),
+    }
+}
+
 fn ev(phase: &str, current: usize, total: usize, message: impl Into<String>) -> GenerateEvent {
     GenerateEvent {
         phase: phase.into(),
@@ -1161,22 +1226,31 @@ fn ev(phase: &str, current: usize, total: usize, message: impl Into<String>) -> 
     }
 }
 
-/// 全量页面骨架（大纲确定事件）
-fn skeleton(outline: &WikiOutline) -> Vec<PageProgress> {
+/// 全量页面骨架（大纲确定事件，带目标路径）
+fn skeleton(outline: &WikiOutline, path_of: &HashMap<String, String>) -> Vec<PageProgress> {
     outline
         .pages
         .iter()
-        .map(|p| page_progress(p, &outline.section_chain(p).join(" / "), "pending"))
+        .map(|p| {
+            page_progress(p, &outline.section_chain(p).join(" / "), "pending", path_of.get(&p.id).cloned())
+        })
         .collect()
 }
 
-fn page_progress(page: &OutlinePage, section: &str, status: &str) -> PageProgress {
+#[allow(clippy::too_many_arguments)]
+fn page_progress(
+    page: &OutlinePage,
+    section: &str,
+    status: &str,
+    path: Option<String>,
+) -> PageProgress {
     PageProgress {
         id: page.id.clone(),
         title: page.title.clone(),
         section: section.to_string(),
         importance: page.importance.clone(),
         status: status.into(),
+        path,
     }
 }
 

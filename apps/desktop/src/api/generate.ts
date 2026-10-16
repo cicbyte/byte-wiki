@@ -12,6 +12,10 @@ export interface PageProgress {
   section: string;
   importance: "high" | "medium" | "low" | string;
   status: "pending" | "generating" | "done" | "failed";
+  /** .bytewiki/ 内目标路径（树骨架定位 + 生成后衔接磁盘文档） */
+  path?: string | null;
+  /** 前端本地累积的实时正文（流式按页拼接；后端不回传） */
+  content?: string;
 }
 
 /** 生成进度事件（与 Rust `GenerateEvent` 对应） */
@@ -60,6 +64,8 @@ export interface LlmStreamChunk {
   /** meta（调用开始/结束标记）/ think / content */
   channel: "meta" | "think" | "content" | string;
   delta: string;
+  /** 页面 id（正文按页累积，实时查看用） */
+  page_id?: string | null;
 }
 
 export const GENERATE_EVENT = "wiki://generate";

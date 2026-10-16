@@ -11,13 +11,17 @@ import { MdPreview } from "md-editor-v3";
 // 没访问过 MCP 页时本组件渲染裸奔（代码块工具栏/语言标签/复制按钮全无样式）
 import "md-editor-v3/lib/style.css";
 import { message } from "ant-design-vue";
-import { ZoomInOutlined, ZoomOutOutlined, ReloadOutlined } from "@ant-design/icons-vue";
+import { ZoomInOutlined, ZoomOutOutlined, ReloadOutlined, LoadingOutlined } from "@ant-design/icons-vue";
 import { api } from "@/api";
 import { useThemeStore } from "@/stores/theme";
 
 const props = defineProps<{
   repoPath: string;
   docPath: string;
+  /** 生成中实时内容（骨架页点击查看；非空时优先于磁盘读取） */
+  liveContent?: string | null;
+  /** 当前页骨架状态（generating 时才亮徽标；收尾期 done 页静默） */
+  liveStatus?: string | null;
 }>();
 
 const emit = defineEmits<{
@@ -107,6 +111,10 @@ function onBodyClick(ev: MouseEvent) {
   <div class="wiki-viewer">
     <div class="viewer-toolbar">
       <span class="doc-path">{{ docPath }}</span>
+      <span v-if="liveContent != null && liveStatus === 'generating'" class="live-badge" title="页面正在生成，内容实时刷新">
+        <span class="live-dot"></span>
+        实时生成中
+      </span>
       <span v-if="loading" class="loading-hint">加载中…</span>
       <template v-if="isGraph">
         <button class="zoom-btn" title="放大" @click="zoomBy(0.1)"><ZoomInOutlined /></button>
@@ -116,7 +124,13 @@ function onBodyClick(ev: MouseEvent) {
       </template>
     </div>
     <div class="viewer-body" :class="{ graph: isGraph }" @click.capture="onBodyClick">
+      <!-- 实时模式且尚无正文：排队/思考占位 -->
+      <div v-if="liveContent != null && !content" class="live-empty">
+        <LoadingOutlined spin />
+        <span>页面排队等待生成 · 模型思考中正文会实时出现</span>
+      </div>
       <div
+        v-else
         class="md-host"
         :style="isGraph ? { transform: `scale(${zoom})`, 'transform-origin': 'top left' } : undefined"
       >
@@ -161,6 +175,34 @@ function onBodyClick(ev: MouseEvent) {
   font-size: 11px;
   color: var(--text-tertiary);
 }
+.live-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--color-primary);
+  background: var(--color-primary-bg);
+  border-radius: var(--radius-xs);
+  padding: 1px 8px;
+  white-space: nowrap;
+}
+.live-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--color-primary);
+  animation: live-blink 1.1s ease-in-out infinite;
+}
+@keyframes live-blink {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.25;
+  }
+}
 .zoom-btn {
   display: inline-flex;
   align-items: center;
@@ -189,6 +231,19 @@ function onBodyClick(ev: MouseEvent) {
   min-height: 0;
   overflow: auto;
   padding: var(--spacing-md) var(--spacing-lg);
+}
+.live-empty {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  color: var(--text-tertiary);
+  font-size: 13px;
+}
+.live-empty :deep(.anticon) {
+  color: var(--color-primary);
+  font-size: 16px;
 }
 /* 图谱模式：允许横向平移查看大图 */
 .viewer-body.graph {
