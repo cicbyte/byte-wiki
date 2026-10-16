@@ -1,13 +1,25 @@
-//! LLM 客户端：chat（流式 / 非流式）与 embedding
+//! LLM 客户端：rig-core 内核 + 项目门面
 //!
-//! 双协议（按 `LlmConfig.provider` 分派）：
-//! - ollama：`/api/chat`（NDJSON 流）、`/api/embed`
-//! - openai ：`/chat/completions`（SSE 流）、`/embeddings`（OpenAI 兼容端点）
+//! 内核全面走 rig（openai Completions 兼容 / ollama 两个 provider）：
+//! 流式增量、思考通道（`reasoning_content` / `reasoning` 字段变体由 rig
+//! 归一为 ReasoningDelta）、usage 归一化、多供应商生态都交给 rig；
+//! 门面保持既有 API 与配置模型不变（`LlmProvider.kind = ollama|openai`），
+//! 缓存、模型日志、心跳、流式终端、`__CHAT_CANCELLED__` 取消哨兵等
+//! 上层钩子零改动。
 //!
-//! 流式实现用 `Response::chunk()` 逐块读取 + 行缓冲解析，无额外依赖。
+//! 超时：给 rig 注入自建 reqwest 0.13 后端（总 600s / 连接 10s），
+//! 与旧手写客户端语义一致。
 
 use crate::model::{LlmConfig, LlmProvider};
 use crate::{CoreError, CoreResult};
+
+use futures_util::StreamExt;
+use rig_core::client::{CompletionClient, EmbeddingsClient};
+use rig_core::completion::CompletionModel;
+use rig_core::message::Message as RigMessage;
+use rig_core::providers::openai::CompletionsClient;
+use rig_core::providers::ollama;
+use rig_core::streaming::{StreamFinal, StreamedAssistantContent, StreamingCompletionResponse};
 
 /// 对话消息（role: system / user / assistant）
 #[derive(Debug, Clone, serde::Serialize)]
@@ -43,10 +55,27 @@ pub struct ChatOutcome {
     pub completion_tokens: u64,
 }
 
+/// 取消哨兵：token 边界中断时返回（前端识别为用户主动停止）
+const CANCEL_SENTINEL: &str = "__CHAT_CANCELLED__";
+
+/// rig 网关：按供应商 kind 分派
+enum Gateway {
+    OpenAi(CompletionsClient),
+    Ollama(ollama::Client),
+}
+
 /// LLM 客户端（只读配置，可复用；无内部状态）
 pub struct LlmClient {
-    http: reqwest::Client,
     cfg: LlmProvider,
+    gateway: Gateway,
+}
+
+fn http_backend() -> CoreResult<reqwest13::Client> {
+    reqwest13::Client::builder()
+        .timeout(std::time::Duration::from_secs(600))
+        .connect_timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|e| CoreError::Other(anyhow::anyhow!("HTTP 客户端创建失败：{e}")))
 }
 
 impl LlmClient {
@@ -87,6 +116,39 @@ impl LlmClient {
         Self::for_provider(p)
     }
 
+    /// 按指定供应商创建
+    pub fn for_provider(p: &LlmProvider) -> CoreResult<Self> {
+        let gateway = match p.kind.as_str() {
+            "ollama" => Gateway::Ollama(
+                ollama::Client::builder()
+                    .api_key(ollama::OllamaApiKey::default())
+                    .base_url(p.api_endpoint.trim_end_matches('/'))
+                    .http_client(http_backend()?)
+                    .build()
+                    .map_err(|e| CoreError::Other(anyhow::anyhow!("ollama 客户端构建失败：{e}")))?,
+            ),
+            // openai 兼容端点：base 缺 /v1 时补上（deepseek/sensenova 裸域名都能用）
+            "openai" => {
+                let mut base = p.api_endpoint.trim_end_matches('/').to_string();
+                if !base.ends_with("/v1") {
+                    base.push_str("/v1");
+                }
+                // 空 key（本地网关）用占位串，rig 构建要求 key 必填
+                let key = if p.api_key.trim().is_empty() { "EMPTY".to_string() } else { p.api_key.clone() };
+                Gateway::OpenAi(
+                    CompletionsClient::builder()
+                        .api_key(key)
+                        .base_url(base)
+                        .http_client(http_backend()?)
+                        .build()
+                        .map_err(|e| CoreError::Other(anyhow::anyhow!("openai 兼容客户端构建失败：{e}")))?,
+                )
+            }
+            other => return Err(unknown_provider(other)),
+        };
+        Ok(Self { cfg: p.clone(), gateway })
+    }
+
     /// 模型名（日志/调试展示）
     pub fn model_name(&self) -> &str {
         &self.cfg.chat_model
@@ -97,32 +159,19 @@ impl LlmClient {
         format!("{} · {}", self.cfg.id, self.cfg.name)
     }
 
-    /// 按指定供应商创建
-    pub fn for_provider(p: &LlmProvider) -> CoreResult<Self> {
-        let http = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(600))
-            .connect_timeout(std::time::Duration::from_secs(10))
-            .build()
-            .map_err(|e| CoreError::Other(anyhow::anyhow!("HTTP 客户端创建失败：{e}")))?;
-        Ok(Self { http, cfg: p.clone() })
-    }
-
     /// 非流式对话
     pub async fn chat(&self, messages: &[ChatMessage], opts: &ChatOptions) -> CoreResult<String> {
         Ok(self.chat_detailed(messages, opts).await?.text)
     }
 
-    /// 非流式对话（带 token 用量）
+    /// 非流式对话（带 token 用量；内部复用流式通道累积）
     pub async fn chat_detailed(
         &self,
         messages: &[ChatMessage],
         opts: &ChatOptions,
     ) -> CoreResult<ChatOutcome> {
-        match self.cfg.kind.as_str() {
-            "ollama" => self.ollama_chat(messages, opts).await,
-            "openai" => self.openai_chat(messages, opts).await,
-            other => Err(unknown_provider(other)),
-        }
+        self.chat_stream_ext(messages, opts, &|_| {}, &|_| {}, &|| false)
+            .await
     }
 
     /// 流式对话：每收到增量片段调用 `on_delta`，返回全文与用量
@@ -136,7 +185,7 @@ impl LlmClient {
             .await
     }
 
-    /// 流式对话（扩展）：思考过程通道 + 取消检查（token 边界检测，返回 ChatCancelled）
+    /// 流式对话（扩展）：思考过程通道 + 取消检查（token 边界检测，返回取消哨兵错误）
     pub async fn chat_stream_ext(
         &self,
         messages: &[ChatMessage],
@@ -145,328 +194,144 @@ impl LlmClient {
         on_thinking: &(dyn Fn(&str) + Send + Sync),
         is_cancelled: &(dyn Fn() -> bool + Send + Sync),
     ) -> CoreResult<ChatOutcome> {
-        match self.cfg.kind.as_str() {
-            "ollama" => {
-                self.ollama_chat_stream_ext(messages, opts, on_delta, on_thinking, is_cancelled)
-                    .await
+        match &self.gateway {
+            Gateway::OpenAi(c) => {
+                let model = c.completion_model(self.cfg.chat_model.clone());
+                drive_stream(&model, messages, opts, on_delta, on_thinking, is_cancelled).await
             }
-            "openai" => {
-                self.openai_chat_stream_ext(messages, opts, on_delta, on_thinking, is_cancelled)
-                    .await
+            Gateway::Ollama(c) => {
+                let model = c.completion_model(self.cfg.chat_model.clone());
+                drive_stream(&model, messages, opts, on_delta, on_thinking, is_cancelled).await
             }
-            other => Err(unknown_provider(other)),
         }
     }
 
-    /// 批量 embedding（返回与输入等长的向量数组）
+    /// 文本向量化（建库与检索共用；与建库同模型由调用方保证）
     pub async fn embed(&self, texts: &[String]) -> CoreResult<Vec<Vec<f32>>> {
+        use rig_core::embeddings::EmbeddingModel;
         if texts.is_empty() {
             return Ok(vec![]);
         }
-        match self.cfg.kind.as_str() {
-            "ollama" => self.ollama_embed(texts).await,
-            "openai" => self.openai_embed(texts).await,
-            other => Err(unknown_provider(other)),
-        }
+        let embeddings = match &self.gateway {
+            Gateway::OpenAi(c) => {
+                let m = c.embedding_model(self.cfg.embed_model.clone());
+                m.embed_texts(texts.to_vec()).await
+            }
+            Gateway::Ollama(c) => {
+                let m = c.embedding_model(self.cfg.embed_model.clone());
+                m.embed_texts(texts.to_vec()).await
+            }
+        };
+        let embeddings = embeddings
+            .map_err(|e| CoreError::Other(anyhow::anyhow!("embedding 失败：{e}")))?;
+        Ok(embeddings.into_iter().map(|e| e.vec.iter().map(|&f| f as f32).collect()).collect())
     }
+}
 
-    // ============ ollama ============
-
-    async fn ollama_chat(
-        &self,
-        messages: &[ChatMessage],
-        opts: &ChatOptions,
-    ) -> CoreResult<ChatOutcome> {
-        let url = self.endpoint("/api/chat");
-        let body = serde_json::json!({
-            "model": self.cfg.chat_model,
-            "messages": messages,
-            "stream": false,
-            "options": ollama_options(opts),
-        });
-        let resp = self.post_json(&url, &body).await?;
-        let v: serde_json::Value = resp.json().await.map_err(bad_body)?;
-        let text = v
-            .pointer("/message/content")
-            .and_then(|t| t.as_str())
-            .ok_or_else(|| CoreError::Other(anyhow::anyhow!("ollama 响应缺少 message.content")))?;
-        Ok(ChatOutcome {
-            text: text.to_string(),
-            prompt_tokens: v.get("prompt_eval_count").and_then(|n| n.as_u64()).unwrap_or(0),
-            completion_tokens: v.get("eval_count").and_then(|n| n.as_u64()).unwrap_or(0),
+/// 驱动 rig 流：消息映射（system→preamble，末条 user 作 prompt）→
+/// 流项分派（Text→正文、Reasoning*→思考、Final→usage），token 边界检查取消
+async fn drive_stream<M: CompletionModel + Clone>(
+    model: &M,
+    messages: &[ChatMessage],
+    opts: &ChatOptions,
+    on_delta: &(dyn Fn(&str) + Send + Sync),
+    on_thinking: &(dyn Fn(&str) + Send + Sync),
+    is_cancelled: &(dyn Fn() -> bool + Send + Sync),
+) -> CoreResult<ChatOutcome> {
+    let preamble: Option<String> = messages
+        .iter()
+        .find(|m| m.role == "system")
+        .map(|m| m.content.clone());
+    let convo: Vec<RigMessage> = messages
+        .iter()
+        .filter(|m| m.role != "system")
+        .map(|m| {
+            if m.role == "assistant" {
+                RigMessage::assistant(m.content.clone())
+            } else {
+                RigMessage::user(m.content.clone())
+            }
         })
-    }
+        .collect();
+    let (prompt, history) = match convo.split_last() {
+        Some((last, rest)) => (last.clone(), rest.to_vec()),
+        None => return Err(CoreError::Other(anyhow::anyhow!("消息列表为空（缺 user 消息）"))),
+    };
 
-    #[allow(clippy::too_many_arguments)]
-    async fn ollama_chat_stream_ext(
-        &self,
-        messages: &[ChatMessage],
-        opts: &ChatOptions,
-        on_delta: &(dyn Fn(&str) + Send + Sync),
-        on_thinking: &(dyn Fn(&str) + Send + Sync),
-        is_cancelled: &(dyn Fn() -> bool + Send + Sync),
-    ) -> CoreResult<ChatOutcome> {
-        let url = self.endpoint("/api/chat");
-        let body = serde_json::json!({
-            "model": self.cfg.chat_model,
-            "messages": messages,
-            "stream": true,
-            "options": ollama_options(opts),
-        });
-        let mut resp = self.post_json(&url, &body).await?;
-        let mut outcome = ChatOutcome::default();
-        let mut lines = LineBuffer::default();
-        loop {
-            let chunk = resp
-                .chunk()
-                .await
-                .map_err(|e| CoreError::Other(anyhow::anyhow!("流读取失败：{e}")))?;
-            let Some(chunk) = chunk else { break };
-            if is_cancelled() {
-                drop(resp);
-                return Err(CoreError::Other(anyhow::anyhow!("__CHAT_CANCELLED__")));
+    let mut builder = model.completion_request(prompt);
+    if let Some(sys) = preamble {
+        builder = builder.preamble(sys);
+    }
+    builder = builder
+        .messages(history)
+        .temperature_opt(opts.temperature.map(f64::from))
+        .max_tokens_opt(opts.max_tokens);
+
+    let mut stream: StreamingCompletionResponse = builder
+        .stream()
+        .await
+        .map_err(rig_err)?;
+    let mut out = ChatOutcome::default();
+    while let Some(item) = stream.next().await {
+        if is_cancelled() {
+            drop(stream); // 中断底层请求（真取消，不再计费）
+            return Err(CoreError::Other(anyhow::anyhow!(CANCEL_SENTINEL)));
+        }
+        match item.map_err(rig_err)? {
+            StreamedAssistantContent::Text(t) => {
+                let s = t.text.clone();
+                if !s.is_empty() {
+                    on_delta(&s);
+                    out.text.push_str(&s);
+                }
             }
-            for line in lines.push(&chunk) {
-                if line.trim().is_empty() {
-                    continue;
+            StreamedAssistantContent::ReasoningDelta { reasoning, .. } => {
+                if !reasoning.is_empty() {
+                    on_thinking(&reasoning);
                 }
-                let Ok(v) = serde_json::from_str::<serde_json::Value>(&line) else {
-                    tracing::warn!("ollama 流行解析失败，跳过：{line}");
-                    continue;
-                };
-                // 思考通道：message.thinking（Ollama 新版）/ message.reasoning_content（兼容）
-                if let Some(th) = v
-                    .pointer("/message/thinking")
-                    .or_else(|| v.pointer("/message/reasoning_content"))
-                    .and_then(|t| t.as_str())
-                {
-                    if !th.is_empty() {
-                        on_thinking(th);
-                    }
+            }
+            StreamedAssistantContent::Reasoning { reasoning, .. } => {
+                let s = reasoning_text(&reasoning);
+                if !s.is_empty() {
+                    on_thinking(&s);
                 }
-                if let Some(delta) = v.pointer("/message/content").and_then(|t| t.as_str()) {
-                    if !delta.is_empty() {
-                        on_delta(delta);
-                        outcome.text.push_str(delta);
-                    }
-                }
-                if v.get("done").and_then(|d| d.as_bool()).unwrap_or(false) {
-                    outcome.prompt_tokens =
-                        v.get("prompt_eval_count").and_then(|n| n.as_u64()).unwrap_or(0);
-                    outcome.completion_tokens =
-                        v.get("eval_count").and_then(|n| n.as_u64()).unwrap_or(0);
-                }
+            }
+            StreamedAssistantContent::Final(f) => {
+                apply_usage(&f, &mut out);
+            }
+            other => {
+                tracing::debug!("忽略流项：{other:?}");
             }
         }
-        Ok(outcome)
     }
+    Ok(out)
+}
 
-    async fn ollama_embed(&self, texts: &[String]) -> CoreResult<Vec<Vec<f32>>> {
-        let url = self.endpoint("/api/embed");
-        let body = serde_json::json!({ "model": self.cfg.embed_model, "input": texts });
-        let resp = self.post_json(&url, &body).await?;
-        let v: serde_json::Value = resp.json().await.map_err(bad_body)?;
-        let arr = v
-            .get("embeddings")
-            .and_then(|e| e.as_array())
-            .ok_or_else(|| CoreError::Other(anyhow::anyhow!("ollama 响应缺少 embeddings")))?;
-        arr.iter()
-            .map(|row| {
-                row.as_array()
-                    .map(|nums| nums.iter().filter_map(|n| n.as_f64().map(|f| f as f32)).collect())
-                    .ok_or_else(|| CoreError::Other(anyhow::anyhow!("embedding 行格式错误")))
-            })
-            .collect()
-    }
-
-    // ============ openai 兼容 ============
-
-    async fn openai_chat(
-        &self,
-        messages: &[ChatMessage],
-        opts: &ChatOptions,
-    ) -> CoreResult<ChatOutcome> {
-        let url = self.endpoint_openai("/chat/completions");
-        let body = serde_json::json!({
-            "model": self.cfg.chat_model,
-            "messages": messages,
-            "stream": false,
-            "temperature": opts.temperature,
-            "max_tokens": opts.max_tokens,
-        });
-        let resp = self.post_json(&url, &body).await?;
-        let v: serde_json::Value = resp.json().await.map_err(bad_body)?;
-        let text = v
-            .pointer("/choices/0/message/content")
-            .and_then(|t| t.as_str())
-            .ok_or_else(|| CoreError::Other(anyhow::anyhow!("响应缺少 choices[0].message.content")))?;
-        Ok(ChatOutcome {
-            text: text.to_string(),
-            prompt_tokens: v.pointer("/usage/prompt_tokens").and_then(|n| n.as_u64()).unwrap_or(0),
-            completion_tokens: v
-                .pointer("/usage/completion_tokens")
-                .and_then(|n| n.as_u64())
-                .unwrap_or(0),
+fn reasoning_text(r: &rig_core::message::Reasoning) -> String {
+    use rig_core::message::ReasoningContent;
+    r.content
+        .iter()
+        .map(|c| match c {
+            ReasoningContent::Text { text, .. } => text.as_str(),
+            ReasoningContent::Summary(s) => s.as_str(),
+            _ => "",
         })
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    async fn openai_chat_stream_ext(
-        &self,
-        messages: &[ChatMessage],
-        opts: &ChatOptions,
-        on_delta: &(dyn Fn(&str) + Send + Sync),
-        on_thinking: &(dyn Fn(&str) + Send + Sync),
-        is_cancelled: &(dyn Fn() -> bool + Send + Sync),
-    ) -> CoreResult<ChatOutcome> {
-        let url = self.endpoint_openai("/chat/completions");
-        let body = serde_json::json!({
-            "model": self.cfg.chat_model,
-            "messages": messages,
-            "stream": true,
-            "stream_options": { "include_usage": true },
-            "temperature": opts.temperature,
-            "max_tokens": opts.max_tokens,
-        });
-        let mut resp = self.post_json(&url, &body).await?;
-        let mut outcome = ChatOutcome::default();
-        let mut lines = LineBuffer::default();
-        loop {
-            let chunk = resp
-                .chunk()
-                .await
-                .map_err(|e| CoreError::Other(anyhow::anyhow!("流读取失败：{e}")))?;
-            let Some(chunk) = chunk else { break };
-            if is_cancelled() {
-                drop(resp);
-                return Err(CoreError::Other(anyhow::anyhow!("__CHAT_CANCELLED__")));
-            }
-            for line in lines.push(&chunk) {
-                let Some(data) = line.strip_prefix("data:") else { continue };
-                let data = data.trim();
-                if data.is_empty() || data == "[DONE]" {
-                    continue;
-                }
-                let Ok(v) = serde_json::from_str::<serde_json::Value>(data) else {
-                    tracing::warn!("openai 流行解析失败，跳过：{data}");
-                    continue;
-                };
-                // 思考通道：delta.reasoning_content（DeepSeek-R1/GLM 兼容端点通用约定）
-                if let Some(th) = v
-                    .pointer("/choices/0/delta/reasoning_content")
-                    .and_then(|t| t.as_str())
-                {
-                    if !th.is_empty() {
-                        on_thinking(th);
-                    }
-                }
-                if let Some(delta) = v.pointer("/choices/0/delta/content").and_then(|t| t.as_str()) {
-                    if !delta.is_empty() {
-                        on_delta(delta);
-                        outcome.text.push_str(delta);
-                    }
-                }
-                if let Some(u) = v.get("usage") {
-                    outcome.prompt_tokens = u.get("prompt_tokens").and_then(|n| n.as_u64()).unwrap_or(0);
-                    outcome.completion_tokens =
-                        u.get("completion_tokens").and_then(|n| n.as_u64()).unwrap_or(0);
-                }
-            }
-        }
-        Ok(outcome)
-    }
-
-    async fn openai_embed(&self, texts: &[String]) -> CoreResult<Vec<Vec<f32>>> {
-        let url = self.endpoint_openai("/embeddings");
-        let body = serde_json::json!({ "model": self.cfg.embed_model, "input": texts });
-        let resp = self.post_json(&url, &body).await?;
-        let v: serde_json::Value = resp.json().await.map_err(bad_body)?;
-        let arr = v
-            .get("data")
-            .and_then(|d| d.as_array())
-            .ok_or_else(|| CoreError::Other(anyhow::anyhow!("响应缺少 data 数组")))?;
-        arr.iter()
-            .map(|row| {
-                row.get("embedding")
-                    .and_then(|e| e.as_array())
-                    .map(|nums| nums.iter().filter_map(|n| n.as_f64().map(|f| f as f32)).collect())
-                    .ok_or_else(|| CoreError::Other(anyhow::anyhow!("embedding 行格式错误")))
-            })
-            .collect()
-    }
-
-    // ============ 辅助 ============
-
-    /// ollama 端点（base_url 直拼）
-    fn endpoint(&self, path: &str) -> String {
-        format!("{}{}", self.cfg.api_endpoint.trim_end_matches('/'), path)
-    }
-
-    /// openai 兼容端点（base_url 缺 /v1 时补上）
-    fn endpoint_openai(&self, path: &str) -> String {
-        let base = self.cfg.api_endpoint.trim_end_matches('/');
-        if base.ends_with("/v1") {
-            format!("{base}{path}")
-        } else {
-            format!("{base}/v1{path}")
-        }
-    }
-
-    async fn post_json(
-        &self,
-        url: &str,
-        body: &serde_json::Value,
-    ) -> CoreResult<reqwest::Response> {
-        let mut req = self.http.post(url).json(body);
-        if !self.cfg.api_key.is_empty() {
-            req = req.bearer_auth(&self.cfg.api_key);
-        }
-        let resp = req
-            .send()
-            .await
-            .map_err(|e| CoreError::Other(anyhow::anyhow!("请求失败（{url}）：{e}")))?;
-        let status = resp.status();
-        if !status.is_success() {
-            let detail = resp.text().await.unwrap_or_default();
-            return Err(CoreError::Other(anyhow::anyhow!(
-                "服务返回 {status}（{url}）：{detail}"
-            )));
-        }
-        Ok(resp)
-    }
+        .filter(|t| !t.is_empty())
+        .collect::<Vec<_>>()
+        .join("
+")
 }
 
-fn unknown_provider(other: &str) -> CoreError {
-    CoreError::Other(anyhow::anyhow!(
-        "未知的 provider 类型：{other}（支持 ollama / openai）"
-    ))
+fn apply_usage(f: &StreamFinal, out: &mut ChatOutcome) {
+    let u = &f.usage;
+    out.prompt_tokens = u.input_tokens;
+    out.completion_tokens = u.output_tokens;
 }
 
-fn bad_body(e: reqwest::Error) -> CoreError {
-    CoreError::Other(anyhow::anyhow!("响应解析失败：{e}"))
+fn rig_err(e: rig_core::completion::CompletionError) -> CoreError {
+    CoreError::Other(anyhow::anyhow!("LLM 调用失败：{e}"))
 }
 
-fn ollama_options(opts: &ChatOptions) -> serde_json::Value {
-    serde_json::json!({
-        "temperature": opts.temperature,
-        "num_predict": opts.max_tokens,
-    })
-}
-
-/// 流式行缓冲：喂入字节块，产出完整行（LF 换行的协议均适用）
-#[derive(Default)]
-struct LineBuffer {
-    buf: String,
-}
-
-impl LineBuffer {
-    fn push(&mut self, chunk: &[u8]) -> Vec<String> {
-        self.buf.push_str(&String::from_utf8_lossy(chunk));
-        let mut lines = Vec::new();
-        while let Some(pos) = self.buf.find('\n') {
-            let line: String = self.buf.drain(..=pos).collect();
-            lines.push(line.trim_end_matches(['\r', '\n']).to_string());
-        }
-        lines
-    }
+fn unknown_provider(kind: &str) -> CoreError {
+    CoreError::Other(anyhow::anyhow!("未知供应商类型：{kind}（支持 ollama / openai）"))
 }

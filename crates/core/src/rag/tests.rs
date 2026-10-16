@@ -28,7 +28,7 @@ async fn start_mock_embed() -> String {
                     }
                 })
                 .collect();
-            axum::Json(serde_json::json!({ "embeddings": embeddings }))
+            axum::Json(serde_json::json!({ "model": "mock-embed", "embeddings": embeddings }))
         }),
     );
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -147,23 +147,27 @@ async fn start_mock_chat_stack() -> String {
                         if s.contains("alpha") { vec![1.0, 0.0] } else { vec![0.7, 0.7] }
                     })
                     .collect();
-                axum::Json(serde_json::json!({ "embeddings": embeddings }))
+                axum::Json(serde_json::json!({ "model": "mock-embed", "embeddings": embeddings }))
             }),
         )
         .route(
             "/api/chat",
             post(|body: String| async move {
                 let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+                // rig 内核按 ollama 官方结构解析：行需 model/created_at，message 需 role
                 if v["stream"].as_bool().unwrap_or(false) {
                     concat!(
-                        "{\"message\":{\"content\":\"根据 \"},\"done\":false}\n",
-                        "{\"message\":{\"content\":\".bytewiki/architecture.md\"},\"done\":false}\n",
-                        "{\"message\":{\"content\":\"：alpha 是核心服务。\"},\"done\":false}\n",
-                        "{\"done\":true,\"prompt_eval_count\":50,\"eval_count\":10}\n"
+                        "{\"model\":\"mock\",\"created_at\":\"2026-01-01T00:00:00Z\",\"message\":{\"role\":\"assistant\",\"content\":\"根据 \"},\"done\":false}\n",
+                        "{\"model\":\"mock\",\"created_at\":\"2026-01-01T00:00:00Z\",\"message\":{\"role\":\"assistant\",\"content\":\".bytewiki/architecture.md\"},\"done\":false}\n",
+                        "{\"model\":\"mock\",\"created_at\":\"2026-01-01T00:00:00Z\",\"message\":{\"role\":\"assistant\",\"content\":\"：alpha 是核心服务。\"},\"done\":false}\n",
+                        "{\"model\":\"mock\",\"created_at\":\"2026-01-01T00:00:00Z\",\"message\":{\"role\":\"assistant\",\"content\":\"\"},\"done\":true,\"done_reason\":\"stop\",\"prompt_eval_count\":50,\"eval_count\":10}\n"
                     ).into()
                 } else {
                     serde_json::json!({
+                        "model": "mock",
+                        "created_at": "2026-01-01T00:00:00Z",
                         "message": { "role": "assistant", "content": "ok" },
+                        "done": true, "done_reason": "stop",
                         "prompt_eval_count": 50, "eval_count": 10,
                     }).to_string()
                 }

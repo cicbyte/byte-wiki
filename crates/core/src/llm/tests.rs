@@ -61,18 +61,23 @@ async fn start_mock() -> String {
 }
 
 /// 按请求体里的 stream 字段返回 NDJSON 流或完整 JSON
+/// （rig 内核按 ollama 官方响应结构解析：每行需 model/created_at，message 需 role）
 async fn mock_ollama_chat(body: String) -> String {
     let v: serde_json::Value = serde_json::from_str(&body).unwrap();
     if v["stream"].as_bool().unwrap_or(false) {
         concat!(
-            "{\"message\":{\"content\":\"你\"},\"done\":false}\n",
-            "{\"message\":{\"content\":\"好\"},\"done\":false}\n",
-            "{\"done\":true,\"prompt_eval_count\":11,\"eval_count\":2}\n"
+            "{\"model\":\"mock-model\",\"created_at\":\"2026-01-01T00:00:00Z\",\"message\":{\"role\":\"assistant\",\"content\":\"你\"},\"done\":false}\n",
+            "{\"model\":\"mock-model\",\"created_at\":\"2026-01-01T00:00:00Z\",\"message\":{\"role\":\"assistant\",\"content\":\"好\"},\"done\":false}\n",
+            "{\"model\":\"mock-model\",\"created_at\":\"2026-01-01T00:00:00Z\",\"message\":{\"role\":\"assistant\",\"content\":\"\"},\"done\":true,\"done_reason\":\"stop\",\"prompt_eval_count\":11,\"eval_count\":2}\n"
         )
         .into()
     } else {
         serde_json::json!({
+            "model": "mock-model",
+            "created_at": "2026-01-01T00:00:00Z",
             "message": { "role": "assistant", "content": "你好" },
+            "done": true,
+            "done_reason": "stop",
             "prompt_eval_count": 11,
             "eval_count": 2,
         })
@@ -83,34 +88,41 @@ async fn mock_ollama_chat(body: String) -> String {
 async fn mock_ollama_embed(body: String) -> Json<serde_json::Value> {
     let v: serde_json::Value = serde_json::from_str(&body).unwrap();
     let n = v["input"].as_array().map(|a| a.len()).unwrap_or(0);
-    Json(serde_json::json!({ "embeddings": vec![[0.1f64, 0.2, 0.3]; n] }))
+    Json(serde_json::json!({ "model": "mock-embed", "embeddings": vec![[0.1f64, 0.2, 0.3]; n] }))
 }
 
-/// SSE 流或完整 JSON
-async fn mock_openai_chat(body: String) -> String {
+/// SSE 流或完整 JSON（rig 内核要求 SSE 响应带 text/event-stream 头）
+async fn mock_openai_chat(body: String) -> ([(axum::http::header::HeaderName, &'static str); 1], String) {
     let v: serde_json::Value = serde_json::from_str(&body).unwrap();
-    if v["stream"].as_bool().unwrap_or(false) {
+    let body = if v["stream"].as_bool().unwrap_or(false) {
         concat!(
-            "data: {\"choices\":[{\"delta\":{\"content\":\"He\"}}]}\n\n",
-            "data: {\"choices\":[{\"delta\":{\"content\":\"llo\"}}]}\n\n",
-            "data: {\"choices\":[{\"delta\":{}}],\"usage\":{\"prompt_tokens\":7,\"completion_tokens\":2}}\n\n",
+            "data: {\"id\":\"c1\",\"object\":\"chat.completion.chunk\",\"model\":\"mock-model\",\"choices\":[{\"delta\":{\"role\":\"assistant\",\"content\":\"He\"}}]}\n\n",
+            "data: {\"id\":\"c1\",\"object\":\"chat.completion.chunk\",\"model\":\"mock-model\",\"choices\":[{\"delta\":{\"content\":\"llo\"}}]}\n\n",
+            "data: {\"id\":\"c1\",\"object\":\"chat.completion.chunk\",\"model\":\"mock-model\",\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":7,\"completion_tokens\":2,\"total_tokens\":9}}\n\n",
             "data: [DONE]\n\n"
         )
-        .into()
+        .to_string()
     } else {
         serde_json::json!({
-            "choices": [ { "message": { "role": "assistant", "content": "Hello" } } ],
-            "usage": { "prompt_tokens": 7, "completion_tokens": 2 }
+            "id": "c1",
+            "object": "chat.completion",
+            "model": "mock-model",
+            "choices": [ { "message": { "role": "assistant", "content": "Hello" }, "finish_reason": "stop" } ],
+            "usage": { "prompt_tokens": 7, "completion_tokens": 2, "total_tokens": 9 }
         })
         .to_string()
-    }
+    };
+    ([(axum::http::header::CONTENT_TYPE, "text/event-stream")], body)
 }
 
 async fn mock_openai_embeddings(body: String) -> Json<serde_json::Value> {
     let v: serde_json::Value = serde_json::from_str(&body).unwrap();
     let n = v["input"].as_array().map(|a| a.len()).unwrap_or(0);
     Json(serde_json::json!({
-        "data": (0..n).map(|i| serde_json::json!({ "index": i, "embedding": [0.4f64, 0.5] })).collect::<Vec<_>>()
+        "object": "list",
+        "model": "mock-embed",
+        "data": (0..n).map(|i| serde_json::json!({ "object": "embedding", "index": i, "embedding": [0.4f64, 0.5] })).collect::<Vec<_>>(),
+        "usage": { "prompt_tokens": 1, "total_tokens": 1 }
     }))
 }
 
@@ -205,12 +217,12 @@ async fn http_error_maps_to_message() {
 
 #[tokio::test]
 async fn unknown_provider_rejected() {
-    let client = LlmClient::new(&llm_cfg("anthropic", "http://127.0.0.1:1")).unwrap();
-    let err = client
-        .chat(&[ChatMessage::user("hi")], &Default::default())
-        .await
-        .unwrap_err();
-    assert!(err.to_string().contains("未知的 provider"));
+    // rig 内核下未知 kind 在构造期即失败（fail-fast）
+    let err = match LlmClient::new(&llm_cfg("anthropic", "http://127.0.0.1:1")) {
+        Ok(_) => panic!("未知供应商类型应在构造期被拒绝"),
+        Err(e) => e,
+    };
+    assert!(err.to_string().contains("未知供应商类型"), "实际错误：{err}");
 }
 
 /// 真实 ollama 冒烟（默认忽略）：`cargo test -p byte-wiki-core -- --ignored`
@@ -251,4 +263,33 @@ async fn real_ollama_smoke() {
         .await
         .unwrap();
     assert!(!out.text.is_empty() && !deltas.into_inner().unwrap().is_empty(), "流式返回空");
+}
+
+/// 真实 openai 兼容端点思考流冒烟（默认忽略）：读本机 app 配置的当前供应商，
+/// 验证 rig 内核下思考（reasoning/reasoning_content）与正文双通道流。
+/// `cargo test -p byte-wiki-core real_openai_compat_reasoning_smoke -- --ignored --nocapture`
+#[tokio::test]
+#[ignore = "真实供应商调用（消耗少量 token）"]
+async fn real_openai_compat_reasoning_smoke() {
+    let svc = crate::service::AppService::open_default().unwrap();
+    let cfg = svc.llm_config().unwrap();
+    let client = LlmClient::new(&cfg).unwrap();
+    eprintln!("供应商：{} · 模型：{}", client.provider_desc(), client.model_name());
+    let think: std::sync::Mutex<Vec<String>> = Default::default();
+    let deltas: std::sync::Mutex<Vec<String>> = Default::default();
+    let out = client
+        .chat_stream_ext(
+            &[ChatMessage::user("1+1 等于几？先思考再回答。")],
+            &Default::default(),
+            &|d| deltas.lock().unwrap().push(d.to_string()),
+            &|t| think.lock().unwrap().push(t.to_string()),
+            &|| false,
+        )
+        .await
+        .unwrap();
+    let n_delta = deltas.into_inner().unwrap().len();
+    let think_len: usize = think.into_inner().unwrap().iter().map(|s| s.len()).sum();
+    eprintln!("正文 {} 段（{} 字），思考 {} 字，tokens p{}+c{}", n_delta, out.text.len(), think_len, out.prompt_tokens, out.completion_tokens);
+    assert!(!out.text.trim().is_empty(), "正文为空");
+    assert!(n_delta >= 1, "正文无流式增量");
 }

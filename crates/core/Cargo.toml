@@ -31,6 +31,9 @@ regex = "1"
 md-5 = "0.10"
 # LLM 接入（Ollama / OpenAI 兼容端点；调用方自带异步运行时）
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+# rig 内核的 HTTP 后端（0.13，与业务 0.12 共存；注入 600s 超时）
+reqwest13 = { package = "reqwest", version = "0.13", default-features = false, features = ["rustls", "charset", "http2"] }
+futures-util = "0.3"
 
 # MCP（feature gate，启用 mcp feature 时才编译）
 rmcp = { workspace = true, optional = true }
@@ -38,6 +41,7 @@ schemars = { workspace = true, optional = true }
 axum = { version = "0.8", features = ["macros"], optional = true }
 tokio = { workspace = true, optional = true }
 tokio-util = { version = "0.7", optional = true }
+rig-core = "0.42.0"
 
 [dev-dependencies]
 tokio = { workspace = true }

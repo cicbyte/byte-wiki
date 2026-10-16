@@ -105,14 +105,21 @@ async fn start_mock_llm() -> (String, MockState) {
                 bump(&s, "page");
                 MOCK_PAGE_MD.to_string()
             };
+            // rig 内核按 ollama 官方结构解析：行需 model/created_at，message 需 role
             let mut ndjson = serde_json::to_string(&serde_json::json!({
-                "message": { "role": "assistant", "content": content },
+                "model": "mock",
+                "created_at": "2026-01-01T00:00:00Z",
+                "message": { "role": "assistant", "content": content }, "done": false,
             }))
             .unwrap();
             ndjson.push('\n');
             ndjson.push_str(
                 &serde_json::to_string(&serde_json::json!({
-                    "done": true, "prompt_eval_count": 100, "eval_count": 20,
+                    "model": "mock",
+                    "created_at": "2026-01-01T00:00:00Z",
+                    "message": { "role": "assistant", "content": "" },
+                    "done": true, "done_reason": "stop",
+                    "prompt_eval_count": 100, "eval_count": 20,
                 }))
                 .unwrap(),
             );
