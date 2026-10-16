@@ -204,3 +204,13 @@ pub async fn rebuild_embeddings(
     .await
     .map_err(|e| e.to_string())
 }
+
+/// 大纲既定顺序的页面路径表 (rel_path, title)——文档树按大纲序渲染
+#[tauri::command]
+pub fn wiki_outline_paths(
+    state: tauri::State<'_, AppState>,
+    path: String,
+) -> Result<Vec<(String, String)>, String> {
+    let svc: Arc<AppService> = Arc::clone(&state.svc);
+    svc.outline_page_paths(&path).map_err(|e| e.to_string())
+}

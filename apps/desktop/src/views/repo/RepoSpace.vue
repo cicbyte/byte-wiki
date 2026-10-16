@@ -54,6 +54,8 @@ const tab = computed(() => (route.meta.tab as string) || "overview");
 
 // ===== 共享状态 =====
 const wikiDocs = ref<WikiDocEntry[]>([]);
+/** 大纲既定顺序的页面路径（磁盘树按大纲序渲染；骨架树内部自取 genPages 序） */
+const outlineOrder = ref<string[]>([]);
 const currentDoc = ref("");
 const staleReport = ref<StaleReport | null>(null);
 const genProgress = ref<GenerateEvent | null>(null);
@@ -210,6 +212,12 @@ async function refreshDocs() {
     }
   } catch {
     wikiDocs.value = [];
+  }
+  // 大纲顺序（best-effort：无 outline.json 时回退字母序）
+  try {
+    outlineOrder.value = (await api.wikiOutlinePaths(wiki.currentRepo.path)).map(([p]) => p);
+  } catch {
+    outlineOrder.value = [];
   }
 }
 
@@ -510,6 +518,7 @@ const busy = computed(() => generating.value || updating.value);
             <WikiTree
               :docs="wikiDocs"
               :current="currentDoc"
+              :order="outlineOrder"
               :gen-pages="[...genPages.values()]"
               :generating="busy"
               :gen-hint="genProgress?.message"

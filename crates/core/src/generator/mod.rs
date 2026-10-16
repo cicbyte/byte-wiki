@@ -963,6 +963,22 @@ impl AppService {
         Ok(modules)
     }
 
+    /// 大纲既定顺序的页面路径表（文档树按大纲序渲染；无 outline.json 返回空）
+    pub fn outline_page_paths(&self, repo_path: &str) -> CoreResult<Vec<(String, String)>> {
+        let root = Path::new(repo_path);
+        let Some(outline) = outline::read_outline(&root.join(".bytewiki")) else {
+            return Ok(vec![]);
+        };
+        let mut dir_taken: HashMap<String, HashSet<String>> = HashMap::new();
+        let mut out = Vec::with_capacity(outline.pages.len());
+        for page in &outline.pages {
+            if let Some(rel) = page_rel_path(&outline, page, &mut dir_taken) {
+                out.push((rel, page.title.clone()));
+            }
+        }
+        Ok(out)
+    }
+
     // ============ 既有 Wiki 加载（FR-08 / 克隆场景） ============
 
     /// 扫描仓库内 .bytewiki/ 目录，返回清单 (rel_path, kind, title) 并登记 wiki_docs。

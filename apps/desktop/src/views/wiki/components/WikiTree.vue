@@ -25,7 +25,9 @@ import type { WikiDocEntry, PageProgress } from "@/api/generate";
 const props = defineProps<{
   docs: WikiDocEntry[];
   current: string;
-  /** 生成中的页面骨架（大纲确定后非空） */
+  /** 大纲既定顺序的页面路径（磁盘树排序依据；空则回退字母序） */
+  order?: string[];
+  /** 生成中的页面骨架（大纲确定后非空；其顺序即大纲序） */
   genPages?: PageProgress[];
   generating?: boolean;
   /** 生成早期（索引/大纲设计）树内占位提示 */
@@ -46,13 +48,33 @@ interface VisibleNode {
 /** 目录折叠（默认全展开，记录用户折叠项；骨架树与磁盘树共用） */
 const collapsed = ref(new Set<string>());
 
-/** 由路径集合构建目录层级树（磁盘文档与生成骨架两个入口共用） */
+/**
+ * 由路径集合构建目录层级树（磁盘文档与生成骨架两个入口共用）。
+ * 排序：优先按大纲既定顺序（order / genPages 顺序）——章节与页面的
+ * 阅读顺序是 LLM 大纲的设计意图，按码点排序对中文近似乱序；
+ * 无顺序信息时回退 localeCompare。
+ */
 function buildNodes(paths: string[], kind: "docs" | "skeleton"): VisibleNode[] {
   if (!paths.length) return [];
   const withStatus = (path: string): { status?: string; importance?: string } => {
     if (kind !== "skeleton") return {};
     const p = (props.genPages || []).find((g) => g.path === path);
     return { status: p?.status, importance: p?.importance };
+  };
+  // 顺序索引：磁盘树取 order prop；骨架树取 genPages 顺序（= 大纲序）
+  const orderList =
+    kind === "skeleton"
+      ? (props.genPages || []).map((g) => g.path).filter((p): p is string => !!p)
+      : props.order || [];
+  const orderIdx = new Map<string, number>();
+  orderList.forEach((p, i) => orderIdx.set(p, i));
+  /** 目录序 = 其下页面在大纲中的最小序 */
+  const dirIdx = (dirPath: string): number => {
+    let min = Infinity;
+    for (const [p, i] of orderIdx) {
+      if (p.startsWith(`${dirPath}/`) && i < min) min = i;
+    }
+    return min;
   };
   const out: VisibleNode[] = [];
   const walk = (prefix: string, depth: number) => {
@@ -71,12 +93,17 @@ function buildNodes(paths: string[], kind: "docs" | "skeleton"): VisibleNode[] {
         dirs.set(rel.slice(0, slash), true);
       }
     }
-    for (const d of [...dirs.keys()].sort()) {
+    const byOrder = (a: string, b: string, ia?: number, ib?: number) =>
+      (ia ?? Infinity) - (ib ?? Infinity) || a.localeCompare(b);
+    const dirNames = [...dirs.keys()].sort((a, b) =>
+      byOrder(a, b, dirIdx(`${prefix}/${a}`), dirIdx(`${prefix}/${b}`)),
+    );
+    for (const d of dirNames) {
       const dirPath = prefix ? `${prefix}/${d}` : d;
       out.push({ label: d, path: dirPath, isDir: true, depth });
       if (!collapsed.value.has(dirPath)) walk(dirPath, depth + 1);
     }
-    for (const f of files.sort((a, b) => a.localeCompare(b))) {
+    for (const f of files.sort((a, b) => byOrder(a, b, orderIdx.get(a), orderIdx.get(b)))) {
       const name = f.split("/").pop() || f;
       const label = kind === "docs" ? docTitle(f) : name.replace(/\.md$/, "");
       out.push({ label, path: f, isDir: false, depth, ...withStatus(f) });
@@ -105,7 +132,7 @@ const diskNodes = computed(() =>
   buildNodes(diskPageEntries.value.map(([p]) => p), "docs"),
 );
 const skeletonNodes = computed(() =>
-  buildNodes((props.genPages || []).map((g) => g.path).filter(Boolean) as string[], "skeleton"),
+  buildNodes((props.genPages || []).map((g) => g.path).filter((p): p is string => !!p) as string[], "skeleton"),
 );
 
 function toggleDir(path: string) {

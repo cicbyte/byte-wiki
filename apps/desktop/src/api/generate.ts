@@ -76,6 +76,9 @@ export const generateApi = {
 
   listWikiDocs: (path: string) => invoke<WikiDocEntry[]>("list_wiki_docs", { path }),
 
+  /** 大纲既定顺序的页面路径表 (rel_path, title)——文档树按大纲序渲染 */
+  wikiOutlinePaths: (path: string) => invoke<[string, string][]>("wiki_outline_paths", { path }),
+
   readWikiDoc: (repoPath: string, docPath: string) =>
     invoke<string>("read_wiki_doc", { repoPath, docPath }),
 
