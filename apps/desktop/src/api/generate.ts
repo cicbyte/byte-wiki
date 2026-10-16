@@ -53,7 +53,17 @@ export interface EmbedSummary {
   embedded: number;
 }
 
+/** 模型流式增量（右下角终端；与 Rust `StreamChunk` 对应） */
+export interface LlmStreamChunk {
+  /** 调用标识（如「《核心库》撰写中」） */
+  call: string;
+  /** meta（调用开始/结束标记）/ think / content */
+  channel: "meta" | "think" | "content" | string;
+  delta: string;
+}
+
 export const GENERATE_EVENT = "wiki://generate";
+export const LLM_STREAM_EVENT = "wiki://llm-stream";
 
 export const generateApi = {
   generateWiki: (path: string) => invoke<GenerateSummary>("generate_wiki", { path }),
@@ -71,4 +81,8 @@ export const generateApi = {
   /** 订阅生成进度事件，返回取消函数 */
   onGenerateEvent: (handler: (e: GenerateEvent) => void): Promise<UnlistenFn> =>
     listen<GenerateEvent>(GENERATE_EVENT, (ev) => handler(ev.payload)),
+
+  /** 订阅模型流式增量（高频），返回取消函数 */
+  onLlmStream: (handler: (c: LlmStreamChunk) => void): Promise<UnlistenFn> =>
+    listen<LlmStreamChunk>(LLM_STREAM_EVENT, (ev) => handler(ev.payload)),
 };

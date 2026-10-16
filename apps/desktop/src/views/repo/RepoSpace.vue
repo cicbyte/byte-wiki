@@ -40,12 +40,15 @@ import CallGraphPanel from "@/views/wiki/components/CallGraphPanel.vue";
 import FileBrowse from "@/views/wiki/components/FileBrowse.vue";
 import LlmLogPanel from "@/views/wiki/components/LlmLogPanel.vue";
 import GenProgress from "@/views/wiki/components/GenProgress.vue";
+import LlmStreamTerminal from "@/views/wiki/components/LlmStreamTerminal.vue";
+import { useLlmStreamStore } from "@/stores/llmStream";
 
 const route = useRoute();
 const router = useRouter();
 const layout = useLayoutStore();
 const ai = useAiStore();
 const wiki = useWikiStore();
+const llmStream = useLlmStreamStore();
 
 const repoId = computed(() => Number(route.params.id));
 const tab = computed(() => (route.meta.tab as string) || "overview");
@@ -92,7 +95,9 @@ const genStartedAt = ref<number | null>(null);
 
 // ===== 事件订阅 =====
 let unlisten: Awaited<ReturnType<typeof api.onGenerateEvent>> | null = null;
+let unlistenStream: Awaited<ReturnType<typeof api.onLlmStream>> | null = null;
 onMounted(async () => {
+  unlistenStream = await api.onLlmStream((c) => llmStream.append(c));
   unlisten = await api.onGenerateEvent((e) => {
     genProgress.value = e;
     if (e.pages?.length) {
@@ -108,6 +113,7 @@ onMounted(async () => {
 });
 onUnmounted(() => {
   unlisten?.();
+  unlistenStream?.();
 });
 
 // ===== 进入/切换项目 =====
@@ -556,6 +562,9 @@ const busy = computed(() => generating.value || updating.value);
         <ChatPanel :repo-path="wiki.currentRepo.path" @open-doc="openDocInDocs" />
       </aside>
     </div>
+
+    <!-- 模型流式终端（右下角浮窗，fixed 定位） -->
+    <LlmStreamTerminal />
 
     <!-- 新建知识卡弹窗 -->
     <a-modal

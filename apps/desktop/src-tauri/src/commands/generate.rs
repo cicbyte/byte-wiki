@@ -11,6 +11,9 @@ use crate::state::AppState;
 /// 生成进度事件通道名（前端 listen）
 pub const GENERATE_EVENT: &str = "wiki://generate";
 
+/// 模型流式增量通道（右下角终端实时显示，高频小事件与进度分离）
+pub const LLM_STREAM_EVENT: &str = "wiki://llm-stream";
+
 /// 一键生成 Wiki（索引 → 规划 → 逐模块 → 组装），进度实时 emit
 #[tauri::command]
 pub async fn generate_wiki(
@@ -21,7 +24,11 @@ pub async fn generate_wiki(
     let svc: Arc<AppService> = Arc::clone(&state.svc);
     let app_handle = app.clone();
     svc.generate_wiki(&path, &move |e: GenerateEvent| {
-        let _ = app_handle.emit(GENERATE_EVENT, &e);
+        if let Some(chunk) = &e.stream {
+            let _ = app_handle.emit(LLM_STREAM_EVENT, chunk);
+        } else {
+            let _ = app_handle.emit(GENERATE_EVENT, &e);
+        }
     })
     .await
     .map_err(|e| e.to_string())
@@ -37,7 +44,11 @@ pub async fn update_wiki(
     let svc: Arc<AppService> = Arc::clone(&state.svc);
     let app_handle = app.clone();
     svc.update_wiki(&path, &move |e: GenerateEvent| {
-        let _ = app_handle.emit(GENERATE_EVENT, &e);
+        if let Some(chunk) = &e.stream {
+            let _ = app_handle.emit(LLM_STREAM_EVENT, chunk);
+        } else {
+            let _ = app_handle.emit(GENERATE_EVENT, &e);
+        }
     })
     .await
     .map_err(|e| e.to_string())
@@ -187,6 +198,7 @@ pub async fn rebuild_embeddings(
             prompt_tokens: 0,
             completion_tokens: 0,
             pages: None,
+            stream: None,
         });
     })
     .await

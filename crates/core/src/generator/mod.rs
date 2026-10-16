@@ -52,6 +52,19 @@ pub struct GenerateEvent {
     /// 页面级状态增量（大纲确定事件携带全量骨架；此后每页携带单条变更）
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pages: Option<Vec<PageProgress>>,
+    /// 流式增量（携带时为终端事件，不参与进度展示）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stream: Option<StreamChunk>,
+}
+
+/// 流式增量（右下角终端实时显示；高频小事件，与进度事件同回调、异通道）
+#[derive(Debug, Clone, Serialize)]
+pub struct StreamChunk {
+    /// 调用标识（如「《核心库》撰写中」），前端按此分段
+    pub call: String,
+    /// meta（调用开始/结束标记）/ think / content
+    pub channel: String,
+    pub delta: String,
 }
 
 /// 单页进度（前端按 id 合并出页面清单）
@@ -176,6 +189,7 @@ impl AppService {
             prompt_tokens: 0,
             completion_tokens: 0,
             pages: Some(skeleton(&outline)),
+            stream: None,
         });
 
         // ---- 阶段 3：逐页生成 ----
@@ -291,6 +305,7 @@ impl AppService {
             prompt_tokens: 0,
             completion_tokens: 0,
             pages: Some(skeleton(&outline)),
+            stream: None,
         });
 
         // ---- 4）页任务：绑定文件 ∩ 变更 → 重生成；其余从磁盘沿用 ----
@@ -469,6 +484,7 @@ impl AppService {
                 prompt_tokens: 0,
                 completion_tokens: 0,
                 pages: Some(vec![page_progress(page, &chain, "generating")]),
+                stream: None,
             });
 
             let mut last_err: Option<String> = None;
@@ -513,6 +529,7 @@ impl AppService {
                 prompt_tokens: tokens.0,
                 completion_tokens: tokens.1,
                 pages: Some(vec![page_progress(page, &chain, if ok { "done" } else { "failed" })]),
+                stream: None,
             });
         }
         Ok((results, failed))
@@ -647,7 +664,47 @@ impl AppService {
             });
         }
 
+        on_event(GenerateEvent {
+            phase: phase.to_string(),
+            current,
+            total,
+            message: String::new(),
+            prompt_tokens: 0,
+            completion_tokens: 0,
+            pages: None,
+            stream: Some(StreamChunk {
+                call: label.to_string(),
+                channel: "meta".into(),
+                delta: format!("
+▶ [{stage}] {title}（第 {attempt} 次尝试）
+"),
+            }),
+        });
         let result = stream_llm(client, messages, phase, current, total, label, on_event).await;
+        on_event(GenerateEvent {
+            phase: phase.to_string(),
+            current,
+            total,
+            message: String::new(),
+            prompt_tokens: 0,
+            completion_tokens: 0,
+            pages: None,
+            stream: Some(StreamChunk {
+                call: label.to_string(),
+                channel: "meta".into(),
+                delta: match &result {
+                    Ok(o) => format!(
+                        "
+✔ [{stage}] 完成：{}ms · prompt {} / completion {} tokens
+",
+                        started.elapsed().as_millis(), o.prompt_tokens, o.completion_tokens
+                    ),
+                    Err(e) => format!("
+✘ [{stage}] 失败：{e}
+"),
+                },
+            }),
+        });
         // 成功才缓存（失败结果不进缓存，重跑即重试）
         if let Ok(out) = &result {
             let timestamp = std::time::SystemTime::now()
@@ -1036,13 +1093,33 @@ async fn stream_llm(
             prompt_tokens: 0,
             completion_tokens: 0,
             pages: None,
+            stream: None,
         });
     };
 
     // 请求发出即报一次（网关整体缓冲时不至于完全静默）
     heartbeat(0, 0);
 
+    let call_label = label.to_string();
+    let stream_chunk = |channel: &str, delta: &str| {
+        on_event(GenerateEvent {
+            phase: phase.to_string(),
+            current,
+            total,
+            message: String::new(),
+            prompt_tokens: 0,
+            completion_tokens: 0,
+            pages: None,
+            stream: Some(StreamChunk {
+                call: call_label.clone(),
+                channel: channel.to_string(),
+                delta: delta.to_string(),
+            }),
+        });
+    };
+
     let on_delta = move |delta: &str| {
+        stream_chunk("content", delta);
         let mut g = st.lock().unwrap();
         g.2 += delta.chars().count();
         if g.0.elapsed() >= std::time::Duration::from_millis(1000) {
@@ -1054,6 +1131,7 @@ async fn stream_llm(
     };
     let st2 = std::sync::Arc::clone(&state);
     let on_thinking = move |think: &str| {
+        stream_chunk("think", think);
         let mut g = st2.lock().unwrap();
         g.1 += think.chars().count();
         if g.0.elapsed() >= std::time::Duration::from_millis(1000) {
@@ -1079,6 +1157,7 @@ fn ev(phase: &str, current: usize, total: usize, message: impl Into<String>) -> 
         prompt_tokens: 0,
         completion_tokens: 0,
         pages: None,
+        stream: None,
     }
 }
 
