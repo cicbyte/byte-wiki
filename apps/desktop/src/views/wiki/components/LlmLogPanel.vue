@@ -6,7 +6,7 @@
  * 左列表（时间/阶段/标题/耗时/状态）+ 右详情（完整 prompt 与响应），
  * 支持阶段过滤、只看失败、刷新与清空。
  */
-import { computed, onMounted, ref } from "vue";
+import { computed, onMounted, onUnmounted, ref } from "vue";
 import { message } from "ant-design-vue";
 import {
   ReloadOutlined,
@@ -18,7 +18,7 @@ import { api } from "@/api";
 import type { LlmLogEntry } from "@/api/llm-logs";
 import EmptyState from "@/components/common/EmptyState.vue";
 
-const props = defineProps<{ repoPath: string }>();
+const props = defineProps<{ repoPath: string; busy?: boolean }>();
 
 const logs = ref<LlmLogEntry[]>([]);
 const size = ref(0);
@@ -123,9 +123,20 @@ function fmtTokens(e: LlmLogEntry): string {
   return `${e.prompt_tokens}/${e.completion_tokens}`;
 }
 
+// 生成进行中每 4s 自动刷新（日志在调用完成后写入，能看到逐条落盘）
+let pollTimer: ReturnType<typeof setInterval> | null = null;
 onMounted(() => {
   load();
   loadCache();
+  pollTimer = setInterval(() => {
+    if (props.busy) {
+      load();
+      loadCache();
+    }
+  }, 4000);
+});
+onUnmounted(() => {
+  if (pollTimer) clearInterval(pollTimer);
 });
 </script>
 
@@ -182,7 +193,7 @@ onMounted(() => {
           <div v-else-if="!filtered.length" class="list-state">
             <EmptyState
               text="暂无日志"
-              hint="生成 Wiki 或对话后，每次模型调用的完整输入输出都会记录在此（按项目存 JSONL）"
+              hint="每次模型调用的完整输入输出都会记录在此（按项目存 JSONL，调用完成后写入）；正在进行的调用请看总览页进度面板"
             />
           </div>
           <div

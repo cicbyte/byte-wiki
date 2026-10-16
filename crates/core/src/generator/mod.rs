@@ -1013,30 +1013,59 @@ async fn stream_llm(
     label: &str,
     on_event: &(dyn Fn(GenerateEvent) + Send + Sync),
 ) -> CoreResult<crate::llm::ChatOutcome> {
-    // (上次心跳时间, 累计字数)
-    let state = std::sync::Arc::new(std::sync::Mutex::new((std::time::Instant::now(), 0usize)));
+    // (上次心跳时间, 累计思考字数, 累计输出字数)
+    // 思考型模型（reasoning_content）可能数分钟只出思考不出正文，
+    // 心跳必须同时覆盖两个通道，否则长时间静默像卡死
+    let state = std::sync::Arc::new(std::sync::Mutex::new((std::time::Instant::now(), 0usize, 0usize)));
     let st = std::sync::Arc::clone(&state);
     let phase_owned = phase.to_string();
     let label_owned = label.to_string();
+
+    let heartbeat = |think: usize, out: usize| {
+        let parts = match (think, out) {
+            (0, 0) => "已发出请求，等待响应…".to_string(),
+            (t, o) if t > 0 && o > 0 => format!("思考 {t} 字 · 已输出 {o} 字"),
+            (t, 0) if t > 0 => format!("思考中 · {t} 字（正文未开始）"),
+            (_, o) => format!("已输出 {o} 字"),
+        };
+        on_event(GenerateEvent {
+            phase: phase_owned.clone(),
+            current,
+            total,
+            message: format!("{label_owned} · {parts}"),
+            prompt_tokens: 0,
+            completion_tokens: 0,
+            pages: None,
+        });
+    };
+
+    // 请求发出即报一次（网关整体缓冲时不至于完全静默）
+    heartbeat(0, 0);
+
+    let on_delta = move |delta: &str| {
+        let mut g = st.lock().unwrap();
+        g.2 += delta.chars().count();
+        if g.0.elapsed() >= std::time::Duration::from_millis(1000) {
+            let (t, o) = (g.1, g.2);
+            *g = (std::time::Instant::now(), t, o);
+            drop(g);
+            heartbeat(t, o);
+        }
+    };
+    let st2 = std::sync::Arc::clone(&state);
+    let on_thinking = move |think: &str| {
+        let mut g = st2.lock().unwrap();
+        g.1 += think.chars().count();
+        if g.0.elapsed() >= std::time::Duration::from_millis(1000) {
+            let (t, o) = (g.1, g.2);
+            *g = (std::time::Instant::now(), t, o);
+            drop(g);
+            heartbeat(t, o);
+        }
+    };
+
     client
-        .chat_stream(messages, &ChatOptions::default(), &move |delta: &str| {
-            let mut g = st.lock().unwrap();
-            g.1 += delta.chars().count();
-            if g.0.elapsed() >= std::time::Duration::from_millis(1000) {
-                let n = g.1;
-                *g = (std::time::Instant::now(), n);
-                drop(g);
-                on_event(GenerateEvent {
-                    phase: phase_owned.clone(),
-                    current,
-                    total,
-                    message: format!("{label_owned} · 已输出 {n} 字"),
-                    prompt_tokens: 0,
-                    completion_tokens: 0,
-                    pages: None,
-                });
-            }
-        })
+        .chat_stream_ext(messages, &ChatOptions::default(), &on_delta, &on_thinking, &|| false)
         .await
 }
 

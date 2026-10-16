@@ -139,6 +139,16 @@ watch(
 onMounted(enterRepo);
 
 // ===== 数据加载 =====
+/** 文档页默认选中：总览 → 页面 → 旧版模块，不落到知识卡/图谱
+ * （清单按路径排序，cards/ 会排在前面，直接取 [0] 会默认选中卡片） */
+function pickDefaultDoc(): string {
+  for (const kind of ["architecture", "page", "module"]) {
+    const hit = wikiDocs.value.find(([, k]) => k === kind);
+    if (hit) return hit[0];
+  }
+  return wikiDocs.value[0]?.[0] ?? "";
+}
+
 async function refreshDocs() {
   if (!wiki.currentRepo) {
     wikiDocs.value = [];
@@ -147,7 +157,7 @@ async function refreshDocs() {
   try {
     wikiDocs.value = await api.listWikiDocs(wiki.currentRepo.path);
     if (wikiDocs.value.length && !wikiDocs.value.some(([p]) => p === currentDoc.value)) {
-      currentDoc.value = wikiDocs.value[0][0];
+      currentDoc.value = pickDefaultDoc();
     }
   } catch {
     wikiDocs.value = [];
@@ -476,7 +486,7 @@ const busy = computed(() => generating.value || updating.value);
 
       <!-- ============ 模型日志 ============ -->
       <div v-else-if="tab === 'llm-logs'" class="llm-logs-pane">
-        <LlmLogPanel :repo-path="wiki.currentRepo.path" />
+        <LlmLogPanel :repo-path="wiki.currentRepo.path" :busy="busy" />
       </div>
 
       <!-- ============ 调用链 ============ -->
