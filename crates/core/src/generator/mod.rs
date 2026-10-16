@@ -113,6 +113,38 @@ pub struct UpdateSummary {
 /// 页面重试次数（额外重试 2 次，共 3 次尝试）
 const PAGE_RETRIES: usize = 2;
 
+/// 生成代次：prompt 结构发生实质变化时 bump，旧代页面不再沿用（整批重生成）
+const GEN_VERSION: u32 = 1;
+
+/// 生成元数据（断点续跑的兼容性判定：同供应商+同模型+同代次才沿用旧页面）
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default)]
+struct GenMeta {
+    provider: String,
+    model: String,
+    gen_version: u32,
+}
+
+fn gen_meta_path(root: &Path) -> std::path::PathBuf {
+    root.join(".bytewiki").join(".gen-meta.json")
+}
+
+fn read_gen_meta(root: &Path) -> Option<GenMeta> {
+    let text = std::fs::read_to_string(gen_meta_path(root)).ok()?;
+    serde_json::from_str(&text).ok()
+}
+
+fn write_gen_meta(root: &Path, provider_id: &str, model: &str) {
+    let meta = GenMeta {
+        provider: provider_id.to_string(),
+        model: model.to_string(),
+        gen_version: GEN_VERSION,
+    };
+    let _ = std::fs::create_dir_all(root.join(".bytewiki"));
+    if let Ok(text) = serde_json::to_string_pretty(&meta) {
+        let _ = std::fs::write(gen_meta_path(root), text);
+    }
+}
+
 // ============ 生成管线数据 ============
 
 /// 模块上下文（统计 + 文件归属 + 依赖），大纲与页面 prompt 的公共输入
@@ -188,7 +220,9 @@ impl AppService {
             .await?;
         let total = outline.pages.len();
         // 路径分配先行：骨架事件即带目标路径（前端树骨架与生成后磁盘文档无缝衔接）
-        let jobs = self.plan_jobs(&outline);
+        let mut jobs = self.plan_jobs(&outline);
+        // 断点续跑：上次中断已落盘且未过期的页面直接沿用（读旧元数据判定）
+        self.resume_keep_pages(root, &mut jobs, &provider);
         let path_of: HashMap<String, String> =
             jobs.iter().map(|j| (j.page.id.clone(), j.rel_path.clone())).collect();
         on_event(GenerateEvent {
@@ -202,6 +236,7 @@ impl AppService {
             stream: None,
         });
         persist_outline(root, &outline);
+        write_gen_meta(root, &provider.id, &provider.chat_model);
 
         // ---- 阶段 3：总览页（仅依赖大纲与路径；提前生成——
         //      逐页可能耗时很久，避免「全部页面完成后还剩一次长调用」的最后一公里静默，
@@ -329,7 +364,9 @@ impl AppService {
             let untouched = !job.page.files.iter().any(|f| changed.contains(f));
             if untouched {
                 if let Ok(old) = std::fs::read_to_string(wiki_dir.join(&job.rel_path)) {
-                    job.action = PageAction::Keep(old);
+                    if !old.trim().is_empty() && !old.contains("本页生成失败") {
+                        job.action = PageAction::Keep(old);
+                    }
                 }
             }
         }
@@ -963,6 +1000,50 @@ impl AppService {
         Ok(modules)
     }
 
+    /// 断点续跑：上次运行已实时落盘且仍然有效的页面直接沿用（零 LLM 调用）。
+    /// 有效性 = 元数据兼容（同供应商/模型/代次）且 非空、非失败占位、
+    /// 绑定文件 mtime 均早于页面落盘（内容未过期）。
+    fn resume_keep_pages(&self, root: &Path, jobs: &mut [PageJob], provider: &crate::model::LlmProvider) {
+        let compatible = match read_gen_meta(root) {
+            Some(m) => {
+                m.provider == provider.id && m.model == provider.chat_model && m.gen_version == GEN_VERSION
+            }
+            None => true, // 无元数据（旧版运行产物）：尽力沿用，本轮流写入元数据
+        };
+        if !compatible {
+            tracing::info!("生成元数据不兼容（模型/代次变更），整批重新生成");
+            return;
+        }
+        let mut kept = 0usize;
+        for j in jobs.iter_mut() {
+            let target = root.join(".bytewiki").join(&j.rel_path);
+            let Ok(content) = std::fs::read_to_string(&target) else {
+                continue; // 未落盘：待生成
+            };
+            if content.trim().is_empty() || content.contains("本页生成失败") {
+                continue; // 空文件/失败占位：重做
+            }
+            let Ok(page_mtime) = std::fs::metadata(&target).and_then(|m| m.modified()) else {
+                continue;
+            };
+            // 绑定源文件在页面落盘之后又改过 → 内容过期，重做
+            let stale = j.page.files.iter().any(|f| {
+                std::fs::metadata(root.join(f))
+                    .and_then(|m| m.modified())
+                    .map(|t| t > page_mtime)
+                    .unwrap_or(false)
+            });
+            if stale {
+                continue;
+            }
+            j.action = PageAction::Keep(content);
+            kept += 1;
+        }
+        if kept > 0 {
+            tracing::info!("断点续跑：沿用 {kept} 个已落盘页面");
+        }
+    }
+
     /// 大纲既定顺序的页面路径表（文档树按大纲序渲染；无 outline.json 返回空）
     pub fn outline_page_paths(&self, repo_path: &str) -> CoreResult<Vec<(String, String)>> {
         let root = Path::new(repo_path);
@@ -998,7 +1079,7 @@ impl AppService {
             let Ok(rel) = entry.path().strip_prefix(&wiki) else { continue };
             let rel = rel.to_string_lossy().replace('\\', "/");
             let name = rel.rsplit('/').next().unwrap_or(&rel).to_string();
-            if name == "index.json" || name == "outline.json" {
+            if name == "index.json" || name == "outline.json" || name == ".gen-meta.json" {
                 continue; // 机器可读清单不进文档树
             }
             let title = name

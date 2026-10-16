@@ -450,10 +450,63 @@ async fn cached_regenerate_hits_cache() {
     svc.clear_llm_cache(repo.to_str().unwrap()).unwrap();
     assert_eq!(svc.llm_cache_stats(repo.to_str().unwrap()).unwrap().0, 0);
 
-    // 清空后第三次生成：重新走 LLM
+    // 清空后第三次生成：大纲缓存已清重新设计；页面被断点续跑沿用（磁盘已落盘且未过期，零调用）
+    let page_before = std::fs::read(repo.join(".bytewiki/pages/系统架构/核心库.md")).unwrap();
     let _s3 = svc.generate_wiki(repo.to_str().unwrap(), &|_| {}).await.unwrap();
     assert_eq!(mock_counts(&state, "outline"), 2);
-    assert_eq!(mock_counts(&state, "page"), 6);
+    assert_eq!(mock_counts(&state, "page"), 3, "续跑应沿用已落盘页面，不再请求");
+    assert_eq!(std::fs::read(repo.join(".bytewiki/pages/系统架构/核心库.md")).unwrap(), page_before);
+}
+
+/// 断点续跑：删一个页面文件 + 改另一个页面的绑定源文件 → 仅这两页真生成，
+/// 其余沿用（零 LLM 调用、字节不变）；模型变更则整批重生成。
+#[tokio::test]
+async fn resume_regenerates_only_missing_and_stale() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = make_repo(dir.path());
+    let (base, state) = start_mock_llm().await;
+    let svc = svc_with_llm(dir.path(), &base);
+    svc.set_llm_cache_enabled(false); // 排除缓存干扰，纯验证磁盘续跑
+    svc.open_repo(repo.to_str().unwrap()).unwrap();
+    svc.generate_wiki(repo.to_str().unwrap(), &|_| {}).await.unwrap();
+    assert_eq!(mock_counts(&state, "page"), 3);
+
+    let wiki = repo.join(".bytewiki");
+    // 中断模拟：删 p1（核心库）落盘文件；p2（命令行入口）绑定源文件在落盘后修改（过期）
+    std::fs::remove_file(wiki.join("pages/系统架构/核心库.md")).unwrap();
+    let stale_src = repo.join("apps/cli/main.rs");
+    let old_mtime_src = std::fs::read(&stale_src).unwrap();
+    // 保证 mtime 严格晚于页面落盘时间
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+    let content = String::from_utf8(old_mtime_src).unwrap() + "// touched later
+";
+    std::fs::write(&stale_src, content).unwrap();
+
+    let summary = svc.generate_wiki(repo.to_str().unwrap(), &|_| {}).await.unwrap();
+    // p3（根目录杂项，仅 README）沿用；p1 缺失、p2 过期 → 2 页真生成
+    assert_eq!(mock_counts(&state, "page"), 5, "应只补 2 页");
+    assert!(wiki.join("pages/系统架构/核心库.md").is_file(), "缺失页已补");
+
+    // 模型变更：元数据不兼容 → 整批重生成
+    svc.set_llm_config(crate::model::LlmConfig {
+        providers: vec![crate::model::LlmProvider {
+            id: "test".into(),
+            name: "测试供应商".into(),
+            kind: "ollama".into(),
+            api_endpoint: base,
+            api_key: String::new(),
+            enabled: true,
+            models: vec![],
+            chat_model: "mock-v2".into(),
+            embed_model: "mock".into(),
+        }],
+        active_id: "test".into(),
+        embed_provider_id: None,
+        presets_seeded: true,
+    })
+    .unwrap();
+    let _s3 = svc.generate_wiki(repo.to_str().unwrap(), &|_| {}).await.unwrap();
+    assert_eq!(mock_counts(&state, "page"), 8, "模型变更应整批重生成");
 }
 
 /// 真实端到端生成冒烟（默认忽略）：本机 ollama + minicpm5 对临时小仓库生成。
