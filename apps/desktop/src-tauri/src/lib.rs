@@ -56,6 +56,7 @@ pub fn run() {
             commands::generate::repo_chat,
             commands::generate::wiki_outline_paths,
             commands::generate::list_gen_tasks,
+            commands::generate::repo_overview,
             commands::generate::clear_gen_tasks,
             commands::llm_logs::list_llm_logs,
             commands::llm_logs::clear_llm_logs,

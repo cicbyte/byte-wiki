@@ -140,6 +140,22 @@ impl Database {
         Ok(rows)
     }
 
+    /// 最近变更日志（时间倒序）：(kind, detail, created_at)
+    pub fn list_change_log(&self, repo_id: i64, limit: usize) -> CoreResult<Vec<(String, String, String)>> {
+        let conn = self.lock()?;
+        let mut stmt = conn.prepare(
+            "SELECT kind, detail, created_at FROM change_log WHERE repo_id = ?1
+             ORDER BY created_at DESC LIMIT ?2",
+        )?;
+        let rows = stmt
+            .query_map(params![repo_id, limit as i64], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+            })?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(rows)
+    }
+
     /// 向量分块数（RAG 补充检索的启用探测：0 = 无索引跳过）
     pub fn count_chunks(&self, repo_id: i64) -> CoreResult<usize> {
         let conn = self.lock()?;

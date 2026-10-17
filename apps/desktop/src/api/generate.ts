@@ -92,8 +92,35 @@ export interface GenTask {
   completion_tokens: number;
 }
 
+/** 项目总览聚合（与 Rust `RepoOverview` 对应） */
+export interface RepoOverview {
+  files_indexed: number;
+  modules: number;
+  edges: number;
+  /** 语言分布 [lang, 文件数] */
+  langs: [string, number][];
+  /** 模块 TOP [module, 文件数] */
+  top_modules: [string, number][];
+  wiki_sections: number;
+  wiki_pages: number;
+  cards: number;
+  chunks: number;
+  /** 最近活动 [kind, detail, created_at] */
+  recent_activity: [string, string, string][];
+  /** 代码规模 */
+  total_lines: number;
+  code_lines: number;
+  blank_lines: number;
+  size_bytes: number;
+  /** 按语言行数分布 [lang, 文件数, 行数]（行数降序 TOP8） */
+  lang_lines: [string, number, number][];
+}
+
 export const generateApi = {
   generateWiki: (path: string) => invoke<GenerateSummary>("generate_wiki", { path }),
+
+  /** 项目总览聚合（只读） */
+  repoOverview: (path: string) => invoke<RepoOverview>("repo_overview", { path }),
 
   /** 后台生成任务快照（全局任务页/页面重入水合） */
   listGenTasks: () => invoke<GenTask[]>("list_gen_tasks"),

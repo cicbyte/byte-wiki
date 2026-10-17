@@ -29,7 +29,7 @@ import { useAiStore } from "@/stores/ai";
 import { useWikiStore } from "@/stores/wiki";
 import { api } from "@/api";
 import type { IndexSummary } from "@/api/repo";
-import type { WikiDocEntry, GenerateEvent, PageProgress } from "@/api/generate";
+import type { WikiDocEntry, GenerateEvent, PageProgress, RepoOverview } from "@/api/generate";
 import type { StaleReport } from "@/api/watch";
 import Panel from "@/components/shared/Panel.vue";
 import EmptyState from "@/components/common/EmptyState.vue";
@@ -63,6 +63,8 @@ const genProgress = ref<GenerateEvent | null>(null);
 const genPages = ref<Map<string, PageProgress>>(new Map());
 const genSummary = ref<{ pages: number; failed: number; prompt: number; completion: number; ms: number } | null>(null);
 const indexSummary = ref<IndexSummary | null>(null);
+/** 总览聚合（索引/Wiki/向量/活动） */
+const overview = ref<RepoOverview | null>(null);
 const generating = ref(false);
 const updating = ref(false);
 /** 外部运行中的任务（本组件未发起——重入水合或后台任务页并行） */
@@ -188,6 +190,19 @@ async function enterRepo() {
   await refreshDocs();
   await refreshStaleness();
   await hydrateExternalTask();
+  await refreshOverview();
+}
+
+async function refreshOverview() {
+  if (!wiki.currentRepo) {
+    overview.value = null;
+    return;
+  }
+  try {
+    overview.value = await api.repoOverview(wiki.currentRepo.path);
+  } catch {
+    overview.value = null;
+  }
 }
 
 /** 水合外部运行中的任务快照（页面销毁后重入：恢复进度树/计时） */
@@ -300,6 +315,7 @@ async function runGenerate() {
     await refreshRepoInfo();
     await refreshDocs();
     await refreshStaleness();
+    await refreshOverview();
     genPages.value = new Map(); // 树切回磁盘文档
     const failNote = s.pages_failed ? `（${s.pages_failed} 页失败）` : "";
     message.success(`Wiki 已生成：${s.pages_generated} 个页面文档${failNote}`);
@@ -326,6 +342,7 @@ async function runUpdate() {
     await refreshRepoInfo();
     await refreshDocs();
     await refreshStaleness();
+    await refreshOverview();
     genPages.value = new Map();
   } catch (e: any) {
     message.error(typeof e === "string" ? e : "更新失败");
@@ -394,6 +411,22 @@ function openFileAt(target: { path: string; startLine?: number; endLine?: number
   router.push(`/repo/${repoId.value}/files`);
 }
 
+const lineMax = computed(() => Math.max(1, ...(overview.value?.lang_lines.map(([, , n]) => n) ?? [1])));
+function linePct(n: number): string {
+  return `${Math.round((n / lineMax.value) * 100)}%`;
+}
+function fmtCount(n?: number): string {
+  if (n == null) return "—";
+  return n >= 10000 ? `${(n / 10000).toFixed(1)}万` : `${n}`;
+}
+function fmtSize(n: number): string {
+  return n >= 1048576 ? `${(n / 1048576).toFixed(1)} MB` : n >= 1024 ? `${(n / 1024).toFixed(1)} KB` : `${n} B`;
+}
+function shortPath(p: string): string {
+  const parts = p.split("/");
+  return parts.length > 2 ? `…/${parts.slice(-2).join("/")}` : p;
+}
+
 function fmtTime(iso: string | null): string {
   if (!iso) return "—";
   return iso.replace("T", " ").replace("Z", "");
@@ -425,12 +458,25 @@ const busy = computed(() => generating.value || updating.value || externalRunnin
           <div class="overview">
             <div class="stat-grid">
               <div class="stat-cell">
-                <span class="stat-label">分支</span>
-                <span class="stat-value">{{ wiki.currentRepo.branch || "—" }}</span>
+                <span class="stat-label">代码规模</span>
+                <span class="stat-value">{{ fmtCount(overview?.total_lines) }} 行</span>
+                <span class="stat-sub">有效 {{ fmtCount(overview?.code_lines) }} · {{ fmtSize(overview?.size_bytes || 0) }}</span>
               </div>
               <div class="stat-cell">
                 <span class="stat-label">文件数</span>
-                <span class="stat-value">{{ wiki.currentRepo.file_count }}</span>
+                <span class="stat-value">{{ overview?.files_indexed ?? wiki.currentRepo.file_count }}</span>
+              </div>
+              <div class="stat-cell">
+                <span class="stat-label">模块 / 引用边</span>
+                <span class="stat-value">{{ overview?.modules ?? "—" }} <em class="dim">/ {{ overview?.edges ?? "—" }}</em></span>
+              </div>
+              <div class="stat-cell">
+                <span class="stat-label">Wiki 章节 / 页面</span>
+                <span class="stat-value">{{ overview?.wiki_sections ?? 0 }} <em class="dim">/ {{ overview?.wiki_pages ?? 0 }}</em></span>
+              </div>
+              <div class="stat-cell">
+                <span class="stat-label">向量块</span>
+                <span class="stat-value">{{ overview?.chunks ?? 0 }}</span>
               </div>
               <div class="stat-cell">
                 <span class="stat-label">上次索引</span>
@@ -442,7 +488,9 @@ const busy = computed(() => generating.value || updating.value || externalRunnin
               </div>
             </div>
             <div class="path-line">
-              <span class="stat-label">路径</span>
+              <span class="stat-label">分支</span>
+              <span class="stat-value">{{ wiki.currentRepo.branch || "—" }}</span>
+              <span class="stat-label" style="margin-left: 14px">路径</span>
               <code class="repo-path-code">{{ wiki.currentRepo.path }}</code>
               <span
                 v-if="staleReport && staleReport.stale"
@@ -453,6 +501,53 @@ const busy = computed(() => generating.value || updating.value || externalRunnin
               </span>
             </div>
 
+            <!-- 索引画像：语言分布 + 模块 TOP -->
+            <div v-if="overview && (overview.lang_lines.length || overview.top_modules.length)" class="profile-grid">
+              <div v-if="overview.lang_lines.length" class="profile-card">
+                <div class="profile-title">语言分布（按行数）</div>
+                <div class="lang-bars">
+                  <div v-for="[lang, fileN, lineN] in overview.lang_lines" :key="lang" class="lang-row">
+                    <span class="lang-name">{{ lang }}</span>
+                    <div class="lang-track">
+                      <div class="lang-fill" :style="{ width: linePct(lineN) }"></div>
+                    </div>
+                    <span class="lang-count" :title="`${fileN} 个文件`">{{ fmtCount(lineN) }} 行</span>
+                  </div>
+                </div>
+              </div>
+              <div v-if="overview.top_modules.length" class="profile-card">
+                <div class="profile-title">模块 TOP</div>
+                <div class="mod-list">
+                  <div v-for="[m, n] in overview.top_modules" :key="m" class="mod-row">
+                    <span class="mod-name" :title="m">{{ m }}</span>
+                    <span class="mod-count">{{ n }} 文件</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- 变更与活动 -->
+            <div v-if="staleReport && staleReport.stale" class="stale-files">
+              <div class="profile-title">待更新变更（{{ staleReport.changes.length }}）</div>
+              <div class="stale-chips">
+                <span v-for="c in staleReport.changes.slice(0, 8)" :key="c.path" class="stale-chip" :title="c.path">
+                  {{ c.kind === "added" ? "＋" : c.kind === "removed" ? "－" : "＊" }} {{ shortPath(c.path) }}
+                </span>
+                <span v-if="staleReport.changes.length > 8" class="stale-chip more">
+                  … 另 {{ staleReport.changes.length - 8 }} 个
+                </span>
+              </div>
+            </div>
+            <div v-if="overview?.recent_activity?.length" class="activity">
+              <div class="profile-title">最近生成活动</div>
+              <ul class="activity-list">
+                <li v-for="(a, i) in overview.recent_activity" :key="i" class="activity-item">
+                  <span class="act-kind" :class="a[0]">{{ a[0] === "generate" ? "生成" : a[0] === "update" ? "更新" : a[0] }}</span>
+                  <span class="act-detail" :title="a[1]">{{ a[1] }}</span>
+                  <span class="act-time">{{ fmtTime(a[2]) }}</span>
+                </li>
+              </ul>
+            </div>
             <div class="overview-actions">
               <button
                 v-if="staleReport && staleReport.stale"
@@ -774,6 +869,11 @@ const busy = computed(() => generating.value || updating.value || externalRunnin
   font-size: 11px;
   color: var(--text-tertiary);
 }
+.stat-sub {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  font-family: "JetBrains Mono", monospace;
+}
 .stat-value {
   font-size: 14px;
   font-weight: 600;
@@ -826,6 +926,155 @@ const busy = computed(() => generating.value || updating.value || externalRunnin
   font-size: 11px;
   color: var(--text-tertiary);
   font-family: "JetBrains Mono", monospace;
+}
+
+/* 索引画像 / 活动 */
+.profile-grid {
+  display: grid;
+  grid-template-columns: 1.2fr 1fr;
+  gap: var(--spacing-md);
+  margin-bottom: var(--spacing-md);
+}
+.profile-card {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  padding: 10px 14px;
+}
+.profile-title {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-bottom: 8px;
+}
+.lang-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 0;
+}
+.lang-name {
+  width: 64px;
+  font-size: 12px;
+  font-family: "JetBrains Mono", monospace;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.lang-track {
+  flex: 1;
+  height: 8px;
+  background: var(--bg-input);
+  border-radius: 4px;
+  overflow: hidden;
+}
+.lang-fill {
+  height: 100%;
+  background: var(--color-primary);
+  opacity: 0.75;
+  border-radius: 4px;
+}
+.lang-count {
+  width: 34px;
+  text-align: right;
+  font-size: 11px;
+  font-family: "JetBrains Mono", monospace;
+  color: var(--text-tertiary);
+}
+.mod-list {
+  display: flex;
+  flex-direction: column;
+}
+.mod-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 3px 0;
+  font-size: 12.5px;
+}
+.mod-name {
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: "JetBrains Mono", monospace;
+}
+.mod-count {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  flex-shrink: 0;
+}
+.stat-value .dim {
+  font-style: normal;
+  color: var(--text-tertiary);
+  font-weight: 400;
+}
+.stale-files {
+  margin-bottom: var(--spacing-md);
+}
+.stale-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.stale-chip {
+  font-size: 11.5px;
+  font-family: "JetBrains Mono", monospace;
+  color: var(--color-warning, #ea8a3c);
+  background: color-mix(in oklch, #ea8a3c 10%, transparent);
+  border-radius: var(--radius-xs);
+  padding: 2px 8px;
+}
+.stale-chip.more {
+  color: var(--text-tertiary);
+  background: var(--bg-input);
+}
+.activity {
+  margin-bottom: var(--spacing-sm);
+}
+.activity-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.activity-item {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 3px 0;
+  font-size: 12px;
+}
+.act-kind {
+  flex-shrink: 0;
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--color-primary);
+  background: var(--color-primary-bg);
+  border-radius: var(--radius-xs);
+  padding: 0 6px;
+  line-height: 17px;
+}
+.act-kind.update {
+  color: var(--color-warning, #ea8a3c);
+  background: color-mix(in oklch, #ea8a3c 12%, transparent);
+}
+.act-detail {
+  flex: 1;
+  min-width: 0;
+  color: var(--text-secondary);
+  font-family: "JetBrains Mono", monospace;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.act-time {
+  flex-shrink: 0;
+  color: var(--text-tertiary);
+  font-size: 11px;
 }
 
 /* 文档 */

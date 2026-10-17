@@ -16,6 +16,7 @@ pub mod llm;
 pub mod llm_cache;
 pub mod llm_log;
 pub mod model;
+pub mod overview;
 pub mod rag;
 pub mod repo;
 pub mod service;

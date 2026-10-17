@@ -266,3 +266,13 @@ fn repo_id_of(svc: &AppService, path: &str) -> i64 {
         .map(|r| r.id)
         .unwrap_or(0)
 }
+
+/// 项目总览聚合（只读：索引/Wiki/向量/活动历史）
+#[tauri::command]
+pub fn repo_overview(
+    state: tauri::State<'_, AppState>,
+    path: String,
+) -> Result<byte_wiki_core::overview::RepoOverview, String> {
+    let svc: Arc<AppService> = Arc::clone(&state.svc);
+    svc.repo_overview(&path).map_err(|e| e.to_string())
+}
