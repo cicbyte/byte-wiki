@@ -38,7 +38,7 @@ pub async fn generate_wiki(
         if let Some(repo) = svc.db.get_repo_by_path(
             &byte_wiki_core::canonical_key(std::path::Path::new(&path)).unwrap_or_default(),
         ).ok().flatten() {
-            svc.tasks.fail(repo.id, &e.to_string());
+            svc.tasks.fail(repo.id, &byte_wiki_core::branch::current_branch(std::path::Path::new(&path)), &e.to_string());
         }
         let _ = app_handle.emit(GENERATE_EVENT, &GenerateEvent {
             phase: "error".into(),
@@ -46,6 +46,7 @@ pub async fn generate_wiki(
             message: e.to_string(),
             prompt_tokens: 0, completion_tokens: 0,
             pages: None, stream: None, repo_id: Some(repo_id_of(&svc, &path)),
+            branch: None,
         });
     }
     result.map_err(|e| e.to_string())
@@ -73,7 +74,7 @@ pub async fn update_wiki(
         if let Some(repo) = svc.db.get_repo_by_path(
             &byte_wiki_core::canonical_key(std::path::Path::new(&path)).unwrap_or_default(),
         ).ok().flatten() {
-            svc.tasks.fail(repo.id, &e.to_string());
+            svc.tasks.fail(repo.id, &byte_wiki_core::branch::current_branch(std::path::Path::new(&path)), &e.to_string());
         }
     }
     result.map_err(|e| e.to_string())
@@ -232,6 +233,7 @@ pub async fn rebuild_embeddings(
             pages: None,
             stream: None,
             repo_id: None,
+            branch: None,
         });
     })
     .await
@@ -246,6 +248,52 @@ pub fn wiki_outline_paths(
 ) -> Result<Vec<(String, String)>, String> {
     let svc: Arc<AppService> = Arc::clone(&state.svc);
     svc.outline_page_paths(&path).map_err(|e| e.to_string())
+}
+
+/// 已生成 wiki 产物的分支列表（文档页只读切换的选项来源）
+#[tauri::command]
+pub fn generated_branches(path: String) -> Result<Vec<String>, String> {
+    let root = std::path::Path::new(&path)
+        .canonicalize()
+        .map_err(|e| e.to_string())?;
+    Ok(byte_wiki_core::branch::generated_branches(&root))
+}
+
+/// 指定查看分支的文档清单（只读视图；branch=None 为当前分支）
+#[tauri::command]
+pub fn list_wiki_docs_for(
+    state: tauri::State<'_, AppState>,
+    path: String,
+    branch: Option<String>,
+) -> Result<Vec<(String, String, String)>, String> {
+    let svc: Arc<AppService> = Arc::clone(&state.svc);
+    svc.list_wiki_docs_for(&path, branch.as_deref())
+        .map_err(|e| e.to_string())
+}
+
+/// 读取指定分支产物（只读视图：cards→共享根；其余→branches/<view>/）
+#[tauri::command]
+pub fn read_wiki_doc_for(
+    repo_path: String,
+    doc_path: String,
+    view_branch: String,
+) -> Result<String, String> {
+    let root = std::path::Path::new(&repo_path)
+        .canonicalize()
+        .map_err(|e| e.to_string())?;
+    let (wiki, rel) = if let Some(card) = doc_path.strip_prefix("cards/") {
+        (byte_wiki_core::branch::cards_root(&root), card)
+    } else {
+        (byte_wiki_core::branch::wiki_root(&root, &view_branch), doc_path.as_str())
+    };
+    let full = wiki
+        .join(rel)
+        .canonicalize()
+        .map_err(|_| format!("文档不存在：{doc_path}"))?;
+    if !full.starts_with(&wiki) {
+        return Err(format!("非法路径：{doc_path}"));
+    }
+    std::fs::read_to_string(&full).map_err(|e| e.to_string())
 }
 
 /// 后台生成任务快照（全局任务页/页面重入水合）

@@ -30,6 +30,8 @@ export interface GenerateEvent {
   pages?: PageProgress[];
   /** 归属项目（前端按项目过滤；本进程内事件必填） */
   repo_id?: number | null;
+  /** 归属分支（任务启动时捕获） */
+  branch?: string | null;
 }
 
 /** 生成结果摘要（与 Rust `GenerateSummary` 对应） */
@@ -69,6 +71,7 @@ export interface LlmStreamChunk {
   /** 页面 id（正文按页累积，实时查看用） */
   page_id?: string | null;
   repo_id?: number | null;
+  branch?: string | null;
 }
 
 export const GENERATE_EVENT = "wiki://generate";
@@ -77,6 +80,8 @@ export const LLM_STREAM_EVENT = "wiki://llm-stream";
 /** 后台生成任务快照（与 Rust `GenTask` 对应） */
 export interface GenTask {
   repo_id: number;
+  /** 归属分支（生成启动时捕获） */
+  branch: string;
   repo_name: string;
   repo_path: string;
   kind: "generate" | "update" | string;
@@ -134,6 +139,17 @@ export const generateApi = {
 
   readWikiDoc: (repoPath: string, docPath: string) =>
     invoke<string>("read_wiki_doc", { repoPath, docPath }),
+
+  /** 已生成 wiki 产物的分支列表（文档页只读切换选项） */
+  generatedBranches: (path: string) => invoke<string[]>("generated_branches", { path }),
+
+  /** 指定查看分支的文档清单（只读视图；branch 缺省=当前分支） */
+  listWikiDocsFor: (path: string, branch?: string) =>
+    invoke<WikiDocEntry[]>("list_wiki_docs_for", { path, branch }),
+
+  /** 读取指定分支产物（只读） */
+  readWikiDocFor: (repoPath: string, docPath: string, viewBranch: string) =>
+    invoke<string>("read_wiki_doc_for", { repoPath, docPath, viewBranch }),
 
   repoChat: (path: string, question: string, history: [string, string][]) =>
     invoke<ChatAnswer>("repo_chat", { path, question, history }),

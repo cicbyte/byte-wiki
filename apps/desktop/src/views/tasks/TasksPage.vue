@@ -76,7 +76,9 @@ onMounted(async () => {
   // 事件实时更新 + 轮询兜底（事件丢失/外部启动时也能追上）
   unlisten = await api.onGenerateEvent((e) => {
     if (e.repo_id == null) return;
-    const t = tasks.value.find((x) => x.repo_id === e.repo_id);
+    const t = tasks.value.find(
+      (x) => x.repo_id === e.repo_id && (e.branch == null || x.branch === e.branch),
+    );
     if (t) {
       t.phase = e.phase;
       t.current = e.current;
@@ -150,6 +152,7 @@ function pageStat(p: PageProgress): string {
           <CheckCircleOutlined v-else-if="t.phase === 'done'" class="ok" />
           <CloseCircleOutlined v-else class="bad" />
           <span class="task-repo">{{ t.repo_name }}</span>
+          <span class="task-branch" title="任务归属分支（生成启动时所在分支）">{{ t.branch }}</span>
           <span class="task-kind">{{ t.kind === "update" ? "增量更新" : "一键生成" }}</span>
           <span class="task-phase" :class="{ err: t.phase === 'error' }">
             {{ PHASE_TEXT[t.phase] || t.phase }}
@@ -268,6 +271,18 @@ function pageStat(p: PageProgress): string {
   font-size: 14px;
   font-weight: 600;
   color: var(--text-primary);
+}
+.task-branch {
+  font-size: 11px;
+  color: var(--color-primary);
+  font-family: "JetBrains Mono", monospace;
+  background: var(--color-primary-bg);
+  border-radius: var(--radius-xs);
+  padding: 1px 8px;
+  max-width: 110px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .task-kind {
   font-size: 11px;

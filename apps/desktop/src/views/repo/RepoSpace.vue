@@ -55,6 +55,19 @@ const tab = computed(() => (route.meta.tab as string) || "overview");
 const wikiDocs = ref<WikiDocEntry[]>([]);
 /** 大纲既定顺序的页面路径（磁盘树按大纲序渲染；骨架树内部自取 genPages 序） */
 const outlineOrder = ref<string[]>([]);
+/** 只读查看分支（null=当前分支，真实操作仅当前分支参与） */
+const viewBranch = ref<string | null>(null);
+/** 已生成且非当前的分支（空态直达） */
+const switchableBranches = computed(() =>
+  generatedBranchList.value.filter((b) => b !== (wiki.currentRepo?.branch || "")),
+);
+/** 已生成分支选项（branches/ 下有产物的目录） */
+const generatedBranchList = ref<string[]>([]);
+
+/** 是否处于只读查看（非当前分支） */
+const readonlyBranch = computed(
+  () => !!viewBranch.value && viewBranch.value !== wiki.currentRepo?.branch,
+);
 const currentDoc = ref("");
 const staleReport = ref<StaleReport | null>(null);
 const genProgress = ref<GenerateEvent | null>(null);
@@ -155,8 +168,9 @@ onMounted(async () => {
     }
   });
   unlisten = await api.onGenerateEvent((e) => {
-    // 按项目过滤：其它项目的任务事件不进本视图（后台多任务并行时互不污染）
+    // 按项目+分支过滤：其它项目/其它分支的任务事件不进本视图
     if (e.repo_id != null && wiki.currentRepo && e.repo_id !== wiki.currentRepo.id) return;
+    if (e.branch != null && wiki.currentRepo?.branch && e.branch !== wiki.currentRepo.branch) return;
     const external = !generating.value && !updating.value; // 本组件未发起（其它页面/重入前的运行）
     genProgress.value = e;
     if (e.phase === "done" && external) {
@@ -215,7 +229,9 @@ async function refreshOverview() {
 async function hydrateExternalTask() {
   try {
     const tasks = await api.listGenTasks();
-    const t = tasks.find((x) => !x.finished && x.repo_path === wiki.currentRepo?.path);
+    const t = tasks.find(
+      (x) => !x.finished && x.repo_path === wiki.currentRepo?.path && x.branch === (wiki.currentRepo?.branch || ""),
+    );
     if (!t) {
       externalRunning.value = false;
       return;
@@ -270,6 +286,25 @@ async function refreshDocs() {
     wikiDocs.value = [];
     return;
   }
+  // 可查看分支选项（当前分支不在目录列表时也补进去；先于只读 early-return）
+  try {
+    const list = await api.generatedBranches(wiki.currentRepo.path);
+    const cur = wiki.currentRepo.branch || "";
+    generatedBranchList.value = cur && !list.includes(cur) ? [cur, ...list] : list;
+  } catch {
+    generatedBranchList.value = [];
+  }
+  // 只读查看分支：清单走目标分支目录（无 db 登记依赖）
+  if (readonlyBranch.value) {
+    try {
+      wikiDocs.value = await api.listWikiDocsFor(wiki.currentRepo.path, viewBranch.value!);
+    } catch {
+      wikiDocs.value = [];
+    }
+    currentDoc.value = pickDefaultDoc();
+    outlineOrder.value = [];
+    return;
+  }
   try {
     wikiDocs.value = await api.listWikiDocs(wiki.currentRepo.path);
     if (wikiDocs.value.length && !wikiDocs.value.some(([p]) => p === currentDoc.value)) {
@@ -284,6 +319,20 @@ async function refreshDocs() {
   } catch {
     outlineOrder.value = [];
   }
+}
+
+/** 切换查看分支（只读；不切换 git，仅文档视图） */
+async function switchViewBranch(b: string) {
+  viewBranch.value = b || null;
+  currentDoc.value = "";
+  await refreshDocs();
+}
+
+/** 回到当前分支（退出只读查看） */
+async function backToCurrentBranch() {
+  viewBranch.value = null;
+  currentDoc.value = "";
+  await refreshDocs();
 }
 
 async function refreshStaleness() {
@@ -635,11 +684,14 @@ const busy = computed(() => generating.value || updating.value || externalRunnin
               :gen-pages="[...genPages.values()]"
               :generating="busy"
               :gen-hint="genProgress?.message"
-              :stale-count="staleReport?.stale ? staleReport.changes.length : 0"
+              :stale-count="!readonlyBranch && staleReport?.stale ? staleReport.changes.length : 0"
               :branch="wiki.currentRepo?.branch || undefined"
+              :view-branch="viewBranch"
+              :branch-options="generatedBranchList"
               :actions-disabled="busy || rebuilding"
               @select="currentDoc = $event"
               @action="onTreeAction"
+              @switch-branch="switchViewBranch"
             />
           </aside>
           <section class="viewer-pane">
@@ -649,10 +701,41 @@ const busy = computed(() => generating.value || updating.value || externalRunnin
               :doc-path="currentDoc"
               :live-content="liveContent"
               :live-status="liveStatus"
+              :view-branch="readonlyBranch ? viewBranch : null"
               @open-doc="openDocInDocs"
               @open-file="openFileAt"
             />
-            <EmptyState v-else text="暂无文档" hint="左侧选择文档，或先生成 Wiki" />
+            <!-- 空态：主内容区角色（比侧栏树空态更有分量：大标题+分支行+主行动按钮） -->
+            <div v-else class="viewer-empty">
+              <div class="ve-title">这个分支还没有 Wiki</div>
+              <div class="ve-sub">
+                <template v-if="readonlyBranch">
+                  正在查看 <span class="ve-mono">{{ viewBranch }}</span> · 当前分支是
+                  <span class="ve-mono">{{ wiki.currentRepo?.branch }}</span>
+                </template>
+                <template v-else-if="wiki.currentRepo?.branch">
+                  当前分支 <span class="ve-mono">{{ wiki.currentRepo.branch }}</span>
+                  <template v-if="switchableBranches.length">
+                    · 已生成：<span class="ve-mono">{{ switchableBranches.join(" / ") }}</span>
+                  </template>
+                </template>
+              </div>
+              <div class="ve-actions">
+                <button v-if="readonlyBranch" class="btn primary sm" @click="backToCurrentBranch()">
+                  回 {{ wiki.currentRepo?.branch }} 生成
+                </button>
+                <template v-else>
+                  <button
+                    v-for="b in switchableBranches"
+                    :key="b"
+                    class="btn sm"
+                    @click="switchViewBranch(b)"
+                  >
+                    查看 {{ b }}
+                  </button>
+                </template>
+              </div>
+            </div>
           </section>
         </div>
       </div>
@@ -1112,6 +1195,36 @@ const busy = computed(() => generating.value || updating.value || externalRunnin
   border: 1px solid var(--border-card);
   border-radius: var(--radius-lg);
   overflow: hidden;
+}
+/* 查看器空态：主内容区角色——大标题 + 单行说明 + 按钮组（比侧栏树空态重一级） */
+.viewer-empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  text-align: center;
+  padding: var(--spacing-lg);
+}
+.ve-title {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+.ve-sub {
+  font-size: 12px;
+  color: var(--text-tertiary);
+  line-height: 1.7;
+}
+.ve-mono {
+  font-family: "JetBrains Mono", monospace;
+  color: var(--text-secondary);
+}
+.ve-actions {
+  margin-top: 6px;
+  display: flex;
+  gap: var(--spacing-sm);
 }
 .viewer-pane {
   flex: 1;

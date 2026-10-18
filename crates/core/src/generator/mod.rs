@@ -58,6 +58,9 @@ pub struct GenerateEvent {
     /// 归属项目（前端按项目过滤；本进程内事件必填）
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub repo_id: Option<i64>,
+    /// 归属分支（任务启动时捕获；前端任务页/项目页按分支路由）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
 }
 
 /// 流式增量（右下角终端实时显示；高频小事件，与进度事件同回调、异通道）
@@ -74,6 +77,9 @@ pub struct StreamChunk {
     /// 归属项目
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub repo_id: Option<i64>,
+    /// 归属分支
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
 }
 
 /// 单页进度（前端按 id 合并出页面清单）
@@ -222,11 +228,14 @@ impl AppService {
 
         // 后台任务注册 + 事件包裹：标注 repo_id（前端按项目过滤）并同步注册表
         let task_repo_id = repo.id;
-        self.tasks.begin(task_repo_id, &repo.name, repo_path, "generate");
+        let task_branch = branch.clone();
+        self.tasks.begin(task_repo_id, &task_branch, &repo.name, repo_path, "generate");
         let wrapped = |mut e: GenerateEvent| {
             e.repo_id = Some(task_repo_id);
+            e.branch = Some(task_branch.clone());
             if let Some(chunk) = &mut e.stream {
                 chunk.repo_id = Some(task_repo_id);
+                chunk.branch = Some(task_branch.clone());
             }
             self.tasks.update(task_repo_id, &e);
             on_event(e);
@@ -255,6 +264,7 @@ impl AppService {
             pages: Some(skeleton(&outline, &path_of)),
             stream: None,
             repo_id: None,
+            branch: None,
         });
         persist_outline(root, &branch, &outline);
         write_gen_meta(root, &branch, &provider.id, &provider.chat_model);
@@ -357,11 +367,14 @@ impl AppService {
 
         // 后台任务注册 + 事件包裹：标注 repo_id（前端按项目过滤）并同步注册表
         let task_repo_id = repo.id;
-        self.tasks.begin(task_repo_id, &repo.name, repo_path, "update");
+        let task_branch = branch.clone();
+        self.tasks.begin(task_repo_id, &task_branch, &repo.name, repo_path, "update");
         let wrapped = |mut e: GenerateEvent| {
             e.repo_id = Some(task_repo_id);
+            e.branch = Some(task_branch.clone());
             if let Some(chunk) = &mut e.stream {
                 chunk.repo_id = Some(task_repo_id);
+                chunk.branch = Some(task_branch.clone());
             }
             self.tasks.update(task_repo_id, &e);
             on_event(e);
@@ -392,6 +405,7 @@ impl AppService {
             pages: Some(skeleton(&outline, &path_of)),
             stream: None,
             repo_id: None,
+            branch: None,
         });
         persist_outline(root, &branch, &outline);
         write_gen_meta(root, &branch, &provider.id, &provider.chat_model);
@@ -567,6 +581,7 @@ impl AppService {
                     pages: Some(vec![page_progress(page, &chain, "done", Some(job.rel_path.clone()))]),
                     stream: None,
                     repo_id: None,
+                    branch: None,
                 });
                 results.push(PageOutcome {
                     rel_path: job.rel_path.clone(),
@@ -588,6 +603,7 @@ impl AppService {
                 pages: Some(vec![page_progress(page, &chain, "generating", Some(job.rel_path.clone()))]),
                 stream: None,
                 repo_id: None,
+                branch: None,
             });
 
             let mut last_err: Option<String> = None;
@@ -646,6 +662,7 @@ impl AppService {
                 pages: Some(vec![page_progress(page, &chain, if ok { "done" } else { "failed" }, Some(job.rel_path.clone()))]),
                 stream: None,
                 repo_id: None,
+                branch: None,
             });
         }
         Ok((results, failed))
@@ -792,6 +809,7 @@ impl AppService {
             completion_tokens: 0,
             pages: None,
             repo_id: None,
+            branch: None,
             stream: Some(StreamChunk {
                 call: label.to_string(),
                 channel: "meta".into(),
@@ -800,6 +818,7 @@ impl AppService {
 "),
                 page_id: page_id.map(str::to_string),
                 repo_id: None,
+                branch: None,
             }),
         });
         let result = stream_llm(client, messages, phase, current, total, label, page_id, on_event).await;
@@ -812,6 +831,7 @@ impl AppService {
             completion_tokens: 0,
             pages: None,
             repo_id: None,
+            branch: None,
             stream: Some(StreamChunk {
                 call: label.to_string(),
                 channel: "meta".into(),
@@ -828,6 +848,7 @@ impl AppService {
                 },
                 page_id: page_id.map(str::to_string),
                 repo_id: None,
+                branch: None,
             }),
         });
         // 成功才缓存（失败结果不进缓存，重跑即重试）
@@ -998,6 +1019,7 @@ impl AppService {
             }
         }
         self.db.log_change(repo_id, branch, kind, detail)?;
+        self.tasks.finish(repo_id, branch, &done_msg);
         on_event(ev("done", 0, 0, done_msg));
         Ok(())
     }
@@ -1088,6 +1110,59 @@ impl AppService {
         if kept > 0 {
             tracing::info!("断点续跑：沿用 {kept} 个已落盘页面");
         }
+    }
+
+    /// 指定查看分支的文档清单（只读视图：目标分支产物 + 共享 cards；
+    /// view_branch=None 为当前分支即常规行为）
+    pub fn list_wiki_docs_for(
+        &self,
+        repo_path: &str,
+        view_branch: Option<&str>,
+    ) -> CoreResult<Vec<(String, String, String)>> {
+        let root = Path::new(repo_path);
+        let branch = match view_branch {
+            Some(b) if !b.is_empty() => b.to_string(),
+            _ => crate::branch::current_branch(root),
+        };
+        // 分支目录名即 branch_dir 的转写（查看分支来自目录列表，天然一致）
+        let wiki = crate::branch::wiki_root(root, &branch);
+        let mut out: Vec<(String, String, String)> = Vec::new();
+        for entry in walkdir::WalkDir::new(&wiki)
+            .into_iter()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_type().is_file())
+        {
+            let Ok(rel) = entry.path().strip_prefix(&wiki) else { continue };
+            let rel = rel.to_string_lossy().replace('\\', "/");
+            let name = rel.rsplit('/').next().unwrap_or(&rel).to_string();
+            if matches!(name.as_str(), "index.json" | "outline.json" | ".gen-meta.json") {
+                continue;
+            }
+            let title = name.trim_end_matches(".md").trim_end_matches(".mmd").trim_end_matches(".json").to_string();
+            let kind = if rel.starts_with("pages/") {
+                "page"
+            } else if rel.starts_with("graphs/") {
+                "graph"
+            } else if rel.starts_with("modules/") {
+                "module"
+            } else {
+                "architecture"
+            };
+            out.push((rel.clone(), kind.to_string(), title));
+        }
+        // 共享知识卡
+        for entry in walkdir::WalkDir::new(crate::branch::cards_root(root))
+            .into_iter()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_type().is_file())
+        {
+            let Ok(rel) = entry.path().strip_prefix(crate::branch::cards_root(root)) else { continue };
+            let rel = format!("cards/{}", rel.to_string_lossy().replace('\\', "/"));
+            let title = rel.rsplit('/').next().unwrap_or(&rel).trim_end_matches(".md").to_string();
+            out.push((rel, "card".to_string(), title));
+        }
+        out.sort();
+        Ok(out)
     }
 
     /// 大纲既定顺序的页面路径表（文档树按大纲序渲染；无 outline.json 返回空）
@@ -1305,6 +1380,7 @@ async fn stream_llm(
             pages: None,
             stream: None,
             repo_id: None,
+            branch: None,
         });
     };
 
@@ -1322,12 +1398,14 @@ async fn stream_llm(
             completion_tokens: 0,
             pages: None,
             repo_id: None,
+            branch: None,
             stream: Some(StreamChunk {
                 call: call_label.clone(),
                 channel: channel.to_string(),
                 delta: delta.to_string(),
                 page_id: page_id.map(str::to_string),
                 repo_id: None,
+                branch: None,
             }),
         });
     };
@@ -1387,6 +1465,7 @@ fn ev(phase: &str, current: usize, total: usize, message: impl Into<String>) -> 
         pages: None,
         stream: None,
         repo_id: None,
+        branch: None,
     }
 }
 

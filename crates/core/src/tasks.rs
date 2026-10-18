@@ -16,6 +16,8 @@ use crate::generator::{GenerateEvent, PageProgress};
 #[derive(Debug, Clone, Serialize)]
 pub struct GenTask {
     pub repo_id: i64,
+    /// 任务归属分支（生成启动时捕获——归属唯一确定，不依赖事后推断）
+    pub branch: String,
     pub repo_name: String,
     pub repo_path: String,
     /// generate / update
@@ -38,10 +40,10 @@ pub struct GenTask {
     pub completion_tokens: u64,
 }
 
-/// 全局注册表（每项目一个任务：同项目重复触发的生成/更新复用同一条目）
+/// 全局注册表（每 (项目, 分支) 一个任务：同项目多分支任务并存不覆盖）
 #[derive(Default)]
 pub struct TaskManager {
-    inner: Mutex<HashMap<i64, GenTask>>,
+    inner: Mutex<HashMap<(i64, String), GenTask>>,
 }
 
 fn now_ms() -> u64 {
@@ -52,12 +54,14 @@ fn now_ms() -> u64 {
 }
 
 impl TaskManager {
-    pub fn begin(&self, repo_id: i64, repo_name: &str, repo_path: &str, kind: &str) {
+    pub fn begin(&self, repo_id: i64, branch: &str, repo_name: &str, repo_path: &str, kind: &str) {
         let mut g = self.inner.lock().unwrap();
+        let key = (repo_id, branch.to_string());
         g.insert(
-            repo_id,
+            key.clone(),
             GenTask {
                 repo_id,
+                branch: branch.to_string(),
                 repo_name: repo_name.to_string(),
                 repo_path: repo_path.to_string(),
                 kind: kind.to_string(),
@@ -75,10 +79,27 @@ impl TaskManager {
         );
     }
 
-    /// 事件到达即更新快照（pages 按 id 合并；outlining 全量骨架重置）
+    /// 事件到达即更新快照（pages 按 id 合并；outlining 全量骨架重置）。
+    /// 事件带 branch（生成管线注入）时按 (repo, branch) 精确路由；
+    /// 无 branch 的旧事件回退 (repo, 唯一任务) 兼容
     pub fn update(&self, repo_id: i64, e: &GenerateEvent) {
         let mut g = self.inner.lock().unwrap();
-        let Some(t) = g.get_mut(&repo_id) else { return };
+        let key = match &e.branch {
+            Some(b) => (repo_id, b.clone()),
+            None => {
+                // 兼容：该项目的任务（多于一个时取未完成的）
+                let hit = g
+                    .iter()
+                    .filter(|((rid, _), _)| *rid == repo_id)
+                    .find(|(_, t)| !t.finished)
+                    .or_else(|| g.iter().find(|((rid, _), _)| *rid == repo_id));
+                match hit {
+                    Some(((rid, br), _)) => (*rid, br.clone()),
+                    None => return,
+                }
+            }
+        };
+        let Some(t) = g.get_mut(&key) else { return };
         t.phase = e.phase.clone();
         t.current = e.current;
         t.total = e.total;
@@ -104,9 +125,9 @@ impl TaskManager {
         }
     }
 
-    pub fn finish(&self, repo_id: i64, note: &str) {
+    pub fn finish(&self, repo_id: i64, branch: &str, note: &str) {
         let mut g = self.inner.lock().unwrap();
-        if let Some(t) = g.get_mut(&repo_id) {
+        if let Some(t) = g.get_mut(&(repo_id, branch.to_string())) {
             t.finished = true;
             t.phase = "done".into();
             if !note.is_empty() {
@@ -115,9 +136,9 @@ impl TaskManager {
         }
     }
 
-    pub fn fail(&self, repo_id: i64, error: &str) {
+    pub fn fail(&self, repo_id: i64, branch: &str, error: &str) {
         let mut g = self.inner.lock().unwrap();
-        if let Some(t) = g.get_mut(&repo_id) {
+        if let Some(t) = g.get_mut(&(repo_id, branch.to_string())) {
             t.finished = true;
             t.phase = "error".into();
             t.error = error.to_string();
@@ -155,6 +176,7 @@ mod tests {
             pages,
             stream: None,
             repo_id: None,
+            branch: None,
         }
     }
 
@@ -172,7 +194,7 @@ mod tests {
     #[test]
     fn lifecycle_merge_and_list() {
         let tm = TaskManager::default();
-        tm.begin(1, "a", "/a", "generate");
+        tm.begin(1, "main", "a", "/a", "generate");
         tm.update(1, &ev("outlining", Some(vec![pp("p1", "pending"), pp("p2", "pending")])));
         tm.update(1, &ev("generating", Some(vec![pp("p1", "generating")])));
         tm.update(1, &ev("generating", Some(vec![pp("p1", "done")])));
@@ -183,7 +205,7 @@ mod tests {
         assert_eq!(t.pages[0].status, "done");
         assert_eq!(t.pages[1].status, "pending");
         assert!(!t.finished);
-        tm.finish(1, "完成");
+        tm.finish(1, "main", "完成");
         assert!(tm.list()[0].finished);
         tm.clear_finished();
         assert!(tm.list().is_empty());
@@ -192,8 +214,8 @@ mod tests {
     #[test]
     fn fail_marks_error() {
         let tm = TaskManager::default();
-        tm.begin(2, "b", "/b", "update");
-        tm.fail(2, "boom");
+        tm.begin(2, "dev", "b", "/b", "update");
+        tm.fail(2, "dev", "boom");
         let t = &tm.list()[0];
         assert!(t.finished);
         assert_eq!(t.phase, "error");

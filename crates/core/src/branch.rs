@@ -85,6 +85,32 @@ pub fn cache_ns(repo_path: &str) -> String {
     format!("{:x}", h.finalize())[..12].to_string()
 }
 
+/// 已生成 wiki 产物的分支目录列表（分支名恢复：目录名仅做了字符替换，
+/// 恢复不可逆，因此目录内以 outline.json 无分支信息为由，直接用目录名
+/// 作为展示名——生成时的真实分支名记录在 .gen-meta.json，可读则优先）
+pub fn generated_branches(root: &Path) -> Vec<String> {
+    let branches = root.join(".bytewiki").join("branches");
+    let Ok(rd) = std::fs::read_dir(&branches) else {
+        return vec![];
+    };
+    let mut out: Vec<String> = rd
+        .flatten()
+        .filter(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false))
+        .filter(|e| {
+            // 有产物特征（outline.json 或 pages/）才算已生成分支
+            let d = e.path();
+            d.join("outline.json").is_file() || d.join("pages").is_dir()
+        })
+        .filter_map(|e| {
+            let dir_name = e.file_name().to_string_lossy().into_owned();
+            // 优先 .gen-meta 不可用；直接展示目录名（生成时 branch_dir 的转写形式）
+            Some(dir_name)
+        })
+        .collect();
+    out.sort();
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

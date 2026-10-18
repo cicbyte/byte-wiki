@@ -22,6 +22,8 @@ const props = defineProps<{
   liveContent?: string | null;
   /** 当前页骨架状态（generating 时才亮徽标；收尾期 done 页静默） */
   liveStatus?: string | null;
+  /** 只读查看分支（非空时磁盘读取走该分支目录） */
+  viewBranch?: string | null;
 }>();
 
 const emit = defineEmits<{
@@ -47,7 +49,9 @@ async function load() {
   loading.value = true;
   zoom.value = 1;
   try {
-    const raw = await api.readWikiDoc(props.repoPath, props.docPath);
+    const raw = props.viewBranch
+      ? await api.readWikiDocFor(props.repoPath, props.docPath, props.viewBranch)
+      : await api.readWikiDoc(props.repoPath, props.docPath);
     content.value = isGraph.value ? "```mermaid\n" + raw + "\n```" : stripFrontmatter(raw);
   } catch (e: any) {
     content.value = "";
@@ -111,6 +115,9 @@ function onBodyClick(ev: MouseEvent) {
   <div class="wiki-viewer">
     <div class="viewer-toolbar">
       <span class="doc-path">{{ docPath }}</span>
+      <span v-if="viewBranch" class="live-badge readonly-badge" :title="`正在查看「${viewBranch}」分支的产物（只读）`">
+        查看 {{ viewBranch }}
+      </span>
       <span v-if="liveContent != null && liveStatus === 'generating'" class="live-badge" title="页面正在生成，内容实时刷新">
         <span class="live-dot"></span>
         实时生成中
@@ -189,6 +196,10 @@ function onBodyClick(ev: MouseEvent) {
   border-radius: var(--radius-xs);
   padding: 1px 8px;
   white-space: nowrap;
+}
+.readonly-badge {
+  color: var(--color-warning, #ea8a3c);
+  background: color-mix(in oklch, #ea8a3c 12%, transparent);
 }
 .live-dot {
   width: 6px;
