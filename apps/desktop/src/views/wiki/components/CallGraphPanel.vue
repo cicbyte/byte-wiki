@@ -22,6 +22,7 @@ import {
   DoubleRightOutlined,
   CaretRightOutlined,
   ExpandOutlined,
+  NodeIndexOutlined,
   ShrinkOutlined,
   CopyOutlined,
   ClusterOutlined,
@@ -908,11 +909,10 @@ let srcDecorations: { clear(): void } | null = null;
           </template>
         </div>
         <div v-if="loading" class="cg-overlay"><EmptyState text="加载调用图…" /></div>
-        <div v-else-if="missing" class="cg-overlay">
-          <EmptyState
-            text="尚未生成调用链"
-            hint="tree-sitter 多语言提取函数级调用图，产物随仓库共享（.bytewiki/graphs/callchain/）"
-          />
+        <div v-else-if="missing" class="cg-overlay cg-empty">
+          <NodeIndexOutlined class="ce-icon" />
+          <div class="ce-title">尚未生成调用链</div>
+          <div class="ce-sub">函数级调用图 · tree-sitter 多语言提取 · 按分支独立</div>
           <button class="btn primary" :disabled="generating" @click="generate">
             <ReloadOutlined :spin="generating" /> {{ generating ? "生成中…" : "生成调用链" }}
           </button>
@@ -1546,6 +1546,28 @@ let srcDecorations: { clear(): void } | null = null;
   gap: 12px;
   background: var(--bg-card);
   z-index: 5;
+}
+/* 空态：与文档页 viewer-empty 同语言（图标/标题/说明/按钮 一列流式） */
+.cg-empty {
+  gap: 0;
+  padding: var(--spacing-lg);
+}
+.ce-icon {
+  font-size: 30px;
+  color: var(--color-primary);
+  opacity: 0.5;
+  margin-bottom: 14px;
+}
+.ce-title {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin-bottom: 7px;
+}
+.ce-sub {
+  font-size: 12px;
+  color: var(--text-tertiary);
+  margin-bottom: 20px;
 }
 .cg-legend {
   position: absolute;
