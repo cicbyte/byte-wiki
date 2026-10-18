@@ -100,7 +100,8 @@ pub fn list_wiki_docs(
         return Ok(vec![]);
     };
 
-    let mut docs = svc.db.list_wiki_docs(repo.id).map_err(|e| e.to_string())?;
+    let branch = byte_wiki_core::branch::current_branch(std::path::Path::new(&path));
+    let mut docs = svc.db.list_wiki_docs(repo.id, &branch).map_err(|e| e.to_string())?;
     if docs.is_empty() {
         docs = svc
             .scan_existing_wiki(std::path::Path::new(&repo_root))
@@ -116,7 +117,13 @@ pub fn read_wiki_doc(repo_path: String, doc_path: String) -> Result<String, Stri
     let root = std::path::Path::new(&repo_path)
         .canonicalize()
         .map_err(|e| e.to_string())?;
-    let wiki = root.join(".bytewiki");
+    // 分支维度：cards/ 跨分支共享；其余产物在 branches/<当前分支>/
+    let branch = byte_wiki_core::branch::current_branch(&root);
+    let wiki = if doc_path.starts_with("cards/") {
+        byte_wiki_core::branch::cards_root(&root)
+    } else {
+        byte_wiki_core::branch::wiki_root(&root, &branch)
+    };
     let full = wiki
         .join(&doc_path)
         .canonicalize()

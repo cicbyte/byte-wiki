@@ -38,6 +38,8 @@ const props = defineProps<{
   genHint?: string;
   /** 滞后变更数（>0 显示红点徽标与更新按钮） */
   staleCount?: number;
+  /** 当前 git 分支（非空时树头部展示） */
+  branch?: string;
   /** 操作禁用（生成/更新/重建进行中） */
   actionsDisabled?: boolean;
 }>();
@@ -167,6 +169,9 @@ const doneCount = computed(
     <div class="tree-bar">
       <div class="bar-left">
         <span class="bar-title">文档</span>
+        <span v-if="branch" class="bar-branch" :title="`当前分支：${branch}（文档按分支独立）`">
+          {{ branch }}
+        </span>
         <span v-if="skeletonMode" class="bar-count live">
           <LoadingOutlined class="spin inline" />{{ doneCount }}/{{ genPages!.length }}
         </span>
@@ -333,6 +338,19 @@ const doneCount = computed(
 }
 .bar-count.live .spin {
   font-size: 9px;
+}
+.bar-branch {
+  font-size: 10.5px;
+  color: var(--text-tertiary);
+  font-family: "JetBrains Mono", monospace;
+  background: var(--bg-input);
+  border-radius: var(--radius-xs);
+  padding: 0 7px;
+  line-height: 17px;
+  max-width: 110px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .stale-dot {
   display: inline-flex;

@@ -77,6 +77,8 @@ impl AppService {
         let Some(repo) = self.db.get_repo_by_path(&crate::canonical_key(root)?)? else {
             return Err(CoreError::Other(anyhow::anyhow!("仓库未登记，请先打开：{repo_path}")));
         };
+        let branch = crate::branch::current_branch(root);
+        let _ = &branch;
 
         let mut excludes: HashSet<String> = EXTRA_EXCLUDES.iter().map(|s| s.to_string()).collect();
         if let Ok(cfg) = self.config() {
@@ -239,8 +241,8 @@ impl AppService {
             })
             .collect();
         self.db
-            .replace_index(repo.id, &file_rows, &edge_rows, &crate::db::now_iso())?;
-        self.db.log_change(repo.id, "index", &format!("files={} edges={}", summary.files_indexed, summary.edges))?;
+            .replace_index(repo.id, &branch, &file_rows, &edge_rows, &crate::db::now_iso())?;
+        self.db.log_change(repo.id, &branch, "index", &format!("files={} edges={}", summary.files_indexed, summary.edges))?;
 
         Ok(summary)
     }

@@ -11,30 +11,31 @@ impl Database {
     pub fn replace_index(
         &self,
         repo_id: i64,
+        branch: &str,
         files: &[(String, String, i64, String, i64)],   // (path, lang, size, module, mtime_ms)
         edges: &[(String, String, i64)],           // (from_module, to_module, refs)
         indexed_at: &str,
     ) -> CoreResult<()> {
         let mut conn = self.lock()?;
         let tx = conn.transaction()?;
-        tx.execute("DELETE FROM index_files WHERE repo_id = ?1", params![repo_id])?;
-        tx.execute("DELETE FROM index_edges WHERE repo_id = ?1", params![repo_id])?;
+        tx.execute("DELETE FROM index_files WHERE repo_id = ?1 AND branch = ?2", params![repo_id, branch])?;
+        tx.execute("DELETE FROM index_edges WHERE repo_id = ?1 AND branch = ?2", params![repo_id, branch])?;
         {
             let mut stmt = tx.prepare(
-                "INSERT OR REPLACE INTO index_files(repo_id, path, lang, size, module, mtime_ms)
-                 VALUES(?1, ?2, ?3, ?4, ?5, ?6)",
+                "INSERT OR REPLACE INTO index_files(repo_id, branch, path, lang, size, module, mtime_ms)
+                 VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             )?;
             for (path, lang, size, module, mtime_ms) in files {
-                stmt.execute(params![repo_id, path, lang, size, module, mtime_ms])?;
+                stmt.execute(params![repo_id, branch, path, lang, size, module, mtime_ms])?;
             }
         }
         {
             let mut stmt = tx.prepare(
-                "INSERT OR REPLACE INTO index_edges(repo_id, from_module, to_module, refs)
-                 VALUES(?1, ?2, ?3, ?4)",
+                "INSERT OR REPLACE INTO index_edges(repo_id, branch, from_module, to_module, refs)
+                 VALUES(?1, ?2, ?3, ?4, ?5)",
             )?;
             for (from, to, refs) in edges {
-                stmt.execute(params![repo_id, from, to, refs])?;
+                stmt.execute(params![repo_id, branch, from, to, refs])?;
             }
         }
         tx.execute(
@@ -49,13 +50,14 @@ impl Database {
     pub fn get_index_files_by_repo(
         &self,
         repo_id: i64,
+        branch: &str,
     ) -> CoreResult<Vec<(String, String, i64, String, i64)>> {
         let conn = self.lock()?;
         let mut stmt = conn.prepare(
-            "SELECT path, lang, size, module, mtime_ms FROM index_files WHERE repo_id = ?1 ORDER BY path",
+            "SELECT path, lang, size, module, mtime_ms FROM index_files WHERE repo_id = ?1 AND branch = ?2 ORDER BY path",
         )?;
         let rows = stmt
-            .query_map(params![repo_id], |r| {
+            .query_map(params![repo_id, branch], |r| {
                 Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
             })?
             .filter_map(|r| r.ok())
@@ -67,14 +69,15 @@ impl Database {
     pub fn get_index_edges_by_repo(
         &self,
         repo_id: i64,
+        branch: &str,
     ) -> CoreResult<Vec<(String, String, i64)>> {
         let conn = self.lock()?;
         let mut stmt = conn.prepare(
             "SELECT from_module, to_module, refs FROM index_edges
-             WHERE repo_id = ?1 ORDER BY refs DESC",
+             WHERE repo_id = ?1 AND branch = ?2 ORDER BY refs DESC",
         )?;
         let rows = stmt
-            .query_map(params![repo_id], |r| {
+            .query_map(params![repo_id, branch], |r| {
                 Ok((r.get(0)?, r.get(1)?, r.get(2)?))
             })?
             .filter_map(|r| r.ok())
@@ -83,11 +86,11 @@ impl Database {
     }
 
     /// 记录变更日志
-    pub fn log_change(&self, repo_id: i64, kind: &str, detail: &str) -> CoreResult<()> {
+    pub fn log_change(&self, repo_id: i64, branch: &str, kind: &str, detail: &str) -> CoreResult<()> {
         let conn = self.lock()?;
         conn.execute(
-            "INSERT INTO change_log(repo_id, kind, detail, created_at) VALUES(?1, ?2, ?3, ?4)",
-            params![repo_id, kind, detail, crate::db::now_iso()],
+            "INSERT INTO change_log(repo_id, branch, kind, detail, created_at) VALUES(?1, ?2, ?3, ?4, ?5)",
+            params![repo_id, branch, kind, detail, crate::db::now_iso()],
         )?;
         Ok(())
     }
@@ -96,6 +99,7 @@ impl Database {
     pub fn replace_wiki_docs(
         &self,
         repo_id: i64,
+        branch: &str,
         docs: &[(String, String, String)], // (path, kind, title)
         updated_at: &str,
     ) -> CoreResult<()> {
@@ -103,18 +107,22 @@ impl Database {
         let tx = conn.transaction()?;
         // 保留人工来源（cards 等），生成区整体替换
         tx.execute(
-            "DELETE FROM wiki_docs WHERE repo_id = ?1 AND source = 'generated'",
-            params![repo_id],
+            "DELETE FROM wiki_docs WHERE repo_id = ?1 AND branch = ?2 AND source = 'generated'",
+            params![repo_id, branch],
         )?;
         {
             let mut stmt = tx.prepare(
-                "INSERT OR REPLACE INTO wiki_docs(repo_id, kind, path, title, updated_at, source)
-                 VALUES(?1, ?2, ?3, ?4, ?5, ?6)",
+                "INSERT OR REPLACE INTO wiki_docs(repo_id, branch, kind, path, title, updated_at, source)
+                 VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             )?;
             for (path, kind, title) in docs {
                 // 知识卡为人工来源：生成区替换永不触碰
-                let source = if kind == "card" { "human" } else { "generated" };
-                stmt.execute(params![repo_id, kind, path, title, updated_at, source])?;
+                let (source, row_branch) = if kind == "card" {
+                    ("human", crate::db::SHARED_BRANCH)
+                } else {
+                    ("generated", branch)
+                };
+                stmt.execute(params![repo_id, row_branch, kind, path, title, updated_at, source])?;
             }
         }
         tx.execute(
@@ -126,13 +134,13 @@ impl Database {
     }
 
     /// 读取 wiki 文档清单 (path, kind, title)
-    pub fn list_wiki_docs(&self, repo_id: i64) -> CoreResult<Vec<(String, String, String)>> {
+    pub fn list_wiki_docs(&self, repo_id: i64, branch: &str) -> CoreResult<Vec<(String, String, String)>> {
         let conn = self.lock()?;
         let mut stmt = conn.prepare(
-            "SELECT path, kind, title FROM wiki_docs WHERE repo_id = ?1 ORDER BY path",
+            "SELECT path, kind, title FROM wiki_docs WHERE repo_id = ?1 AND (branch = ?2 OR branch = ?3) ORDER BY path",
         )?;
         let rows = stmt
-            .query_map(params![repo_id], |r| {
+            .query_map(params![repo_id, branch, crate::db::SHARED_BRANCH], |r| {
                 Ok((r.get(0)?, r.get(1)?, r.get(2)?))
             })?
             .filter_map(|r| r.ok())
@@ -141,14 +149,14 @@ impl Database {
     }
 
     /// 最近变更日志（时间倒序）：(kind, detail, created_at)
-    pub fn list_change_log(&self, repo_id: i64, limit: usize) -> CoreResult<Vec<(String, String, String)>> {
+    pub fn list_change_log(&self, repo_id: i64, branch: &str, limit: usize) -> CoreResult<Vec<(String, String, String)>> {
         let conn = self.lock()?;
         let mut stmt = conn.prepare(
-            "SELECT kind, detail, created_at FROM change_log WHERE repo_id = ?1
-             ORDER BY created_at DESC LIMIT ?2",
+            "SELECT kind, detail, created_at FROM change_log WHERE repo_id = ?1 AND branch = ?2
+             ORDER BY created_at DESC LIMIT ?3",
         )?;
         let rows = stmt
-            .query_map(params![repo_id, limit as i64], |r| {
+            .query_map(params![repo_id, branch, limit as i64], |r| {
                 Ok((r.get(0)?, r.get(1)?, r.get(2)?))
             })?
             .filter_map(|r| r.ok())
@@ -157,11 +165,11 @@ impl Database {
     }
 
     /// 向量分块数（RAG 补充检索的启用探测：0 = 无索引跳过）
-    pub fn count_chunks(&self, repo_id: i64) -> CoreResult<usize> {
+    pub fn count_chunks(&self, repo_id: i64, branch: &str) -> CoreResult<usize> {
         let conn = self.lock()?;
         let n: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM chunks WHERE repo_id = ?1",
-            params![repo_id],
+            "SELECT COUNT(*) FROM chunks WHERE repo_id = ?1 AND branch = ?2",
+            params![repo_id, branch],
             |r| r.get(0),
         )?;
         Ok(n.max(0) as usize)
@@ -171,19 +179,20 @@ impl Database {
     pub fn replace_chunks(
         &self,
         repo_id: i64,
+        branch: &str,
         rows: &[(String, String, Vec<u8>, i64)],
     ) -> CoreResult<()> {
         let mut conn = self.lock()?;
         let tx = conn.transaction()?;
-        tx.execute("DELETE FROM chunks WHERE repo_id = ?1", params![repo_id])?;
+        tx.execute("DELETE FROM chunks WHERE repo_id = ?1 AND branch = ?2", params![repo_id, branch])?;
         {
             let mut stmt = tx.prepare(
-                "INSERT INTO chunks(repo_id, doc_path, content, embedding, dim, created_at)
-                 VALUES(?1, ?2, ?3, ?4, ?5, ?6)",
+                "INSERT INTO chunks(repo_id, branch, doc_path, content, embedding, dim, created_at)
+                 VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             )?;
             let now = crate::db::now_iso();
             for (doc_path, content, blob, dim) in rows {
-                stmt.execute(params![repo_id, doc_path, content, blob, dim, now])?;
+                stmt.execute(params![repo_id, branch, doc_path, content, blob, dim, now])?;
             }
         }
         tx.commit()?;
@@ -192,30 +201,31 @@ impl Database {
 
     /// 登记或刷新人工文档（source=human；生成区替换不影响）
     pub fn upsert_human_doc(&self, repo_id: i64, kind: &str, path: &str, title: &str) -> CoreResult<()> {
+        let branch = crate::db::SHARED_BRANCH;
         let conn = self.lock()?;
         conn.execute(
-            "INSERT INTO wiki_docs(repo_id, kind, path, title, updated_at, source)
-             VALUES(?1, ?2, ?3, ?4, ?5, 'human')
-             ON CONFLICT(repo_id, path) DO UPDATE SET
+            "INSERT INTO wiki_docs(repo_id, branch, kind, path, title, updated_at, source)
+             VALUES(?1, ?2, ?3, ?4, ?5, ?6, 'human')
+             ON CONFLICT(repo_id, branch, path) DO UPDATE SET
                 title = excluded.title,
                 updated_at = excluded.updated_at",
-            params![repo_id, kind, path, title, crate::db::now_iso()],
+            params![repo_id, branch, kind, path, title, crate::db::now_iso()],
         )?;
         Ok(())
     }
 
     /// 登记或刷新单条生成区文档（source=generated）——调用链等独立管线的产物，
     /// 不参与 wiki 重新生成的整体替换，单独 upsert
-    pub fn upsert_generated_doc(&self, repo_id: i64, kind: &str, path: &str, title: &str) -> CoreResult<()> {
+    pub fn upsert_generated_doc(&self, repo_id: i64, branch: &str, kind: &str, path: &str, title: &str) -> CoreResult<()> {
         let conn = self.lock()?;
         conn.execute(
-            "INSERT INTO wiki_docs(repo_id, kind, path, title, updated_at, source)
-             VALUES(?1, ?2, ?3, ?4, ?5, 'generated')
-             ON CONFLICT(repo_id, path) DO UPDATE SET
+            "INSERT INTO wiki_docs(repo_id, branch, kind, path, title, updated_at, source)
+             VALUES(?1, ?2, ?3, ?4, ?5, ?6, 'generated')
+             ON CONFLICT(repo_id, branch, path) DO UPDATE SET
                 kind = excluded.kind,
                 title = excluded.title,
                 updated_at = excluded.updated_at",
-            params![repo_id, kind, path, title, crate::db::now_iso()],
+            params![repo_id, branch, kind, path, title, crate::db::now_iso()],
         )?;
         Ok(())
     }
@@ -231,14 +241,14 @@ impl Database {
     }
 
     /// 读取向量分块 (doc_path, content, embedding, dim)
-    pub fn list_chunks(&self, repo_id: i64) -> CoreResult<Vec<(String, String, Vec<u8>, i64)>> {
+    pub fn list_chunks(&self, repo_id: i64, branch: &str) -> CoreResult<Vec<(String, String, Vec<u8>, i64)>> {
         let conn = self.lock()?;
         let mut stmt = conn.prepare(
             "SELECT doc_path, content, embedding, dim FROM chunks
-             WHERE repo_id = ?1 AND embedding IS NOT NULL",
+             WHERE repo_id = ?1 AND branch = ?2 AND embedding IS NOT NULL",
         )?;
         let rows = stmt
-            .query_map(params![repo_id], |r| {
+            .query_map(params![repo_id, branch], |r| {
                 Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
             })?
             .filter_map(|r| r.ok())

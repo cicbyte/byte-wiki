@@ -41,7 +41,7 @@ impl AppService {
         // 登记为 human（存在则更新时间）
         self.db.upsert_human_doc(repo.id, "card", &rel, title)?;
         self.db
-            .log_change(repo.id, "card", &format!("create cards/{slug}.md"))?;
+            .log_change(repo.id, crate::db::SHARED_BRANCH, "card", &format!("create cards/{slug}.md"))?;
         Ok(rel)
     }
 
@@ -98,18 +98,18 @@ mod tests {
         assert!(body.contains("title: 认证要点") && body.contains("token 存储在 vault"));
 
         // 登记为 human，且「重新生成」不删除
-        let docs = svc.db.list_wiki_docs(1).unwrap();
+        let docs = svc.db.list_wiki_docs(1, "main").unwrap();
         assert!(docs.iter().any(|(p, k, t)| p == &rel && k == "card" && t == "认证要点"));
         svc.db
-            .replace_wiki_docs(1, &[("architecture.md".into(), "architecture".into(), "x".into())], &now_iso())
+            .replace_wiki_docs(1, "main", &[("architecture.md".into(), "architecture".into(), "x".into())], &now_iso())
             .unwrap();
-        let docs = svc.db.list_wiki_docs(1).unwrap();
+        let docs = svc.db.list_wiki_docs(1, "main").unwrap();
         assert!(docs.iter().any(|(p, _, _)| p == &rel), "human 卡在生成区替换后保留");
 
         // 删除
         svc.delete_card(repo.to_str().unwrap(), &rel).unwrap();
         assert!(!full.exists());
-        assert!(!svc.db.list_wiki_docs(1).unwrap().iter().any(|(p, _, _)| p == &rel));
+        assert!(!svc.db.list_wiki_docs(1, "main").unwrap().iter().any(|(p, _, _)| p == &rel));
 
         // 非法路径拒绝
         assert!(svc.delete_card(repo.to_str().unwrap(), "modules/a.md").is_err());

@@ -68,7 +68,7 @@ fn index_extracts_modules_and_edges() {
 
     // 边：apps→apps（相对引用 shared，同模块内不建边）→ 实际跨模块边为 0？
     // scripts→tools（python import tools.helper）
-    let edges = svc.db.get_index_edges_by_repo(1).unwrap();
+    let edges = svc.db.get_index_edges_by_repo(1, "main").unwrap();
     let has = |from: &str, to: &str| {
         edges
             .iter()
@@ -90,7 +90,7 @@ fn index_is_replaceable() {
     std::fs::write(repo.join("tools/new.py"), "import tools.helper\n").unwrap();
     let s2 = svc.index_repo(repo.to_str().unwrap(), &|_| {}).unwrap();
     assert_eq!(s2.files_indexed, s1.files_indexed + 1);
-    let files = svc.db.get_index_files_by_repo(1).unwrap();
+    let files = svc.db.get_index_files_by_repo(1, "main").unwrap();
     assert_eq!(files.len(), s2.files_indexed);
 }
 
@@ -148,7 +148,7 @@ fn index_real_repo() {
             "缺模块 {expect}"
         );
     }
-    for e in svc.db.get_index_edges_by_repo(1).unwrap() {
+    for e in svc.db.get_index_edges_by_repo(1, "main").unwrap() {
         eprintln!("  边：{} → {} (refs={})", e.0, e.1, e.2);
     }
 }

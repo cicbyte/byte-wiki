@@ -83,3 +83,6 @@ mod tests {
         assert_eq!(db.repo_count().unwrap(), 0);
     }
 }
+
+/// 跨分支共享哨兵（知识卡等人工内容的 branch 值）
+pub const SHARED_BRANCH: &str = "__shared__";

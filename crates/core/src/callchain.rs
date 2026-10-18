@@ -63,16 +63,19 @@ impl AppService {
             .map_err(|e| CoreError::Other(anyhow::anyhow!("调用链提取失败：{e}")))?;
 
         // 产物写入仓库内（随仓库共享，FR-08）
-        let out_dir = root.join(".bytewiki").join("graphs").join("callchain");
+        let out_dir = crate::branch::wiki_root(root, &crate::branch::current_branch(root))
+            .join("graphs")
+            .join("callchain");
         std::fs::create_dir_all(&out_dir)?;
         let out_path = out_dir.join("callgraph.json");
         std::fs::write(&out_path, serde_json::to_string_pretty(&graph)?)?;
 
         // 登记 wiki_docs（kind=graph；upsert——wiki 重新生成的整体替换后由 assemble 重新补登）
         self.db
-            .upsert_generated_doc(repo.id, "graph", CALLGRAPH_DOC_PATH, "调用链图谱")?;
+            .upsert_generated_doc(repo.id, &crate::branch::current_branch(std::path::Path::new(&repo_path)), "graph", CALLGRAPH_DOC_PATH, "调用链图谱")?;
         self.db.log_change(
             repo.id,
+            &crate::branch::current_branch(std::path::Path::new(&repo_path)),
             "callchain",
             &format!("nodes={} edges={}", graph["nodes"].as_array().map(|a| a.len()).unwrap_or(0), graph["edges"].as_array().map(|a| a.len()).unwrap_or(0)),
         )?;
@@ -97,7 +100,8 @@ impl AppService {
 
     /// 读取既有调用链产物（不存在返回 None；克隆加载 / 桌面端调用链 tab 用）
     pub fn read_callgraph(&self, repo_path: &str) -> CoreResult<Option<serde_json::Value>> {
-        let p = Path::new(repo_path).join(".bytewiki").join(CALLGRAPH_DOC_PATH);
+        let p = crate::branch::wiki_root(Path::new(repo_path), &crate::branch::current_branch(Path::new(repo_path)))
+            .join(CALLGRAPH_DOC_PATH);
         if !p.is_file() {
             return Ok(None);
         }
@@ -112,6 +116,8 @@ mod tests {
     fn setup_repo(dir: &Path) -> std::path::PathBuf {
         let repo = dir.join("repo");
         std::fs::create_dir_all(repo.join(".git")).unwrap();
+        std::fs::write(repo.join(".git/HEAD"), "ref: refs/heads/main
+").unwrap();
         std::fs::write(
             repo.join("app.py"),
             "@bp.route(\"/hi\")\ndef hi(req):\n    return helper(req)\n\ndef helper(x):\n    return x\n",
@@ -131,11 +137,11 @@ mod tests {
         let summary = svc.generate_callchain(repo.to_str().unwrap(), &|_| {}).unwrap();
         assert!(summary.nodes >= 2, "至少 hi/helper 两个函数");
         assert!(summary.entries >= 1, "路由入口识别");
-        let out = repo.join(".bytewiki").join("graphs").join("callchain").join("callgraph.json");
-        assert!(out.is_file(), "产物落位 .bytewiki/graphs/callchain/");
+        let out = crate::branch::wiki_root(&repo, "main").join("graphs").join("callchain").join("callgraph.json");
+        assert!(out.is_file(), "产物落位 分支目录 graphs/callchain/");
 
         // 登记为 kind=graph 的生成区文档
-        let docs = svc.db.list_wiki_docs(1).unwrap();
+        let docs = svc.db.list_wiki_docs(1, "main").unwrap();
         assert!(docs.iter().any(|(p, k, _)| p == CALLGRAPH_DOC_PATH && k == "graph"));
 
         // app 管线产物不内嵌 source（v2 决策）
@@ -151,7 +157,7 @@ mod tests {
         // 克隆加载路径：.bytewiki/graphs/callchain/ 被识别为 graph
         let dir = tempfile::tempdir().unwrap();
         let repo = setup_repo(dir.path());
-        let wiki = repo.join(".bytewiki").join("graphs").join("callchain");
+        let wiki = crate::branch::wiki_root(&repo, "main").join("graphs").join("callchain");
         std::fs::create_dir_all(&wiki).unwrap();
         std::fs::write(wiki.join("callgraph.json"), "{}").unwrap();
 

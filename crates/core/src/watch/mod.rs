@@ -44,6 +44,7 @@ impl AppService {
         let Some(repo) = self.db.get_repo_by_path(&canon)? else {
             return Err(crate::CoreError::Other(anyhow::anyhow!("仓库未登记：{repo_path}")));
         };
+        let branch = crate::branch::current_branch(root);
 
         // 当前快照（与 indexer 相同的遍历规则，但不解析内容）
         let mut excludes: std::collections::HashSet<String> = crate::indexer::EXTRA_EXCLUDES
@@ -86,7 +87,7 @@ impl AppService {
         // 索引快照
         let indexed: HashMap<String, (u64, i64)> = self
             .db
-            .get_index_files_by_repo(repo.id)?
+            .get_index_files_by_repo(repo.id, &branch)?
             .into_iter()
             .map(|(p, _lang, size, _module, mtime)| (p, (size as u64, mtime)))
             .collect();
@@ -187,8 +188,8 @@ mod tests {
 
         // 模拟已生成：恢复索引基线后，用 scan_existing_wiki 置 last_generated_at
         svc.index_repo(&repo_str, &|_| {}).unwrap();
-        std::fs::create_dir_all(repo.join(".bytewiki")).unwrap();
-        std::fs::write(repo.join(".bytewiki/architecture.md"), "# arch\n").unwrap();
+        std::fs::create_dir_all(repo.join(".bytewiki/branches/main")).unwrap();
+        std::fs::write(repo.join(".bytewiki/branches/main/architecture.md"), "# arch\n").unwrap();
         svc.scan_existing_wiki(&repo).unwrap();
 
         // 新增 + 删除 + 修改

@@ -130,24 +130,24 @@ struct GenMeta {
     gen_version: u32,
 }
 
-fn gen_meta_path(root: &Path) -> std::path::PathBuf {
-    root.join(".bytewiki").join(".gen-meta.json")
+fn gen_meta_path(root: &Path, branch: &str) -> std::path::PathBuf {
+    crate::branch::wiki_root(root, branch).join(".gen-meta.json")
 }
 
-fn read_gen_meta(root: &Path) -> Option<GenMeta> {
-    let text = std::fs::read_to_string(gen_meta_path(root)).ok()?;
+fn read_gen_meta(root: &Path, branch: &str) -> Option<GenMeta> {
+    let text = std::fs::read_to_string(gen_meta_path(root, branch)).ok()?;
     serde_json::from_str(&text).ok()
 }
 
-fn write_gen_meta(root: &Path, provider_id: &str, model: &str) {
+fn write_gen_meta(root: &Path, branch: &str, provider_id: &str, model: &str) {
     let meta = GenMeta {
         provider: provider_id.to_string(),
         model: model.to_string(),
         gen_version: GEN_VERSION,
     };
-    let _ = std::fs::create_dir_all(root.join(".bytewiki"));
+    let _ = std::fs::create_dir_all(crate::branch::wiki_root(root, branch));
     if let Ok(text) = serde_json::to_string_pretty(&meta) {
-        let _ = std::fs::write(gen_meta_path(root), text);
+        let _ = std::fs::write(gen_meta_path(root, branch), text);
     }
 }
 
@@ -202,13 +202,14 @@ impl AppService {
         let Some(repo) = self.db.get_repo_by_path(&canon)? else {
             return Err(CoreError::Other(anyhow::anyhow!("仓库未登记，请先打开：{repo_path}")));
         };
+        let branch = crate::branch::current_branch(root);
 
         // ---- 阶段 1：索引 ----
         on_event(ev("indexing", 0, 0, "建立文件与引用索引"));
         let summary = self.index_repo(&canon, &|n| {
             on_event(ev("indexing", n, 0, format!("已扫描 {n} 个文件")));
         })?;
-        let modules = self.module_context(repo.id, &summary)?;
+        let modules = self.module_context(repo.id, &branch, &summary)?;
         let known_files: HashSet<String> =
             modules.iter().flat_map(|m| m.files.iter().map(|(p, _)| p.clone())).collect();
         let file_module: HashMap<String, String> = modules
@@ -241,7 +242,7 @@ impl AppService {
         // 路径分配先行：骨架事件即带目标路径（前端树骨架与生成后磁盘文档无缝衔接）
         let mut jobs = self.plan_jobs(&outline);
         // 断点续跑：上次中断已落盘且未过期的页面直接沿用（读旧元数据判定）
-        self.resume_keep_pages(root, &mut jobs, &provider);
+        self.resume_keep_pages(root, &branch, &mut jobs, &provider);
         let path_of: HashMap<String, String> =
             jobs.iter().map(|j| (j.page.id.clone(), j.rel_path.clone())).collect();
         on_event(GenerateEvent {
@@ -255,8 +256,8 @@ impl AppService {
             stream: None,
             repo_id: None,
         });
-        persist_outline(root, &outline);
-        write_gen_meta(root, &provider.id, &provider.chat_model);
+        persist_outline(root, &branch, &outline);
+        write_gen_meta(root, &branch, &provider.id, &provider.chat_model);
 
         // ---- 阶段 3：总览页（仅依赖大纲与路径；提前生成——
         //      逐页可能耗时很久，避免「全部页面完成后还剩一次长调用」的最后一公里静默，
@@ -278,19 +279,19 @@ impl AppService {
 
         // ---- 阶段 4：逐页生成 ----
         let (results, failed) = self
-            .run_page_jobs(&client, repo.id, &repo.name, repo_path, root, &outline, &jobs, &known_files, &file_module, &modules, on_event, &mut tokens)
+            .run_page_jobs(&client, repo.id, &branch, &repo.name, repo_path, root, &outline, &jobs, &known_files, &file_module, &modules, on_event, &mut tokens)
             .await?;
 
         // ---- 阶段 5：组装落盘（全量成功后原子替换）----
         on_event(ev("assembling", 0, 0, "写入 .bytewiki/"));
         let output_dir =
-            self.assemble_wiki(&canon, repo.id, &outline, &results, &overview, &modules, &provider.chat_model)?;
+            self.assemble_wiki(&canon, repo.id, &branch, &outline, &results, &overview, &modules, &provider.chat_model)?;
 
         let detail = format!(
             "pages={} failed={} prompt_tok={} completion_tok={}",
             total, failed, tokens.0, tokens.1
         );
-        self.finish_pipeline(&canon, repo.id, "generate", &detail,
+        self.finish_pipeline(&canon, repo.id, &branch, "generate", &detail,
             &format!("生成完成：{} 个页面（{} 失败）", total - failed, failed), on_event)
         .await?;
 
@@ -319,6 +320,7 @@ impl AppService {
         let Some(repo) = self.db.get_repo_by_path(&canon)? else {
             return Err(CoreError::Other(anyhow::anyhow!("仓库未登记：{repo_path}")));
         };
+        let branch = crate::branch::current_branch(root);
 
         // ---- 1）变更检测 ----
         on_event(ev("checking", 0, 0, "检测代码变更"));
@@ -341,7 +343,7 @@ impl AppService {
         let summary = self.index_repo(&canon, &|n| {
             on_event(ev("indexing", n, 0, format!("已扫描 {n} 个文件")));
         })?;
-        let modules = self.module_context(repo.id, &summary)?;
+        let modules = self.module_context(repo.id, &branch, &summary)?;
         let known_files: HashSet<String> =
             modules.iter().flat_map(|m| m.files.iter().map(|(p, _)| p.clone())).collect();
         let file_module: HashMap<String, String> = modules
@@ -351,7 +353,7 @@ impl AppService {
 
         let provider = self.active_llm()?;
         let client = LlmClient::for_provider(&provider)?;
-        let wiki_dir = root.join(".bytewiki");
+        let wiki_dir = crate::branch::wiki_root(root, &branch);
 
         // 后台任务注册 + 事件包裹：标注 repo_id（前端按项目过滤）并同步注册表
         let task_repo_id = repo.id;
@@ -391,7 +393,8 @@ impl AppService {
             stream: None,
             repo_id: None,
         });
-        persist_outline(root, &outline);
+        persist_outline(root, &branch, &outline);
+        write_gen_meta(root, &branch, &provider.id, &provider.chat_model);
 
         // ---- 4）页任务：绑定文件 ∩ 变更 → 重生成；其余从磁盘沿用 ----
         for job in &mut jobs {
@@ -421,18 +424,18 @@ impl AppService {
         };
         let mut tokens = (out.prompt_tokens, out.completion_tokens);
         let (results, failed) = self
-            .run_page_jobs(&client, repo.id, &repo.name, repo_path, root, &outline, &jobs, &known_files, &file_module, &modules, on_event, &mut tokens)
+            .run_page_jobs(&client, repo.id, &branch, &repo.name, repo_path, root, &outline, &jobs, &known_files, &file_module, &modules, on_event, &mut tokens)
             .await?;
 
         on_event(ev("assembling", 0, 0, "写入 .bytewiki/"));
-        self.assemble_wiki(&canon, repo.id, &outline, &results, &overview, &modules, &provider.chat_model)?;
+        self.assemble_wiki(&canon, repo.id, &branch, &outline, &results, &overview, &modules, &provider.chat_model)?;
 
         let detail = format!(
             "files={} pages_regenerated={} failed={} prompt_tok={} completion_tok={}",
             changed_files, regen, failed, tokens.0, tokens.1
         );
         let failed_note = if failed > 0 { format!("（{failed} 页失败占位）") } else { String::new() };
-        self.finish_pipeline(&canon, repo.id, "update", &detail,
+        self.finish_pipeline(&canon, repo.id, &branch, "update", &detail,
             &format!("更新完成：{regen} 个页面重生成{failed_note}（{changed_files} 个文件变更）"), on_event)
         .await?;
 
@@ -525,6 +528,7 @@ impl AppService {
         &self,
         client: &LlmClient,
         repo_id: i64,
+        branch: &str,
         repo_name: &str,
         repo_path: &str,
         root: &Path,
@@ -613,14 +617,14 @@ impl AppService {
             // 实时落盘：页面完成即写入正式目录并登记——长任务（数十页 × 分钟级）
             // 中断时进度持久（重开即见，重跑未完成页即可）；最终组装以相同内容
             // 幂等替换，Keep 页内容本就来自磁盘不再重写
-            let target = root.join(".bytewiki").join(&job.rel_path);
+            let target = wiki_branch_root(root, &branch).join(&job.rel_path);
             if let Some(parent) = target.parent() {
                 let _ = std::fs::create_dir_all(parent);
             }
             if let Err(e) = std::fs::write(&target, &final_content) {
                 tracing::warn!("页面实时落盘失败（最终组装时会重写）：{e}");
             } else {
-                let _ = self.db.upsert_generated_doc(repo_id, "page", &job.rel_path, &page.title);
+                let _ = self.db.upsert_generated_doc(repo_id, branch, "page", &job.rel_path, &page.title);
             }
             results.push(PageOutcome {
                 rel_path: job.rel_path.clone(),
@@ -878,7 +882,7 @@ impl AppService {
         let Ok(Some(repo)) = self.db.get_repo_by_path(&canon) else {
             return String::new();
         };
-        if self.db.count_chunks(repo.id).unwrap_or(0) == 0 {
+        if self.db.count_chunks(repo.id, &crate::branch::current_branch(Path::new(repo_path))).unwrap_or(0) == 0 {
             return String::new(); // 首次生成无向量索引，跳过
         }
         match self.search_similar(repo_path, query, 6).await {
@@ -979,6 +983,7 @@ impl AppService {
         &self,
         canon: &str,
         repo_id: i64,
+        branch: &str,
         kind: &str,
         detail: &str,
         done_msg: &str,
@@ -992,7 +997,7 @@ impl AppService {
                 on_event(ev("embedding", 0, 0, format!("向量索引跳过：{e}")));
             }
         }
-        self.db.log_change(repo_id, kind, detail)?;
+        self.db.log_change(repo_id, branch, kind, detail)?;
         on_event(ev("done", 0, 0, done_msg));
         Ok(())
     }
@@ -1007,16 +1012,16 @@ impl AppService {
         };
         Ok(self
             .db
-            .get_index_files_by_repo(repo.id)?
+            .get_index_files_by_repo(repo.id, &crate::branch::current_branch(Path::new(repo_path)))?
             .into_iter()
             .map(|(path, lang, size, _module, _mtime)| (path, lang, size.max(0) as u64))
             .collect())
     }
 
     /// 模块上下文（按名排序稳定输出）
-    fn module_context(&self, repo_id: i64, summary: &crate::indexer::IndexSummary) -> CoreResult<Vec<ModuleCtx>> {
-        let files = self.db.get_index_files_by_repo(repo_id)?;
-        let edges = self.db.get_index_edges_by_repo(repo_id)?;
+    fn module_context(&self, repo_id: i64, branch: &str, summary: &crate::indexer::IndexSummary) -> CoreResult<Vec<ModuleCtx>> {
+        let files = self.db.get_index_files_by_repo(repo_id, branch)?;
+        let edges = self.db.get_index_edges_by_repo(repo_id, branch)?;
 
         let mut by_module: HashMap<String, Vec<(String, String)>> = HashMap::new();
         for (path, lang, _size, module, _mtime) in &files {
@@ -1044,8 +1049,8 @@ impl AppService {
     /// 断点续跑：上次运行已实时落盘且仍然有效的页面直接沿用（零 LLM 调用）。
     /// 有效性 = 元数据兼容（同供应商/模型/代次）且 非空、非失败占位、
     /// 绑定文件 mtime 均早于页面落盘（内容未过期）。
-    fn resume_keep_pages(&self, root: &Path, jobs: &mut [PageJob], provider: &crate::model::LlmProvider) {
-        let compatible = match read_gen_meta(root) {
+    fn resume_keep_pages(&self, root: &Path, branch: &str, jobs: &mut [PageJob], provider: &crate::model::LlmProvider) {
+        let compatible = match read_gen_meta(root, branch) {
             Some(m) => {
                 m.provider == provider.id && m.model == provider.chat_model && m.gen_version == GEN_VERSION
             }
@@ -1057,7 +1062,7 @@ impl AppService {
         }
         let mut kept = 0usize;
         for j in jobs.iter_mut() {
-            let target = root.join(".bytewiki").join(&j.rel_path);
+            let target = wiki_branch_root(root, &branch).join(&j.rel_path);
             let Ok(content) = std::fs::read_to_string(&target) else {
                 continue; // 未落盘：待生成
             };
@@ -1088,7 +1093,7 @@ impl AppService {
     /// 大纲既定顺序的页面路径表（文档树按大纲序渲染；无 outline.json 返回空）
     pub fn outline_page_paths(&self, repo_path: &str) -> CoreResult<Vec<(String, String)>> {
         let root = Path::new(repo_path);
-        let Some(outline) = outline::read_outline(&root.join(".bytewiki")) else {
+        let Some(outline) = outline::read_outline(&crate::branch::wiki_root(root, &crate::branch::current_branch(root))) else {
             return Ok(vec![]);
         };
         let mut dir_taken: HashMap<String, HashSet<String>> = HashMap::new();
@@ -1106,11 +1111,27 @@ impl AppService {
     /// 扫描仓库内 .bytewiki/ 目录，返回清单 (rel_path, kind, title) 并登记 wiki_docs。
     /// 只读文件系统，不触发任何 LLM 调用；目录不存在返回空表。
     pub fn scan_existing_wiki(&self, repo_root: &Path) -> CoreResult<Vec<(String, String, String)>> {
-        let wiki = repo_root.join(".bytewiki");
+        // 当前分支产物 + 共享知识卡
+        let branch = crate::branch::current_branch(repo_root);
+        let mut out = self.scan_wiki_dir(&crate::branch::wiki_root(repo_root, &branch), "pages/")?;
+        let cards = self.scan_wiki_dir(&crate::branch::cards_root(repo_root), "cards/")?;
+        let mut out: Vec<(String, String, String)> = out.into_iter().map(|(p, k, t)| (p, k, t)).collect();
+        out.extend(cards);
+        let canon = crate::canonical_key(repo_root)?;
+        if let Some(repo) = self.db.get_repo_by_path(&canon)? {
+            if !out.is_empty() {
+                self.db.replace_wiki_docs(repo.id, &branch, &out, &now_iso())?;
+            }
+        }
+        out.sort();
+        return Ok(out);
+    }
+
+    /// 扫描单个 wiki 目录（rel 前缀用于 kind 判定与 cards 路径归一）
+    fn scan_wiki_dir(&self, wiki: &Path, _prefix: &str) -> CoreResult<Vec<(String, String, String)>> {
         if !wiki.is_dir() {
             return Ok(vec![]);
         }
-        let canon = crate::canonical_key(repo_root)?;
         let mut out: Vec<(String, String, String)> = Vec::new();
         for entry in walkdir::WalkDir::new(&wiki)
             .into_iter()
@@ -1141,11 +1162,6 @@ impl AppService {
             };
             out.push((rel, kind.to_string(), title));
         }
-        if let Some(repo) = self.db.get_repo_by_path(&canon)? {
-            if !out.is_empty() {
-                self.db.replace_wiki_docs(repo.id, &out, &now_iso())?;
-            }
-        }
         out.sort();
         Ok(out)
     }
@@ -1157,6 +1173,7 @@ impl AppService {
         &self,
         repo_root: &str,
         repo_id: i64,
+        branch: &str,
         outline: &WikiOutline,
         results: &[PageOutcome],
         overview: &str,
@@ -1164,10 +1181,10 @@ impl AppService {
         chat_model: &str,
     ) -> CoreResult<String> {
         let root = Path::new(repo_root);
-        let wiki = root.join(".bytewiki");
+        let wiki = crate::branch::wiki_root(root, branch);
 
         // 1) 全部产物写入暂存目录
-        let staging = root.join(".bytewiki.staging");
+        let staging = root.join(format!(".bytewiki.staging.{}", crate::branch::branch_dir(branch)));
         if staging.exists() {
             std::fs::remove_dir_all(&staging)?;
         }
@@ -1208,7 +1225,7 @@ impl AppService {
 
         // 2) 替换正式目录（cards/ 与调用链产物保留）
         std::fs::create_dir_all(&wiki)?;
-        swap_tree(&wiki, &staging, &["cards", "graphs/callchain"], &[
+        swap_tree(&wiki, &staging, &["graphs/callchain"], &[
             "pages",
             "modules",
             "overview.md",
@@ -1237,13 +1254,18 @@ impl AppService {
                 "调用链图谱".into(),
             ));
         }
-        self.db.replace_wiki_docs(repo_id, &doc_rows, &now_iso())?;
+        self.db.replace_wiki_docs(repo_id, branch, &doc_rows, &now_iso())?;
 
         Ok(wiki.to_string_lossy().into_owned())
     }
 }
 
 // ============ 辅助函数 ============
+
+/// 分支产物根（局部便捷别名）
+fn wiki_branch_root(root: &Path, branch: &str) -> std::path::PathBuf {
+    crate::branch::wiki_root(root, branch)
+}
 
 /// LLM 调用统一走流式：输出增量节流推「已输出 N 字」心跳事件，
 /// 避免单次数分钟的静默期（前端看起来像卡死）
@@ -1341,8 +1363,8 @@ async fn stream_llm(
 
 
 /// 大纲确定即持久化 outline.json：中断后重开应用，增量更新可按既有大纲续跑
-fn persist_outline(root: &Path, outline: &WikiOutline) {
-    let wiki = root.join(".bytewiki");
+fn persist_outline(root: &Path, branch: &str, outline: &WikiOutline) {
+    let wiki = crate::branch::wiki_root(root, branch);
     let _ = std::fs::create_dir_all(&wiki);
     match serde_json::to_string_pretty(outline) {
         Ok(text) => {

@@ -633,6 +633,7 @@ const busy = computed(() => generating.value || updating.value || externalRunnin
               :generating="busy"
               :gen-hint="genProgress?.message"
               :stale-count="staleReport?.stale ? staleReport.changes.length : 0"
+              :branch="wiki.currentRepo?.branch || undefined"
               :actions-disabled="busy || rebuilding"
               @select="currentDoc = $event"
               @action="onTreeAction"

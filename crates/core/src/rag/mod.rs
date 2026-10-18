@@ -53,11 +53,13 @@ impl AppService {
             return Err(CoreError::Other(anyhow::anyhow!("仓库未登记：{repo_path}")));
         };
 
-        // 1) 分块
+        let branch = crate::branch::current_branch(root);
+        // 1) 分块（分支 wiki 产物 + 共享知识卡）
         on_progress("收集文档与代码分块");
         let mut chunks: Vec<(String, String)> = Vec::new(); // (doc_path, content)
-        chunk_wiki_dir(&root.join(".bytewiki"), &mut chunks);
-        for (path, _lang, size, _module, _mtime) in self.db.get_index_files_by_repo(repo.id)? {
+        chunk_wiki_dir(&crate::branch::wiki_root(root, &branch), &mut chunks);
+        chunk_wiki_dir(&crate::branch::cards_root(root), &mut chunks);
+        for (path, _lang, size, _module, _mtime) in self.db.get_index_files_by_repo(repo.id, &branch)? {
             if !is_embeddable(&path) || size > 512 * 1024 {
                 continue;
             }
@@ -66,7 +68,7 @@ impl AppService {
             }
         }
         if chunks.is_empty() {
-            self.db.replace_chunks(repo.id, &[])?;
+            self.db.replace_chunks(repo.id, &branch, &[])?;
             return Ok(EmbedSummary { chunked: 0, embedded: 0 });
         }
         let chunked = chunks.len();
@@ -118,7 +120,7 @@ impl AppService {
         }
 
         // 3) 替换入库
-        self.db.replace_chunks(repo.id, &rows)?;
+        self.db.replace_chunks(repo.id, &branch, &rows)?;
         Ok(EmbedSummary { chunked, embedded })
     }
 
@@ -143,7 +145,7 @@ impl AppService {
 
         let mut hits: Vec<SearchHit> = self
             .db
-            .list_chunks(repo.id)?
+            .list_chunks(repo.id, &crate::branch::current_branch(Path::new(repo_path)))?
             .into_iter()
             .filter_map(|(doc_path, content, blob, dim)| {
                 let vec = blob_to_vec(&blob, dim)?;

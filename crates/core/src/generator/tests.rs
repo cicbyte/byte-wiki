@@ -240,7 +240,7 @@ async fn generate_writes_outline_pages_and_overview() {
     }
 
     // 产物：outline.json v2 + pages/（含章节子目录）+ overview.md + index.json
-    let wiki = repo.join(".bytewiki");
+    let wiki = repo.join(".bytewiki").join("branches").join("main");
     let outline_raw = std::fs::read_to_string(wiki.join("outline.json")).unwrap();
     let outline_json: serde_json::Value = serde_json::from_str(&outline_raw).unwrap();
     assert_eq!(outline_json["version"], 2);
@@ -267,7 +267,7 @@ async fn generate_writes_outline_pages_and_overview() {
     assert_eq!(idx["generator"]["model"], "mock");
 
     // wiki_docs 登记：overview + 3 页（kind=page，标题来自大纲）
-    let docs = svc.db.list_wiki_docs(1).unwrap();
+    let docs = svc.db.list_wiki_docs(1, "main").unwrap();
     assert!(docs.iter().any(|(p, k, _)| p == "overview.md" && k == "architecture"));
     let page_rows: Vec<_> = docs.iter().filter(|(_, k, _)| k == "page").collect();
     assert_eq!(page_rows.len(), 3);
@@ -295,7 +295,7 @@ async fn generate_failure_preserves_old_wiki() {
         svc.open_repo(repo.to_str().unwrap()).unwrap();
         svc.generate_wiki(repo.to_str().unwrap(), &|_| {}).await.unwrap();
     }
-    let wiki = repo.join(".bytewiki");
+    let wiki = repo.join(".bytewiki").join("branches").join("main");
     let old_overview = std::fs::read_to_string(wiki.join("overview.md")).unwrap();
 
     // 第二次换坏 LLM：失败且旧 wiki 保留（关缓存，否则同 prompt 命中缓存绕过坏 LLM）
@@ -339,7 +339,7 @@ async fn incremental_update_touches_only_affected_pages() {
     svc.open_repo(repo.to_str().unwrap()).unwrap();
     svc.generate_wiki(repo.to_str().unwrap(), &|_| {}).await.unwrap();
 
-    let wiki = repo.join(".bytewiki");
+    let wiki = repo.join(".bytewiki").join("branches").join("main");
     // 人工知识卡：更新后必须保留
     let cards = wiki.join("cards");
     std::fs::create_dir_all(&cards).unwrap();
@@ -391,7 +391,7 @@ fn outline_json_pages(raw: &str) -> usize {
 fn scan_existing_wiki_registers_clone() {
     let dir = tempfile::tempdir().unwrap();
     let repo = make_repo(dir.path());
-    let wiki = repo.join(".bytewiki");
+    let wiki = repo.join(".bytewiki").join("branches").join("main");
     std::fs::create_dir_all(wiki.join("pages").join("系统架构")).unwrap();
     std::fs::write(wiki.join("overview.md"), "# 总览\n").unwrap();
     std::fs::write(wiki.join("pages/系统架构/核心库.md"), "# 核心库\n").unwrap();
@@ -400,12 +400,12 @@ fn scan_existing_wiki_registers_clone() {
     let svc = AppService::open_at(dir.path().join("app"), dir.path().join("data")).unwrap();
     svc.open_repo(repo.to_str().unwrap()).unwrap();
 
-    assert!(svc.db.list_wiki_docs(1).unwrap().is_empty());
+    assert!(svc.db.list_wiki_docs(1, "main").unwrap().is_empty());
     let docs = svc.scan_existing_wiki(&repo).unwrap();
     assert_eq!(docs.len(), 2);
     assert!(docs.iter().any(|(p, k, _)| p == "overview.md" && k == "architecture"));
     assert!(docs.iter().any(|(p, k, t)| p == "pages/系统架构/核心库.md" && k == "page" && t == "核心库"));
-    assert_eq!(svc.db.list_wiki_docs(1).unwrap().len(), 2);
+    assert_eq!(svc.db.list_wiki_docs(1, "main").unwrap().len(), 2);
 
     // 无 .bytewiki 的仓库返回空
     let plain = dir.path().join("plain-repo");
@@ -433,7 +433,7 @@ async fn cached_regenerate_hits_cache() {
     assert_eq!((outline_calls, page_calls, overview_calls), (1, 3, 1));
 
     // 二次全量生成：全部命中缓存，mock 零新增调用
-    let page_before = std::fs::read(repo.join(".bytewiki/pages/系统架构/核心库.md")).unwrap();
+    let page_before = std::fs::read(repo.join(".bytewiki/branches/main/pages/系统架构/核心库.md")).unwrap();
     let s2 = svc.generate_wiki(repo.to_str().unwrap(), &|_| {}).await.unwrap();
     assert_eq!(mock_counts(&state, "outline"), 1, "大纲不应重复请求");
     assert_eq!(mock_counts(&state, "page"), 3, "页面不应重复请求");
@@ -441,7 +441,7 @@ async fn cached_regenerate_hits_cache() {
     assert_eq!(s2.prompt_tokens, 0, "缓存命中不消耗 token");
     assert_eq!(s2.completion_tokens, 0);
     // 产物一致
-    assert_eq!(std::fs::read(repo.join(".bytewiki/pages/系统架构/核心库.md")).unwrap(), page_before);
+    assert_eq!(std::fs::read(repo.join(".bytewiki/branches/main/pages/系统架构/核心库.md")).unwrap(), page_before);
 
     // 缓存统计与清空
     let (count, bytes) = svc.llm_cache_stats(repo.to_str().unwrap()).unwrap();
@@ -451,11 +451,11 @@ async fn cached_regenerate_hits_cache() {
     assert_eq!(svc.llm_cache_stats(repo.to_str().unwrap()).unwrap().0, 0);
 
     // 清空后第三次生成：大纲缓存已清重新设计；页面被断点续跑沿用（磁盘已落盘且未过期，零调用）
-    let page_before = std::fs::read(repo.join(".bytewiki/pages/系统架构/核心库.md")).unwrap();
+    let page_before = std::fs::read(repo.join(".bytewiki/branches/main/pages/系统架构/核心库.md")).unwrap();
     let _s3 = svc.generate_wiki(repo.to_str().unwrap(), &|_| {}).await.unwrap();
     assert_eq!(mock_counts(&state, "outline"), 2);
     assert_eq!(mock_counts(&state, "page"), 3, "续跑应沿用已落盘页面，不再请求");
-    assert_eq!(std::fs::read(repo.join(".bytewiki/pages/系统架构/核心库.md")).unwrap(), page_before);
+    assert_eq!(std::fs::read(repo.join(".bytewiki/branches/main/pages/系统架构/核心库.md")).unwrap(), page_before);
 }
 
 /// 断点续跑：删一个页面文件 + 改另一个页面的绑定源文件 → 仅这两页真生成，
@@ -471,7 +471,7 @@ async fn resume_regenerates_only_missing_and_stale() {
     svc.generate_wiki(repo.to_str().unwrap(), &|_| {}).await.unwrap();
     assert_eq!(mock_counts(&state, "page"), 3);
 
-    let wiki = repo.join(".bytewiki");
+    let wiki = repo.join(".bytewiki").join("branches").join("main");
     // 中断模拟：删 p1（核心库）落盘文件；p2（命令行入口）绑定源文件在落盘后修改（过期）
     std::fs::remove_file(wiki.join("pages/系统架构/核心库.md")).unwrap();
     let stale_src = repo.join("apps/cli/main.rs");

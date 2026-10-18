@@ -38,6 +38,8 @@ impl AppService {
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_else(|| path.to_string());
         let branch = head_branch(root);
+        // 旧版单副本布局 → 分支目录（幂等；.bytewiki/cards 保持共享位）
+        crate::branch::migrate_legacy_wiki(root, branch.as_deref().unwrap_or(""))?;
         let file_count = quick_file_count(root);
         self.db.upsert_repo(
             &crate::canonical_key(root)?,

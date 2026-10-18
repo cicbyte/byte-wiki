@@ -23,6 +23,10 @@ pub fn run_migrations(conn: &Connection) -> CoreResult<()> {
         v2_strip_verbatim_path(conn)?;
         version = 2;
     }
+    if version < 3 {
+        v3_branch_dimension(conn)?;
+        version = 3;
+    }
     let _ = version;
     Ok(())
 }
@@ -154,6 +158,80 @@ fn v2_strip_verbatim_path(conn: &Connection) -> CoreResult<()> {
     Ok(())
 }
 
+/// v3：子表加 branch 维度——文档/索引/向量/日志按分支独立，项目身份不变。
+///
+/// 既有行 branch=''（归入当时的分支归属，由首次打开时的归属迁移处理：
+/// 首次以分支 B 操作时把 branch='' 的行认领为 B）。cards 例外：wiki_docs
+/// 中 kind='card' 的行使用共享哨兵 '__shared__'（知识卡跨分支共享）。
+fn v3_branch_dimension(conn: &Connection) -> CoreResult<()> {
+    conn.execute_batch(
+        r#"
+        ALTER TABLE index_files ADD COLUMN branch TEXT NOT NULL DEFAULT '';
+        ALTER TABLE index_edges ADD COLUMN branch TEXT NOT NULL DEFAULT '';
+        ALTER TABLE wiki_docs   ADD COLUMN branch TEXT NOT NULL DEFAULT '';
+        ALTER TABLE chunks      ADD COLUMN branch TEXT NOT NULL DEFAULT '';
+        ALTER TABLE change_log  ADD COLUMN branch TEXT NOT NULL DEFAULT '';
+
+        UPDATE wiki_docs SET branch = '__shared__' WHERE kind = 'card';
+
+        DROP INDEX IF EXISTS idx_chunks_repo;
+        CREATE INDEX IF NOT EXISTS idx_chunks_repo_branch ON chunks(repo_id, branch);
+        CREATE INDEX IF NOT EXISTS idx_wiki_docs_repo_branch ON wiki_docs(repo_id, branch);
+        CREATE INDEX IF NOT EXISTS idx_index_files_repo_branch ON index_files(repo_id, branch);
+        CREATE INDEX IF NOT EXISTS idx_change_log_repo_branch ON change_log(repo_id, branch);
+        "#,
+    )?;
+    // 旧 UNIQUE(repo_id, path) 与 branch 维度冲突（不同分支同路径行）——重建为含 branch
+    conn.execute_batch(
+        r#"
+        CREATE TABLE IF NOT EXISTS wiki_docs_v3 (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            repo_id    INTEGER NOT NULL REFERENCES repos(id) ON DELETE CASCADE,
+            kind       TEXT NOT NULL,
+            path       TEXT NOT NULL,
+            title      TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            source     TEXT NOT NULL DEFAULT 'generated',
+            branch     TEXT NOT NULL DEFAULT '',
+            UNIQUE(repo_id, branch, path)
+        );
+        INSERT INTO wiki_docs_v3 SELECT id, repo_id, kind, path, title, updated_at, source, branch FROM wiki_docs;
+        DROP TABLE wiki_docs;
+        ALTER TABLE wiki_docs_v3 RENAME TO wiki_docs;
+
+        CREATE TABLE IF NOT EXISTS index_files_v3 (
+            id       INTEGER PRIMARY KEY AUTOINCREMENT,
+            repo_id  INTEGER NOT NULL REFERENCES repos(id) ON DELETE CASCADE,
+            path     TEXT NOT NULL,
+            lang     TEXT NOT NULL,
+            size     INTEGER NOT NULL,
+            module   TEXT NOT NULL,
+            mtime_ms INTEGER NOT NULL DEFAULT 0,
+            branch   TEXT NOT NULL DEFAULT '',
+            UNIQUE(repo_id, branch, path)
+        );
+        INSERT INTO index_files_v3 SELECT id, repo_id, path, lang, size, module, mtime_ms, branch FROM index_files;
+        DROP TABLE index_files;
+        ALTER TABLE index_files_v3 RENAME TO index_files;
+
+        CREATE TABLE IF NOT EXISTS index_edges_v3 (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            repo_id     INTEGER NOT NULL REFERENCES repos(id) ON DELETE CASCADE,
+            from_module TEXT NOT NULL,
+            to_module   TEXT NOT NULL,
+            refs        INTEGER NOT NULL DEFAULT 1,
+            branch      TEXT NOT NULL DEFAULT '',
+            UNIQUE(repo_id, branch, from_module, to_module)
+        );
+        INSERT INTO index_edges_v3 SELECT id, repo_id, from_module, to_module, refs, branch FROM index_edges;
+        DROP TABLE index_edges;
+        ALTER TABLE index_edges_v3 RENAME TO index_edges;
+        "#,
+    )?;
+    conn.pragma_update(None, "user_version", 3)?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -164,7 +242,7 @@ mod tests {
         run_migrations(&conn).unwrap();
         run_migrations(&conn).unwrap();
         let v: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
-        assert_eq!(v, 2);
+        assert_eq!(v, 3);
     }
 
     #[test]

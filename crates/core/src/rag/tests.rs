@@ -43,14 +43,14 @@ fn make_repo_with_wiki(dir: &std::path::Path) -> std::path::PathBuf {
     let repo = dir.join("repo");
     std::fs::create_dir_all(repo.join(".git")).unwrap();
     std::fs::write(repo.join(".git").join("HEAD"), "ref: refs/heads/main\n").unwrap();
-    std::fs::create_dir_all(repo.join(".bytewiki").join("modules")).unwrap();
+    std::fs::create_dir_all(repo.join(".bytewiki/branches/main/modules")).unwrap();
     std::fs::write(
-        repo.join(".bytewiki/architecture.md"),
+        repo.join(".bytewiki/branches/main/architecture.md"),
         "# 架构\n\n## Alpha 模块\n\n这里介绍 alpha 服务。alpha 是核心。\n\n## Beta 模块\n\n这里介绍 beta 服务。beta 是辅助。\n",
     )
     .unwrap();
     std::fs::write(
-        repo.join(".bytewiki/modules/alpha.md"),
+        repo.join(".bytewiki/branches/main/modules/alpha.md"),
         "# alpha\n\n## 用法\n\n调用 alpha 接口即可。alpha alpha alpha。\n",
     )
     .unwrap();

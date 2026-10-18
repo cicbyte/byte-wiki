@@ -47,8 +47,9 @@ impl AppService {
             return Err(crate::CoreError::Other(anyhow::anyhow!("仓库未登记：{repo_path}")));
         };
 
-        let files = self.db.get_index_files_by_repo(repo.id)?;
-        let edges = self.db.get_index_edges_by_repo(repo.id)?;
+        let branch = crate::branch::current_branch(std::path::Path::new(repo_path));
+        let files = self.db.get_index_files_by_repo(repo.id, &branch)?;
+        let edges = self.db.get_index_edges_by_repo(repo.id, &branch)?;
 
         // 语言分布 / 模块统计（总数 + TOP）
         let mut lang_count: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
@@ -66,13 +67,14 @@ impl AppService {
         top_modules.truncate(8);
 
         // Wiki 面：outline 章节/页面 + 文档登记分类
-        let (wiki_sections, wiki_pages) = match crate::generator::outline::read_outline(
-            &std::path::Path::new(repo_path).join(".bytewiki"),
-        ) {
+        let (wiki_sections, wiki_pages) = match crate::generator::outline::read_outline(&crate::branch::wiki_root(
+            std::path::Path::new(repo_path),
+            &branch,
+        )) {
             Some(o) => (o.sections.len(), o.pages.len()),
             None => (0, 0),
         };
-        let docs = self.db.list_wiki_docs(repo.id)?;
+        let docs = self.db.list_wiki_docs(repo.id, &branch)?;
         let cards = docs.iter().filter(|(_, k, _)| k == "card").count();
 
         // 代码规模：逐文件数行（本地读盘，几百文件毫秒级；跳过超大与二进制）
@@ -123,13 +125,13 @@ impl AppService {
             wiki_sections,
             wiki_pages,
             cards,
-            chunks: self.db.count_chunks(repo.id)?,
+            chunks: self.db.count_chunks(repo.id, &branch)?,
             total_lines,
             code_lines,
             blank_lines,
             size_bytes,
             lang_lines,
-            recent_activity: self.db.list_change_log(repo.id, 5)?,
+            recent_activity: self.db.list_change_log(repo.id, &branch, 5)?,
         })
     }
 }

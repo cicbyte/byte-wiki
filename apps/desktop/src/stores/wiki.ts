@@ -53,9 +53,18 @@ export const useWikiStore = defineStore("wiki", () => {
     }
   }
 
-  /** 项目空间进入：按 id 定位仓库并设为当前（列表缺失时刷新；仓库已失效返回 null） */
+  /**
+   * 项目空间进入：按 id 定位仓库并设为当前（列表缺失时刷新；仓库已失效返回 null）。
+   * 已是当前仓库时也重开一次——刷新 git 分支（切分支后文档/索引跟随新分支）。
+   */
   async function ensureRepo(id: number): Promise<RepoInfo | null> {
-    if (currentRepo.value?.id === id) return currentRepo.value;
+    if (currentRepo.value?.id === id) {
+      try {
+        return await openRepo(currentRepo.value.path);
+      } catch {
+        return null;
+      }
+    }
     if (!recentRepos.value.some((r) => r.id === id)) {
       await refreshRecent();
     }
