@@ -169,9 +169,6 @@ const doneCount = computed(
     <div class="tree-bar">
       <div class="bar-left">
         <span class="bar-title">文档</span>
-        <span v-if="branch" class="bar-branch" :title="`当前分支：${branch}（文档按分支独立）`">
-          {{ branch }}
-        </span>
         <span v-if="skeletonMode" class="bar-count live">
           <LoadingOutlined class="spin inline" />{{ doneCount }}/{{ genPages!.length }}
         </span>
@@ -179,9 +176,12 @@ const doneCount = computed(
         <span
           v-if="(staleCount ?? 0) > 0"
           class="stale-dot"
-          :title="`检测到 ${staleCount} 个文件变更，文档可能滞后`"
+          :title="`「${branch ?? ''}」分支检测到 ${staleCount} 个文件变更，文档可能滞后`"
         >
-          <span class="dot"></span>{{ staleCount }}
+          <span class="dot"></span>
+        </span>
+        <span v-if="branch" class="bar-branch" :title="`当前分支：${branch}（文档按分支独立）`">
+          {{ branch }}
         </span>
       </div>
       <span class="tree-bar-actions">
@@ -288,8 +288,9 @@ const doneCount = computed(
         </ul>
       </div>
 
-      <div v-if="!generating && !diskNodes.length" class="gen-tip empty-tree">
-        暂无文档 · 生成 Wiki 后按章节展示
+      <div v-if="!generating && !diskNodes.length && !arch.length" class="gen-tip empty-tree">
+        <template v-if="branch">「{{ branch }}」分支暂无文档（文档按分支独立）<br />生成 Wiki 或切换到已生成的分支</template>
+        <template v-else>暂无文档 · 生成 Wiki 后按章节展示</template>
       </div>
     </template>
   </nav>
@@ -314,14 +315,20 @@ const doneCount = computed(
   align-items: center;
   gap: 7px;
   min-width: 0;
+  /* 头部单行：任何情况下「文档」标题不换行 */
+  white-space: nowrap;
+  flex: 1;
+  overflow: hidden;
 }
 .bar-title {
+  flex-shrink: 0;
   font-size: 12px;
   font-weight: 700;
   color: var(--text-primary);
   letter-spacing: 0.04em;
 }
 .bar-count {
+  flex-shrink: 0;
   font-family: "JetBrains Mono", monospace;
   font-size: 10.5px;
   color: var(--text-tertiary);
@@ -347,7 +354,10 @@ const doneCount = computed(
   border-radius: var(--radius-xs);
   padding: 0 7px;
   line-height: 17px;
-  max-width: 110px;
+  /* 弹性收缩的最后一项：宽度紧张时先省略分支名 */
+  min-width: 0;
+  flex-shrink: 1;
+  flex-grow: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -355,13 +365,15 @@ const doneCount = computed(
 .stale-dot {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  font-size: 11px;
-  font-family: "JetBrains Mono", monospace;
-  color: var(--color-warning, #ea8a3c);
-  background: color-mix(in oklch, #ea8a3c 12%, transparent);
-  border-radius: var(--radius-xs);
-  padding: 1px 8px;
+  flex-shrink: 0;
+  margin-left: -3px;
+}
+.stale-dot .dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #ea8a3c;
+  animation: stale-blink 1.6s ease-in-out infinite;
 }
 .stale-dot .dot {
   width: 6px;

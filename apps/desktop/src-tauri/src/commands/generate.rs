@@ -119,13 +119,13 @@ pub fn read_wiki_doc(repo_path: String, doc_path: String) -> Result<String, Stri
         .map_err(|e| e.to_string())?;
     // 分支维度：cards/ 跨分支共享；其余产物在 branches/<当前分支>/
     let branch = byte_wiki_core::branch::current_branch(&root);
-    let wiki = if doc_path.starts_with("cards/") {
-        byte_wiki_core::branch::cards_root(&root)
+    let (wiki, rel) = if let Some(card) = doc_path.strip_prefix("cards/") {
+        (byte_wiki_core::branch::cards_root(&root), card)
     } else {
-        byte_wiki_core::branch::wiki_root(&root, &branch)
+        (byte_wiki_core::branch::wiki_root(&root, &branch), doc_path.as_str())
     };
     let full = wiki
-        .join(&doc_path)
+        .join(rel)
         .canonicalize()
         .map_err(|_| format!("文档不存在：{doc_path}"))?;
     if !full.starts_with(&wiki) {

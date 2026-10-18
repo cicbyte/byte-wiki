@@ -87,10 +87,10 @@ const genStartedAt = ref<number | null>(null);
  */
 const liveContent = computed(() => {
   const cur = currentDoc.value;
-  if (!cur || !genPages.value.size) return null;
+  if (!cur || !genPages.value.size || cur.startsWith("cards/")) return null;
   const hit = [...genPages.value.values()].find((g) => g.path === cur);
   if (hit) return hit.content || "";
-  if (!wikiDocs.value.some(([d]) => d === cur)) return "";
+  if (!docEntries.value.some(([d]) => d === cur)) return "";
   return null;
 });
 
@@ -256,11 +256,14 @@ onMounted(enterRepo);
  * （清单按路径排序，cards/ 会排在前面，直接取 [0] 会默认选中卡片） */
 function pickDefaultDoc(): string {
   for (const kind of ["architecture", "page", "module"]) {
-    const hit = wikiDocs.value.find(([, k]) => k === kind);
+    const hit = docEntries.value.find(([, k]) => k === kind);
     if (hit) return hit[0];
   }
-  return wikiDocs.value[0]?.[0] ?? "";
+  return docEntries.value[0]?.[0] ?? "";
 }
+
+/** 文档视图清单：不含知识卡（卡片有专门 tab/入口，不混入文档树） */
+const docEntries = computed(() => wikiDocs.value.filter(([, kind]) => kind !== "card"));
 
 async function refreshDocs() {
   if (!wiki.currentRepo) {
@@ -626,7 +629,7 @@ const busy = computed(() => generating.value || updating.value || externalRunnin
         <div class="browse-layout">
           <aside class="tree-pane">
             <WikiTree
-              :docs="wikiDocs"
+              :docs="docEntries"
               :current="currentDoc"
               :order="outlineOrder"
               :gen-pages="[...genPages.values()]"
