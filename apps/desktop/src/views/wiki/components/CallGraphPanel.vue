@@ -784,54 +784,7 @@ let srcDecorations: { clear(): void } | null = null;
 
 <template>
   <div class="cg-panel" :class="{ resizing: !!resizing }">
-    <!-- 工具栏（沉浸态隐藏） -->
-    <div v-show="!immersive" class="cg-toolbar">
-      <div class="cg-toolbar-left">
-        <button class="btn primary" :disabled="generating" @click="generate">
-          <ReloadOutlined :spin="generating" />
-          {{ generating ? "生成中…" : data ? "重新生成" : "生成调用链" }}
-        </button>
-        <span v-if="stats" class="cg-stats">
-          函数 {{ stats.nodes }} · 调用边 {{ stats.edges }} · 模块 {{ stats.modules }} · 入口 {{ stats.entries }}
-        </span>
-        <span v-if="generating && progressText" class="cg-progress">{{ progressText }}</span>
-      </div>
-      <div class="cg-toolbar-right">
-        <a-input
-          v-model:value="search"
-          placeholder="搜索 函数名 / 模块 / 路由…"
-          style="width: 210px"
-          allow-clear
-          @input="onSearchInput"
-        >
-          <template #prefix><SearchOutlined /></template>
-        </a-input>
-        <a-select
-          v-model:value="moduleFilter"
-          :options="moduleOptions"
-          placeholder="全部模块"
-          style="width: 170px"
-          allow-clear
-          @change="applyFilter"
-        />
-        <a-select
-          v-model:value="viewFilter"
-          :options="[
-            { label: '全部函数', value: '' },
-            { label: '仅入口', value: 'entry' },
-            { label: '仅 Hub（被调 ≥10）', value: 'hub' },
-          ]"
-          style="width: 150px"
-          @change="applyFilter"
-        />
-        <button class="btn" @click="resetView">重置视图</button>
-        <button class="btn" title="画布全屏（Esc 退出）" @click="toggleCanvasFullscreen">
-          <ExpandOutlined /> 全屏
-        </button>
-      </div>
-    </div>
-
-    <!-- 主体三栏 -->
+    <!-- 主体三栏（操作收进画布浮动条：顶部筛选 + 右下统计/重生成） -->
     <div class="cg-main">
       <!-- 入口面板（沉浸态隐藏；可拖宽/可折叠：收起为细轨，画布全宽） -->
       <aside
@@ -964,6 +917,55 @@ let srcDecorations: { clear(): void } | null = null;
             <ReloadOutlined :spin="generating" /> {{ generating ? "生成中…" : "生成调用链" }}
           </button>
         </div>
+        <!-- 浮动工具条：半透明不遮图，悬停加深 -->
+        <div v-if="data && !missing" class="cg-float-bar">
+          <a-input
+            v-model:value="search"
+            placeholder="搜索…"
+            style="width: 148px"
+            size="small"
+            allow-clear
+            @input="onSearchInput"
+          >
+            <template #prefix><SearchOutlined /></template>
+          </a-input>
+          <a-select
+            v-model:value="moduleFilter"
+            :options="moduleOptions"
+            placeholder="模块"
+            style="width: 116px"
+            size="small"
+            allow-clear
+            @change="applyFilter"
+          />
+          <a-select
+            v-model:value="viewFilter"
+            :options="[
+              { label: '全部', value: '' },
+              { label: '仅入口', value: 'entry' },
+              { label: '仅 Hub', value: 'hub' },
+            ]"
+            style="width: 92px"
+            size="small"
+            @change="applyFilter"
+          />
+          <button class="fb-btn" title="重置视图" @click="resetView"><ClearOutlined /></button>
+          <button class="fb-btn" title="画布全屏（Esc 退出）" @click="toggleCanvasFullscreen">
+            <ExpandOutlined />
+          </button>
+        </div>
+
+        <!-- 统计/重生成徽标（右下；生成中显示进度） -->
+        <div v-if="data && !missing" class="cg-stats-pill">
+          <span v-if="generating" class="pill-text live">{{ progressText || "生成中…" }}</span>
+          <span v-else class="pill-text">
+            函数 {{ stats?.nodes ?? 0 }} · 边 {{ stats?.edges ?? 0 }} · 模块 {{ stats?.modules ?? 0 }} · 入口 {{ stats?.entries ?? 0 }}
+          </span>
+          <button class="fb-btn" title="重新生成调用链" :disabled="generating" @click="generate">
+            <ReloadOutlined :spin="generating" />
+          </button>
+        </div>
+
         <!-- 图例 -->
         <div v-if="data && !missing" class="cg-legend">
           <span v-for="m in legend" :key="m" class="cg-legend-item">
@@ -1092,37 +1094,71 @@ let srcDecorations: { clear(): void } | null = null;
 }
 
 /* 工具栏 */
-.cg-toolbar {
+/* 画布浮动工具条（顶部中央；半透明不遮图） */
+.cg-float-bar {
+  position: absolute;
+  top: 10px;
+  left: 50%;
+  transform: translateX(-50%);
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: var(--spacing-md);
-  flex-wrap: wrap;
+  gap: 6px;
+  padding: 5px 8px;
+  background: color-mix(in srgb, var(--bg-card) 78%, transparent);
+  backdrop-filter: blur(6px);
+  border: 1px solid var(--border-light);
+  border-radius: 999px;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.12);
+  z-index: 5;
+  transition: background var(--transition-fast);
+}
+.cg-float-bar:hover {
+  background: color-mix(in srgb, var(--bg-card) 94%, transparent);
+}
+.fb-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: none;
+  background: transparent;
+  color: var(--text-tertiary);
+  border-radius: 50%;
+  cursor: pointer;
+  font-size: 13px;
   flex-shrink: 0;
 }
-.cg-toolbar-left,
-.cg-toolbar-right {
+.fb-btn:hover:not(:disabled) {
+  background: var(--bg-input);
+  color: var(--color-primary);
+}
+.fb-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+/* 统计/重生成徽标（右下） */
+.cg-stats-pill {
+  position: absolute;
+  right: 10px;
+  bottom: 8px;
   display: flex;
   align-items: center;
-  gap: var(--spacing-sm);
-  flex-wrap: wrap;
+  gap: 4px;
+  padding: 3px 6px 3px 10px;
+  background: color-mix(in srgb, var(--bg-card) 78%, transparent);
+  backdrop-filter: blur(6px);
+  border: 1px solid var(--border-light);
+  border-radius: 999px;
+  z-index: 5;
 }
-.cg-toolbar-left {
-  flex: 1;
-  min-width: 0;
-}
-.cg-toolbar-left .cg-stats {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.cg-stats {
-  font-size: 12px;
+.pill-text {
+  font-size: 11px;
   color: var(--text-tertiary);
   font-family: "JetBrains Mono", monospace;
+  white-space: nowrap;
 }
-.cg-progress {
-  font-size: 12px;
+.pill-text.live {
   color: var(--color-primary);
 }
 .cg-focus-note {
