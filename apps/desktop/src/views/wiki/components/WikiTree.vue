@@ -19,6 +19,10 @@ import {
   LoadingOutlined,
   CheckCircleOutlined,
   CloseCircleOutlined,
+  SyncOutlined,
+  MoreOutlined,
+  ThunderboltOutlined,
+  ClusterOutlined,
 } from "@ant-design/icons-vue";
 import type { WikiDocEntry, PageProgress } from "@/api/generate";
 
@@ -32,9 +36,16 @@ const props = defineProps<{
   generating?: boolean;
   /** 生成早期（索引/大纲设计）树内占位提示 */
   genHint?: string;
+  /** 滞后变更数（>0 显示红点徽标与更新按钮） */
+  staleCount?: number;
+  /** 操作禁用（生成/更新/重建进行中） */
+  actionsDisabled?: boolean;
 }>();
 
-const emit = defineEmits<{ (e: "select", path: string): void }>();
+const emit = defineEmits<{
+  (e: "select", path: string): void;
+  (e: "action", kind: "update" | "regenerate" | "rebuild"): void;
+}>();
 
 interface VisibleNode {
   label: string;
@@ -152,6 +163,50 @@ const doneCount = computed(
 
 <template>
   <nav class="wiki-tree">
+    <!-- 树头部：状态 + 紧凑操作（原整行工具栏收敛于此） -->
+    <div class="tree-bar">
+      <div class="bar-left">
+        <span class="bar-title">文档</span>
+        <span v-if="skeletonMode" class="bar-count live">
+          <LoadingOutlined class="spin inline" />{{ doneCount }}/{{ genPages!.length }}
+        </span>
+        <span v-else class="bar-count">{{ diskPageEntries.length }}</span>
+        <span
+          v-if="(staleCount ?? 0) > 0"
+          class="stale-dot"
+          :title="`检测到 ${staleCount} 个文件变更，文档可能滞后`"
+        >
+          <span class="dot"></span>{{ staleCount }}
+        </span>
+      </div>
+      <span class="tree-bar-actions">
+        <button
+          v-if="(staleCount ?? 0) > 0"
+          class="bar-btn"
+          title="更新（仅重生成受影响页面）"
+          :disabled="actionsDisabled"
+          @click="emit('action', 'update')"
+        >
+          <SyncOutlined />
+        </button>
+        <a-dropdown placement="bottomRight" :trigger="['click']">
+          <button class="bar-btn" title="更多操作" :disabled="actionsDisabled">
+            <MoreOutlined />
+          </button>
+          <template #overlay>
+            <a-menu @click="(i: any) => emit('action', i.key)">
+              <a-menu-item key="regenerate" :disabled="actionsDisabled">
+                <ThunderboltOutlined /> 重新生成 Wiki
+              </a-menu-item>
+              <a-menu-item key="rebuild" :disabled="actionsDisabled">
+                <ClusterOutlined /> 重建向量索引
+              </a-menu-item>
+            </a-menu>
+          </template>
+        </a-dropdown>
+      </span>
+    </div>
+
     <!-- 生成早期：索引 / 大纲设计中（骨架未出） -->
     <div v-if="generating && !skeletonMode" class="gen-waiting">
       <LoadingOutlined class="spin" />
@@ -159,37 +214,20 @@ const doneCount = computed(
     </div>
 
     <template v-else>
-      <div v-if="!generating && arch.length" class="tree-group">
-        <div class="group-head">
-          <ApartmentOutlined />
-          <span>总览</span>
-          <span class="group-count">{{ arch.length }}</span>
-        </div>
+      <div v-if="(skeletonMode ? skeletonNodes : diskNodes).length || (!generating && arch.length)" class="tree-group">
         <ul class="group-list">
+          <!-- 总览：固定首项（生成中隐藏，避免与骨架混淆） -->
           <li
-            v-for="[path, , title] in arch"
+            v-for="[path, , title] in (!generating ? arch : [])"
             :key="path"
-            class="tree-item"
+            class="tree-item node"
             :class="{ active: current === path }"
             :title="path"
             @click="emit('select', path)"
           >
-            {{ title }}
+            <ApartmentOutlined class="node-icon" />
+            <span class="node-label">{{ title }}</span>
           </li>
-        </ul>
-      </div>
-
-      <div v-if="(skeletonMode ? skeletonNodes : diskNodes).length" class="tree-group">
-        <div class="group-head">
-          <AppstoreOutlined v-if="!generating" />
-          <LoadingOutlined v-else class="spin inline" />
-          <span>文档</span>
-          <span v-if="generating" class="group-count live">
-            {{ doneCount }}/{{ genPages!.length }}
-          </span>
-          <span v-else class="group-count">{{ diskPageEntries.length }}</span>
-        </div>
-        <ul class="group-list">
           <li
             v-for="n in skeletonMode ? skeletonNodes : diskNodes"
             :key="n.path"
@@ -253,13 +291,104 @@ const doneCount = computed(
 </template>
 
 <style scoped>
+/* 树头部：状态徽标 + 紧凑图标操作 */
+.tree-bar {
+  /* 统一面板头：与内容工具栏 / AI 对话头部分隔线同高同水平线 */
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  height: 38px;
+  box-sizing: border-box;
+  padding: 0 8px 0 12px;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--border-light);
+}
+.bar-left {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+.bar-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-primary);
+  letter-spacing: 0.04em;
+}
+.bar-count {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 10.5px;
+  color: var(--text-tertiary);
+  background: var(--bg-input);
+  border-radius: var(--radius-xs);
+  padding: 0 6px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.bar-count.live {
+  color: var(--color-primary);
+  background: var(--color-primary-bg);
+}
+.bar-count.live .spin {
+  font-size: 9px;
+}
+.stale-dot {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  font-family: "JetBrains Mono", monospace;
+  color: var(--color-warning, #ea8a3c);
+  background: color-mix(in oklch, #ea8a3c 12%, transparent);
+  border-radius: var(--radius-xs);
+  padding: 1px 8px;
+}
+.stale-dot .dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #ea8a3c;
+  animation: stale-blink 1.6s ease-in-out infinite;
+}
+@keyframes stale-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+.tree-bar-actions {
+  display: inline-flex;
+  gap: 2px;
+}
+.bar-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: none;
+  background: transparent;
+  color: var(--text-tertiary);
+  border-radius: var(--radius-xs);
+  cursor: pointer;
+  font-size: 13px;
+}
+.bar-btn:hover:not(:disabled) {
+  background: var(--bg-input);
+  color: var(--color-primary);
+}
+.bar-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
 .wiki-tree {
   display: flex;
   flex-direction: column;
   gap: var(--spacing-sm);
   overflow-y: auto;
   height: 100%;
-  padding: var(--spacing-sm);
+  padding: 0;
 }
 .tree-group {
   display: flex;
@@ -269,7 +398,7 @@ const doneCount = computed(
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 6px 8px;
+  padding: 6px 10px;
   font-size: 11px;
   font-weight: 700;
   text-transform: uppercase;

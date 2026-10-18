@@ -155,10 +155,13 @@ function onBodyClick(ev: MouseEvent) {
   min-height: 0;
 }
 .viewer-toolbar {
+  /* 统一面板头：与树头部 / AI 对话头部分隔线同高同水平线 */
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 6px 14px;
+  height: 38px;
+  box-sizing: border-box;
+  padding: 0 14px;
   border-bottom: 1px solid var(--border-light);
   flex-shrink: 0;
 }

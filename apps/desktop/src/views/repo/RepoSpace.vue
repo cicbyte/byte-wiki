@@ -19,7 +19,6 @@ import {
   ClusterOutlined,
   FileAddOutlined,
   FileTextOutlined,
-  MessageOutlined,
   BookOutlined,
   ArrowLeftOutlined,
   CloseOutlined,
@@ -101,6 +100,13 @@ const liveStatus = computed(() => {
   if (!cur || !genPages.value.size) return null;
   return [...genPages.value.values()].find((g) => g.path === cur)?.status ?? null;
 });
+
+/** 树头部动作分发（原工具栏按钮收敛于此） */
+function onTreeAction(kind: string) {
+  if (kind === "update") runUpdate();
+  else if (kind === "regenerate") runGenerate();
+  else rebuildEmbeddings();
+}
 
 const PHASE_TEXT: Record<string, string> = {
   indexing: "建立索引",
@@ -617,38 +623,6 @@ const busy = computed(() => generating.value || updating.value || externalRunnin
 
       <!-- ============ 文档 ============ -->
       <div v-else-if="tab === 'docs'" class="docs-pane">
-        <div class="browse-toolbar">
-          <span class="browse-title">
-            {{ wiki.currentRepo.name }}
-            <em v-if="wiki.currentRepo.branch">@{{ wiki.currentRepo.branch }}</em>
-            <span v-if="staleReport && staleReport.stale" class="stale-badge">文档滞后</span>
-          </span>
-          <div class="browse-actions">
-            <button
-              v-if="staleReport && staleReport.stale"
-              class="btn warn"
-              :disabled="busy"
-              @click="runUpdate"
-            >
-              <SyncOutlined :spin="updating" />
-              {{ updating ? "更新中…" : `更新（${staleReport.changes.length}）` }}
-            </button>
-            <button class="btn" :disabled="busy" @click="runGenerate">
-              <ThunderboltOutlined />
-              {{ generating ? "生成中…" : "重新生成" }}
-            </button>
-            <button class="btn" :disabled="rebuilding" @click="rebuildEmbeddings">
-              <ClusterOutlined />
-              {{ rebuilding ? "重建索引中…" : "重建索引" }}
-            </button>
-            <button class="btn" @click="router.push(`/repo/${repoId}/chat`)">
-              <MessageOutlined /> 对话
-            </button>
-            <button class="btn" @click="cardModalOpen = true">
-              <FileAddOutlined /> 知识卡
-            </button>
-          </div>
-        </div>
         <div class="browse-layout">
           <aside class="tree-pane">
             <WikiTree
@@ -658,7 +632,10 @@ const busy = computed(() => generating.value || updating.value || externalRunnin
               :gen-pages="[...genPages.values()]"
               :generating="busy"
               :gen-hint="genProgress?.message"
+              :stale-count="staleReport?.stale ? staleReport.changes.length : 0"
+              :actions-disabled="busy || rebuilding"
               @select="currentDoc = $event"
+              @action="onTreeAction"
             />
           </aside>
           <section class="viewer-pane">
@@ -808,12 +785,17 @@ const busy = computed(() => generating.value || updating.value || externalRunnin
   flex-direction: column;
   border-left: 1px solid var(--border-light);
   background: var(--bg-card);
+  /* 顶部与内容面板 padding 对齐：头部分隔线同水平线 */
+  padding-top: var(--spacing-md);
 }
 .ai-dock-head {
+  /* 统一面板头：与树头部 / 内容工具栏分隔线同高同水平线 */
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 8px 10px 8px 14px;
+  height: 38px;
+  box-sizing: border-box;
+  padding: 0 10px 0 14px;
   border-bottom: 1px solid var(--border-light);
   flex-shrink: 0;
 }
