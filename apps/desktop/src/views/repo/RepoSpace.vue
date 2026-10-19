@@ -629,7 +629,7 @@ const busy = computed(() => generating.value || updating.value || externalRunnin
                 {{ rebuilding ? "重建索引中…" : "重建向量索引" }}
               </button>
               <button v-if="wikiDocs.length" class="btn" @click="router.push(`/repo/${repoId}/docs`)">
-                浏览文档（{{ wikiDocs.length }}）
+                浏览 Wiki（{{ wikiDocs.length }}）
               </button>
             </div>
 

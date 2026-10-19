@@ -23,13 +23,13 @@ const routes = [
     path: "/repo/:id/docs",
     name: "repo-docs",
     component: () => import("@/views/repo/RepoSpace.vue"),
-    meta: { title: "文档", tab: "docs", fullsize: true },
+    meta: { title: "Wiki", tab: "docs", fullsize: true },
   },
   {
     path: "/repo/:id/files",
     name: "repo-files",
     component: () => import("@/views/repo/RepoSpace.vue"),
-    meta: { title: "文件", tab: "files", fullsize: true },
+    meta: { title: "源代码", tab: "files", fullsize: true },
   },
   {
     path: "/repo/:id/callgraph",

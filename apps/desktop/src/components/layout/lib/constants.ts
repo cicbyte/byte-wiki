@@ -70,7 +70,7 @@ export const menuGroups: MenuGroup[] = [
 ];
 
 /**
- * 项目空间菜单：完全为项目设计，平铺五项（总览/文档/调用链/对话/知识卡），
+ * 项目空间菜单：完全为项目设计，平铺五项（总览/Wiki/源代码/调用链/对话/知识卡），
  * 当前仓库信息展示在全局 footer（见 SidebarBottom）。
  */
 export function repoMenu(repoId: string): { topItems: MenuItem[]; menuGroups: MenuGroup[] } {
@@ -78,8 +78,8 @@ export function repoMenu(repoId: string): { topItems: MenuItem[]; menuGroups: Me
   return {
     topItems: [
       { key: base, icon: AppstoreOutlined, label: "总览" },
-      { key: `${base}/docs`, icon: FileTextOutlined, label: "文档" },
-      { key: `${base}/files`, icon: FolderOutlined, label: "文件" },
+      { key: `${base}/docs`, icon: FileTextOutlined, label: "Wiki" },
+      { key: `${base}/files`, icon: FolderOutlined, label: "源代码" },
       { key: `${base}/callgraph`, icon: NodeIndexOutlined, label: "调用链" },
       { key: `${base}/chat`, icon: MessageOutlined, label: "对话" },
       { key: `${base}/cards`, icon: BookOutlined, label: "知识卡" },

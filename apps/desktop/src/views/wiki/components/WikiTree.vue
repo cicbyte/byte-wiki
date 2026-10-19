@@ -205,7 +205,7 @@ const doneCount = computed(
     <!-- 树头部：状态 + 紧凑操作（原整行工具栏收敛于此） -->
     <div class="tree-bar">
       <div class="bar-left">
-        <span class="bar-title">文档</span>
+        <span class="bar-title">Wiki</span>
         <span v-if="skeletonMode" class="bar-count live">
           <LoadingOutlined class="spin inline" />{{ doneCount }}/{{ genPages!.length }}
         </span>
