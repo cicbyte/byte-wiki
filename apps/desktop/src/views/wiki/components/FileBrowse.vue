@@ -313,6 +313,10 @@ const visibleNodes = computed<VisibleNode[]>(() => {
           <span class="fb-name">{{ vn.node.name }}</span>
         </div>
         <div v-if="loadingDir.has('')" class="fb-tree-loading">加载中…</div>
+        <div v-else-if="!visibleNodes.length" class="fb-tree-empty">
+          <div class="fbte-title">暂无节点</div>
+          <div class="fbte-sub">仓库为空或被过滤</div>
+        </div>
       </div>
     </aside>
 
@@ -408,6 +412,25 @@ const visibleNodes = computed<VisibleNode[]>(() => {
 .fb-tree-loading {
   padding: 12px;
   font-size: 12px;
+  color: var(--text-tertiary);
+}
+.fb-tree-empty {
+  flex: 1;
+  min-height: 140px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  text-align: center;
+}
+.fbte-title {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+.fbte-sub {
+  font-size: 11px;
   color: var(--text-tertiary);
 }
 .fb-node {

@@ -842,7 +842,10 @@ let srcDecorations: { clear(): void } | null = null;
               </div>
             </div>
             <div v-if="!entryGroups.length" class="cg-entry-empty">
-              {{ data ? (entrySearch || verbFilter ? "无匹配入口" : "无入口（框架路由自动识别）") : "" }}
+              <div class="cee-title">暂无节点</div>
+              <div class="cee-sub">
+                {{ entrySearch || verbFilter ? "调整搜索或筛选条件" : "入口由框架路由自动识别" }}
+              </div>
             </div>
           </div>
         </template>
@@ -1403,10 +1406,25 @@ let srcDecorations: { clear(): void } | null = null;
   white-space: nowrap;
 }
 .cg-entry-empty {
+  flex: 1;
+  min-height: 120px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  text-align: center;
+  padding: 16px 10px;
+}
+.cee-title {
   font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+.cee-sub {
+  font-size: 11px;
   color: var(--text-tertiary);
-  padding: 12px 4px;
-  line-height: 1.6;
+  line-height: 1.5;
 }
 
 /* 画布 */

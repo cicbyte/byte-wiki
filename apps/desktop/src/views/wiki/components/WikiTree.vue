@@ -359,9 +359,9 @@ const doneCount = computed(
         </ul>
       </div>
 
-      <!-- 空态：居中四行，全部围绕「暂无文档」 -->
+      <!-- 空态：居中，标题与各面板树统一为「暂无节点」 -->
       <div v-if="!generating && !diskNodes.length && !arch.length && !skeletonMode" class="empty-tree">
-        <div class="et-title">暂无文档</div>
+        <div class="et-title">暂无节点</div>
         <div v-if="branch" class="et-line">当前分支 <span class="et-mono">{{ branch }}</span></div>
         <div v-if="switchableBranches.length" class="et-line">
           查看
@@ -800,7 +800,7 @@ const doneCount = computed(
   color: var(--text-disabled);
   text-align: center;
 }
-/* 空态：居中三行，围绕「暂无文档」 */
+/* 空态：居中三行（标题与调用链/文件树统一为「暂无节点」） */
 .empty-tree {
   flex: 1;
   min-height: 0;
