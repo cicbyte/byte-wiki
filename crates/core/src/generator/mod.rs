@@ -245,7 +245,7 @@ impl AppService {
         // ---- 阶段 2：LLM 大纲设计 ----
         on_event(ev("outlining", 0, 0, format!("设计 Wiki 大纲（{} 个文件）", known_files.len())));
         let outline = self
-            .design_outline(&client, repo.id, &repo.name, &modules, &known_files, repo_path, on_event)
+            .design_outline(&client, repo.id, &repo.name, &branch, &modules, &known_files, repo_path, on_event)
             .await?;
         let total = outline.pages.len();
         // 路径分配先行：骨架事件即带目标路径（前端树骨架与生成后磁盘文档无缝衔接）
@@ -275,7 +275,7 @@ impl AppService {
         on_event(ev("generating", 0, total, "生成总览页"));
         let rel_paths: Vec<String> = jobs.iter().map(|j| j.rel_path.clone()).collect();
         let (overview, out) = match self
-            .generate_overview(&client, repo.id, &repo.name, &outline, &rel_paths, &modules, repo_path, on_event)
+            .generate_overview(&client, repo.id, &repo.name, &branch, &outline, &rel_paths, &modules, repo_path, on_event)
             .await
         {
             Ok(v) => v,
@@ -386,7 +386,7 @@ impl AppService {
             Some(o) if !o.pages.is_empty() => o,
             _ => {
                 on_event(ev("outlining", 0, 0, "未找到既有大纲，重新设计"));
-                self.design_outline(&client, repo.id, &repo.name, &modules, &known_files, repo_path, on_event)
+                self.design_outline(&client, repo.id, &repo.name, &branch, &modules, &known_files, repo_path, on_event)
                     .await?
             }
         };
@@ -427,7 +427,7 @@ impl AppService {
         on_event(ev("generating", 0, total, "重新生成总览页"));
         let rel_paths: Vec<String> = jobs.iter().map(|j| j.rel_path.clone()).collect();
         let (overview, out) = match self
-            .generate_overview(&client, repo.id, &repo.name, &outline, &rel_paths, &modules, repo_path, on_event)
+            .generate_overview(&client, repo.id, &repo.name, &branch, &outline, &rel_paths, &modules, repo_path, on_event)
             .await
         {
             Ok(v) => v,
@@ -472,6 +472,7 @@ impl AppService {
         client: &LlmClient,
         repo_id: i64,
         repo_name: &str,
+        branch: &str,
         modules: &[ModuleCtx],
         known_files: &HashSet<String>,
         repo_path: &str,
@@ -502,7 +503,7 @@ impl AppService {
             }
             let messages = vec![ChatMessage::system(system), ChatMessage::user(user.clone())];
             let out = self
-                .llm_call_logged(client, repo_id, repo_name, "outline", "Wiki 大纲", attempt + 1,
+                .llm_call_logged(client, repo_id, repo_name, branch, "outline", "Wiki 大纲", attempt + 1,
                     &messages, "outlining", 0, 0, "大纲生成中", None, on_event)
                 .await?;
             match parse_outline(&out.text) {
@@ -612,7 +613,7 @@ impl AppService {
                 if attempt > 0 {
                     tracing::warn!("页面「{}」第 {attempt} 次重试", page.title);
                 }
-                match self.generate_one_page(client, repo_id, repo_name, repo_path, root, outline, page, known_files, file_module, modules, &edges, done, total, attempt as u32 + 1, on_event).await {
+                match self.generate_one_page(client, repo_id, repo_name, branch, repo_path, root, outline, page, known_files, file_module, modules, &edges, done, total, attempt as u32 + 1, on_event).await {
                     Ok((c, out)) => {
                         tokens.0 += out.prompt_tokens;
                         tokens.1 += out.completion_tokens;
@@ -675,6 +676,7 @@ impl AppService {
         client: &LlmClient,
         repo_id: i64,
         repo_name: &str,
+        branch: &str,
         _repo_path: &str,
         root: &Path,
         outline: &WikiOutline,
@@ -731,7 +733,7 @@ impl AppService {
             &page.title, &page.brief, &page.description, &related, &module_ctx, &file_ctx, &rag_ctx, min_files,
         );
         let out = self
-            .llm_call_logged(client, repo_id, repo_name, "page", &page.title, attempt,
+            .llm_call_logged(client, repo_id, repo_name, branch, "page", &page.title, attempt,
                 &messages, "generating", current, total,
                 &format!("《{}》撰写中", page.title), Some(&page.id), on_event)
             .await?;
@@ -745,6 +747,7 @@ impl AppService {
         client: &LlmClient,
         repo_id: i64,
         repo_name: &str,
+        branch: &str,
         stage: &str,
         title: &str,
         attempt: u32,
@@ -777,6 +780,7 @@ impl AppService {
                 ts: crate::db::now_iso(),
                 repo_id,
                 repo_name: repo_name.to_string(),
+                branch: branch.to_string(),
                 stage: stage.to_string(),
                 provider: client.provider_desc(),
                 model: client.model_name().to_string(),
@@ -873,6 +877,7 @@ impl AppService {
             ts: crate::db::now_iso(),
             repo_id,
             repo_name: repo_name.to_string(),
+            branch: branch.to_string(),
             stage: stage.to_string(),
             provider: client.provider_desc(),
             model: client.model_name().to_string(),
@@ -930,6 +935,7 @@ impl AppService {
         client: &LlmClient,
         repo_id: i64,
         repo_name: &str,
+        branch: &str,
         outline: &WikiOutline,
         rel_paths: &[String],
         modules: &[ModuleCtx],
@@ -993,7 +999,7 @@ impl AppService {
             &dependency_mmd,
         );
         let out = self
-            .llm_call_logged(client, repo_id, repo_name, "overview", "Wiki 总览", 1,
+            .llm_call_logged(client, repo_id, repo_name, branch, "overview", "Wiki 总览", 1,
                 &messages, "generating", rel_paths.len(), rel_paths.len(), "总览页撰写中", None, on_event)
             .await?;
         Ok((postprocess::sanitize_md(&out.text), out))

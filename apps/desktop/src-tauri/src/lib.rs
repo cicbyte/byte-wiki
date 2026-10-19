@@ -62,6 +62,7 @@ pub fn run() {
             commands::generate::read_wiki_doc_for,
             commands::generate::clear_gen_tasks,
             commands::llm_logs::list_llm_logs,
+            commands::llm_logs::llm_log_detail,
             commands::llm_logs::clear_llm_logs,
             commands::llm_logs::llm_cache_stats,
             commands::llm_logs::clear_llm_cache,

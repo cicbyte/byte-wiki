@@ -233,6 +233,8 @@ impl AppService {
                 ts: crate::db::now_iso(),
                 repo_id: repo.id,
                 repo_name: repo.name.clone(),
+                // 对话读的是工作区（检索走当前分支索引），归属 = 提问时 git HEAD
+                branch: crate::branch::current_branch(Path::new(repo_path)),
                 stage: "chat".into(),
                 provider: client.provider_desc(),
                 model: client.model_name().to_string(),

@@ -2,9 +2,10 @@
 /**
  * 模型日志页：LLM 调用全量留痕查看（大纲/页面/总览/对话）
  *
- * 数据来自 {data_dir}/llm-logs/{repo_id}.jsonl（尾部 100 条）。
- * 左列表（时间/阶段/标题/耗时/状态）+ 右详情（完整 prompt 与响应），
- * 支持阶段过滤、只看失败、刷新与清空。
+ * 数据来自 {data_dir}/llm-logs/{repo_id}.jsonl：列表走瘦身项全量拉取
+ * （不带 prompt/响应全文，避免整份文件过 IPC），点击行按行号懒加载完整
+ * 详情进右侧抽屉。支持分支过滤（chat/管线日志均带归属分支）、阶段过滤、
+ * 只看失败、刷新与清空。
  */
 import { computed, onMounted, onUnmounted, ref } from "vue";
 import { message } from "ant-design-vue";
@@ -15,18 +16,25 @@ import {
   CloseCircleOutlined,
 } from "@ant-design/icons-vue";
 import { api } from "@/api";
-import type { LlmLogEntry } from "@/api/llm-logs";
+import type { LlmLogEntry, LlmLogListItem } from "@/api/llm-logs";
 import EmptyState from "@/components/common/EmptyState.vue";
 
 const props = defineProps<{ repoPath: string; busy?: boolean }>();
 
-const logs = ref<LlmLogEntry[]>([]);
+const logs = ref<LlmLogListItem[]>([]);
 const size = ref(0);
 const cacheStats = ref<{ count: number; bytes: number }>({ count: 0, bytes: 0 });
 const loading = ref(false);
-const selected = ref<LlmLogEntry | null>(null);
 const stageFilter = ref("all");
+const branchFilter = ref("__all__");
 const onlyFailed = ref(false);
+
+// 详情抽屉：列表项 → 行号懒加载全文（JSONL 行不可变，抽屉打开期间无需随轮询刷新）
+const drawerOpen = ref(false);
+const detailLoading = ref(false);
+const detailError = ref("");
+const detail = ref<LlmLogEntry | null>(null);
+const detailItem = ref<LlmLogListItem | null>(null);
 
 const STAGES: { key: string; label: string }[] = [
   { key: "all", label: "全部" },
@@ -43,9 +51,24 @@ const STAGE_TEXT: Record<string, string> = {
   chat: "对话",
 };
 
+/** 分支下拉选项（按日志出现顺序；空串 = 分支维度引入前的旧日志） */
+const branchOptions = computed(() => {
+  const seen: string[] = [];
+  for (const l of logs.value) {
+    if (!seen.includes(l.branch)) seen.push(l.branch);
+  }
+  return [
+    { value: "__all__", label: "全部分支" },
+    ...seen.map((b) => ({ value: b, label: b || "—（旧日志）" })),
+  ];
+});
+
 /** 新的在前 */
 const filtered = computed(() => {
   let list = [...logs.value].reverse();
+  if (branchFilter.value !== "__all__") {
+    list = list.filter((l) => l.branch === branchFilter.value);
+  }
   if (stageFilter.value !== "all") {
     list = list.filter((l) => l.stage === stageFilter.value);
   }
@@ -61,17 +84,25 @@ async function load() {
     const [entries, bytes] = await api.listLlmLogs(props.repoPath);
     logs.value = entries;
     size.value = bytes;
-    if (selected.value) {
-      // 详情随刷新同步（按时间戳+阶段定位最新版本）
-      const hit = entries.find(
-        (e) => e.ts === selected.value!.ts && e.stage === selected.value!.stage && e.title === selected.value!.title,
-      );
-      selected.value = hit ?? (entries.length ? entries[entries.length - 1] : null);
-    }
   } catch (e: any) {
     message.error(typeof e === "string" ? e : "读取日志失败");
   } finally {
     loading.value = false;
+  }
+}
+
+async function openDetail(item: LlmLogListItem) {
+  detailItem.value = item;
+  detail.value = null;
+  detailError.value = "";
+  detailLoading.value = true;
+  drawerOpen.value = true;
+  try {
+    detail.value = await api.llmLogDetail(props.repoPath, item.line);
+  } catch (e: any) {
+    detailError.value = typeof e === "string" ? e : "读取详情失败";
+  } finally {
+    detailLoading.value = false;
   }
 }
 
@@ -99,7 +130,9 @@ async function clearAll() {
     await api.clearLlmLogs(props.repoPath);
     logs.value = [];
     size.value = 0;
-    selected.value = null;
+    drawerOpen.value = false;
+    detail.value = null;
+    detailItem.value = null;
     message.success("日志已清空");
   } catch (e: any) {
     message.error(typeof e === "string" ? e : "清空失败");
@@ -118,12 +151,13 @@ function fmtSize(n: number): string {
   return n >= 1048576 ? `${(n / 1048576).toFixed(1)} MB` : n >= 1024 ? `${(n / 1024).toFixed(1)} KB` : `${n} B`;
 }
 
-function fmtTokens(e: LlmLogEntry): string {
-  if (!e.prompt_tokens && !e.completion_tokens) return "—";
-  return `${e.prompt_tokens}/${e.completion_tokens}`;
+function fmtTokens(prompt: number, completion: number): string {
+  if (!prompt && !completion) return "—";
+  return `${prompt}/${completion}`;
 }
 
-// 生成进行中每 4s 自动刷新（日志在调用完成后写入，能看到逐条落盘）
+// 生成进行中每 4s 自动刷新列表（日志在调用完成后写入，能看到逐条落盘；
+// 瘦身项开销小，抽屉详情不随之刷新——JSONL 行不可变）
 let pollTimer: ReturnType<typeof setInterval> | null = null;
 onMounted(() => {
   load();
@@ -148,6 +182,13 @@ onUnmounted(() => {
         <em v-if="logs.length">{{ logs.length }} 条 · {{ fmtSize(size) }}</em>
       </span>
       <div class="logs-actions">
+        <a-select
+          v-if="branchOptions.length > 2"
+          v-model:value="branchFilter"
+          size="small"
+          class="branch-select"
+          :options="branchOptions"
+        />
         <span class="stage-chips">
           <button
             v-for="s in STAGES"
@@ -177,82 +218,97 @@ onUnmounted(() => {
       </div>
     </div>
 
-    <div class="logs-layout">
-      <div class="logs-list">
-        <div class="list-head">
-          <span>时间</span>
-          <span>阶段</span>
-          <span class="col-title">标题</span>
-          <span>模型</span>
-          <span>耗时</span>
-          <span>tokens</span>
-          <span>状态</span>
+    <div class="logs-list">
+      <div class="list-head">
+        <span>时间</span>
+        <span>分支</span>
+        <span>阶段</span>
+        <span class="col-title">标题</span>
+        <span>模型</span>
+        <span>耗时</span>
+        <span>tokens</span>
+        <span>状态</span>
+      </div>
+      <div class="list-body">
+        <div v-if="loading && !logs.length" class="list-state"><EmptyState text="读取中…" /></div>
+        <div v-else-if="!filtered.length" class="list-state">
+          <EmptyState
+            text="暂无日志"
+            hint="每次模型调用的完整输入输出都会记录在此（按项目存 JSONL，调用完成后写入）；正在进行的调用请看总览页进度面板"
+          />
         </div>
-        <div class="list-body">
-          <div v-if="loading && !logs.length" class="list-state"><EmptyState text="读取中…" /></div>
-          <div v-else-if="!filtered.length" class="list-state">
-            <EmptyState
-              text="暂无日志"
-              hint="每次模型调用的完整输入输出都会记录在此（按项目存 JSONL，调用完成后写入）；正在进行的调用请看总览页进度面板"
-            />
-          </div>
-          <div
-            v-for="(l, i) in filtered"
-            :key="`${l.ts}-${i}`"
-            class="row"
-            :class="{ active: selected === l, failed: !l.ok }"
-            @click="selected = l"
-          >
-            <span class="col-ts">{{ fmtTs(l.ts) }}</span>
-            <span class="col-stage">{{ STAGE_TEXT[l.stage] || l.stage }}</span>
-            <span class="col-title" :title="l.title">{{ l.title }}</span>
-            <span class="col-model" :title="l.provider">{{ l.model }}</span>
-            <span class="col-dur">{{ fmtDur(l.duration_ms) }}</span>
-            <span class="col-tok">{{ fmtTokens(l) }}</span>
-            <span class="col-ok">
-              <em v-if="l.cached" class="cached">缓存</em>
-              <template v-else>
-                <CheckCircleOutlined v-if="l.ok" class="ok" />
-                <CloseCircleOutlined v-else class="bad" />
-              </template>
-              <em v-if="l.attempt > 1">重试{{ l.attempt }}</em>
-            </span>
-          </div>
+        <div
+          v-for="l in filtered"
+          :key="l.line"
+          class="row"
+          :class="{ failed: !l.ok }"
+          @click="openDetail(l)"
+        >
+          <span class="col-ts">{{ fmtTs(l.ts) }}</span>
+          <span class="col-branch" :class="{ legacy: !l.branch }" :title="l.branch || '分支维度引入前的日志'">
+            {{ l.branch || "—" }}
+          </span>
+          <span class="col-stage">{{ STAGE_TEXT[l.stage] || l.stage }}</span>
+          <span class="col-title" :title="l.title">{{ l.title }}</span>
+          <span class="col-model" :title="l.provider">{{ l.model }}</span>
+          <span class="col-dur">{{ fmtDur(l.duration_ms) }}</span>
+          <span class="col-tok">{{ fmtTokens(l.prompt_tokens, l.completion_tokens) }}</span>
+          <span class="col-ok">
+            <em v-if="l.cached" class="cached">缓存</em>
+            <template v-else>
+              <CheckCircleOutlined v-if="l.ok" class="ok" />
+              <CloseCircleOutlined v-else class="bad" />
+            </template>
+            <em v-if="l.attempt > 1">重试{{ l.attempt }}</em>
+          </span>
         </div>
       </div>
+    </div>
 
-      <div class="log-detail">
-        <template v-if="selected">
+    <!-- 详情抽屉：按行号懒加载完整 system/user/response -->
+    <a-drawer
+      v-model:open="drawerOpen"
+      :title="detailItem?.title || '调用详情'"
+      placement="right"
+      width="720px"
+      class="llm-log-drawer"
+      :body-style="{ padding: '0', display: 'flex', flexDirection: 'column' }"
+    >
+      <div class="detail-wrap">
+        <div v-if="detailLoading" class="detail-state">读取详情…</div>
+        <div v-else-if="detailError" class="detail-state err">{{ detailError }}</div>
+        <template v-else-if="detail">
           <div class="detail-head">
-            <span class="detail-title">{{ selected.title || "（无标题）" }}</span>
-            <span class="detail-meta">
-              {{ STAGE_TEXT[selected.stage] || selected.stage }} ·
-              {{ fmtTs(selected.ts) }} · {{ selected.provider }} · {{ selected.model }}
-              · {{ fmtDur(selected.duration_ms) }}
-              · prompt {{ selected.prompt_tokens }} / completion {{ selected.completion_tokens }}
-              <em v-if="selected.cached" class="cached-tag">缓存回放（未真实请求）</em>
-              <em v-if="selected.attempt > 1" class="retry">第 {{ selected.attempt }} 次尝试</em>
-            </span>
+            <div class="detail-meta">
+              <span class="stage-tag">{{ STAGE_TEXT[detail.stage] || detail.stage }}</span>
+              <span class="branch-tag" :class="{ legacy: !detail.branch }">{{ detail.branch || "—" }}</span>
+              <span>{{ fmtTs(detail.ts) }}</span>
+              <span :title="detail.provider">{{ detail.provider }} · {{ detail.model }}</span>
+              <span>{{ fmtDur(detail.duration_ms) }}</span>
+              <span>prompt {{ detail.prompt_tokens }} / completion {{ detail.completion_tokens }}</span>
+              <em v-if="detail.cached" class="cached-tag">缓存回放（未真实请求）</em>
+              <em v-if="detail.attempt > 1" class="retry">第 {{ detail.attempt }} 次尝试</em>
+            </div>
           </div>
-          <div v-if="selected.error" class="detail-error">{{ selected.error }}</div>
+          <div v-if="detail.error" class="detail-error">{{ detail.error }}</div>
           <div class="detail-body">
             <details open>
-              <summary>System Prompt（{{ selected.system.length }} 字）</summary>
-              <pre>{{ selected.system }}</pre>
+              <summary>System Prompt（{{ detail.system.length }} 字）</summary>
+              <pre>{{ detail.system }}</pre>
             </details>
             <details open>
-              <summary>User Prompt（{{ selected.user.length }} 字）</summary>
-              <pre>{{ selected.user }}</pre>
+              <summary>User Prompt（{{ detail.user.length }} 字）</summary>
+              <pre>{{ detail.user }}</pre>
             </details>
             <details open>
-              <summary>响应（{{ selected.response.length }} 字）</summary>
-              <pre>{{ selected.response }}</pre>
+              <summary>响应（{{ detail.response.length }} 字）</summary>
+              <pre>{{ detail.response }}</pre>
             </details>
           </div>
         </template>
-        <div v-else class="list-state"><EmptyState text="选择一条日志查看详情" /></div>
+        <div v-else class="detail-state">选择一条日志查看详情</div>
       </div>
-    </div>
+    </a-drawer>
   </div>
 </template>
 
@@ -291,6 +347,11 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   gap: var(--spacing-sm);
+  flex-wrap: wrap;
+}
+.branch-select {
+  width: 150px;
+  font-size: 12px;
 }
 .stage-chips {
   display: inline-flex;
@@ -321,16 +382,16 @@ onUnmounted(() => {
   color: var(--color-danger, #d06050);
   border-color: var(--color-danger, #d06050);
 }
+.cache-info {
+  font-size: 11.5px;
+  color: var(--text-tertiary);
+  font-family: "JetBrains Mono", monospace;
+  white-space: nowrap;
+}
 
-.logs-layout {
+.logs-list {
   flex: 1;
   min-height: 0;
-  display: flex;
-  gap: var(--spacing-sm);
-}
-.logs-list {
-  flex: 1.6;
-  min-width: 0;
   background: var(--bg-card);
   border: 1px solid var(--border-card);
   border-radius: var(--radius-lg);
@@ -341,10 +402,10 @@ onUnmounted(() => {
 .list-head,
 .row {
   display: grid;
-  grid-template-columns: 110px 48px minmax(120px, 1.4fr) minmax(90px, 1fr) 56px 84px 70px;
+  grid-template-columns: 110px 72px 48px minmax(160px, 1.6fr) minmax(90px, 1fr) 56px 84px 76px;
   gap: 6px;
   align-items: center;
-  padding: 5px 10px;
+  padding: 5px 12px;
   font-size: 12px;
 }
 .list-head {
@@ -373,10 +434,6 @@ onUnmounted(() => {
 .row:hover {
   background: var(--bg-elevated);
 }
-.row.active {
-  background: var(--color-primary-bg);
-  color: var(--color-primary);
-}
 .row.failed .col-title {
   color: var(--color-danger, #d06050);
 }
@@ -387,10 +444,16 @@ onUnmounted(() => {
   font-size: 11.5px;
   color: var(--text-tertiary);
 }
-.row.active .col-ts,
-.row.active .col-dur,
-.row.active .col-tok {
-  color: inherit;
+.col-branch {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 11.5px;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.col-branch.legacy {
+  color: var(--text-tertiary);
 }
 .col-title,
 .col-model {
@@ -426,54 +489,63 @@ onUnmounted(() => {
   padding: 0 4px;
   line-height: 14px;
 }
-.cache-info {
+
+/* 详情抽屉 */
+.detail-wrap {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.detail-state {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-tertiary);
+  font-size: 13px;
+}
+.detail-state.err {
+  color: var(--color-danger, #d06050);
+  padding: 0 24px;
+  text-align: center;
+}
+.detail-head {
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border-light);
+  flex-shrink: 0;
+}
+.detail-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
   font-size: 11.5px;
   color: var(--text-tertiary);
   font-family: "JetBrains Mono", monospace;
-  white-space: nowrap;
+}
+.stage-tag,
+.branch-tag {
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-xs);
+  padding: 0 6px;
+  line-height: 18px;
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+.branch-tag.legacy {
+  color: var(--text-tertiary);
 }
 .detail-meta .cached-tag {
   font-style: normal;
   color: var(--color-primary);
-  margin-left: 6px;
-}
-
-.log-detail {
-  flex: 1;
-  min-width: 0;
-  background: var(--bg-card);
-  border: 1px solid var(--border-card);
-  border-radius: var(--radius-lg);
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-}
-.detail-head {
-  padding: 10px 14px;
-  border-bottom: 1px solid var(--border-light);
-  flex-shrink: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-.detail-title {
-  font-size: 13.5px;
-  font-weight: 600;
-  color: var(--text-primary);
-  word-break: break-all;
-}
-.detail-meta {
-  font-size: 11.5px;
-  color: var(--text-tertiary);
-  font-family: "JetBrains Mono", monospace;
 }
 .detail-meta .retry {
   font-style: normal;
   color: var(--color-warning);
-  margin-left: 6px;
 }
 .detail-error {
-  margin: 8px 14px 0;
+  margin: 10px 16px 0;
   padding: 8px 10px;
   border-radius: var(--radius-sm);
   background: color-mix(in oklch, var(--color-danger, #d06050) 10%, transparent);
@@ -486,7 +558,7 @@ onUnmounted(() => {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding: 10px 14px 14px;
+  padding: 10px 16px 16px;
 }
 .detail-body details {
   margin-bottom: 10px;
@@ -510,7 +582,7 @@ onUnmounted(() => {
   font-family: "JetBrains Mono", monospace;
   white-space: pre-wrap;
   word-break: break-word;
-  max-height: 320px;
+  max-height: 480px;
   overflow-y: auto;
   color: var(--text-primary);
 }
