@@ -8,7 +8,7 @@ license.workspace = true
 
 [features]
 # MCP 服务器（CLI 和桌面端按需启用）
-mcp = ["dep:rmcp", "dep:schemars", "dep:axum", "dep:tokio", "dep:tokio-util"]
+mcp = ["dep:rmcp", "dep:schemars", "dep:axum", "dep:tokio-util"]
 
 [dependencies]
 anyhow.workspace = true
@@ -39,7 +39,8 @@ futures-util = "0.3"
 rmcp = { workspace = true, optional = true }
 schemars = { workspace = true, optional = true }
 axum = { version = "0.8", features = ["macros"], optional = true }
-tokio = { workspace = true, optional = true }
+# 生成管线的限流退避等需要异步定时器（reqwest/rig 本就跑在 tokio 上）
+tokio = { workspace = true }
 tokio-util = { version = "0.7", optional = true }
 rig-core = "0.42.0"
 

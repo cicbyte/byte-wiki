@@ -55,15 +55,26 @@ impl AppService {
             excludes.extend(cfg.preferences.exclude_dirs);
         }
         let mut current: HashMap<String, (u64, i64)> = HashMap::new();
-        let walker = ignore::WalkBuilder::new(root)
-            .hidden(false)
+        let repo_excludes = crate::canonical_key(root)
+            .ok()
+            .and_then(|c| self.db.get_repo_by_path(&c).ok().flatten())
+            .map(|r| r.exclude_patterns)
+            .unwrap_or_default();
+        let mut wb = ignore::WalkBuilder::new(root);
+        wb.hidden(false)
             .filter_entry(move |e| {
+                if !crate::indexer::keep_entry(e) {
+                    return false;
+                }
                 e.file_name()
                     .to_str()
                     .map(|n| !excludes.contains(n))
                     .unwrap_or(true)
-            })
-            .build();
+            });
+        if let Some(ovr) = crate::indexer::exclude_overrides(root, &repo_excludes) {
+            wb.overrides(ovr);
+        }
+        let walker = wb.build();
         for entry in walker.flatten() {
             if !entry.file_type().map(|t| t.is_file()).unwrap_or(false) {
                 continue;

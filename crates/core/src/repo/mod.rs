@@ -61,7 +61,7 @@ fn quick_file_count(root: &Path) -> i64 {
     let mut count: i64 = 0;
     let walker = WalkBuilder::new(root)
         .hidden(false)
-        .filter_entry(|e| e.file_name() != ".git")
+        .filter_entry(|e| e.file_name() != ".git" && crate::indexer::keep_entry(e))
         .build();
     for entry in walker.flatten() {
         if entry.file_type().map(|t| t.is_file()).unwrap_or(false) {
@@ -131,7 +131,7 @@ mod tests {
         std::fs::write(repo.join(".gitignore"), "ignored.txt\n").unwrap();
         std::fs::write(repo.join("ignored.txt"), "x").unwrap();
         let info = svc.open_repo(repo.to_str().unwrap()).unwrap();
-        // a.txt + src/b.rs + .gitignore；ignored.txt 被排除
-        assert_eq!(info.file_count, 3);
+        // a.txt + src/b.rs；ignored.txt 被 gitignore 排除，.gitignore 属隐藏文件不计
+        assert_eq!(info.file_count, 2);
     }
 }

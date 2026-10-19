@@ -120,7 +120,43 @@ const liveStatus = computed(() => {
 function onTreeAction(kind: string) {
   if (kind === "update") runUpdate();
   else if (kind === "regenerate") runGenerate();
+  else if (kind === "excludes") openExcludeModal();
   else rebuildEmbeddings();
+}
+
+// ===== 索引排除规则（隐藏目录已默认排除；这里叠加用户自定义 glob） =====
+const excludeOpen = ref(false);
+const excludeText = ref("");
+const excludeSaving = ref(false);
+
+async function openExcludeModal() {
+  if (!wiki.currentRepo) return;
+  excludeOpen.value = true;
+  excludeText.value = "";
+  try {
+    const list = await api.getRepoExcludes(wiki.currentRepo.path);
+    excludeText.value = list.join("\n");
+  } catch {
+    /* 读取失败留空，保存时覆盖 */
+  }
+}
+
+async function saveExcludes() {
+  if (!wiki.currentRepo) return;
+  excludeSaving.value = true;
+  try {
+    const patterns = excludeText.value
+      .split("\n")
+      .map((l) => l.trim())
+      .filter(Boolean);
+    await api.setRepoExcludes(wiki.currentRepo.path, patterns);
+    excludeOpen.value = false;
+    message.success(`已保存 ${patterns.length} 条排除规则，重新生成 Wiki 或重建索引后生效`);
+  } catch (e: any) {
+    message.error(typeof e === "string" ? e : "保存失败");
+  } finally {
+    excludeSaving.value = false;
+  }
 }
 
 const PHASE_TEXT: Record<string, string> = {
@@ -862,6 +898,22 @@ const busy = computed(() => generating.value || updating.value || externalRunnin
       />
     </a-modal>
   </div>
+
+    <!-- 索引排除规则（gitignore 风格 glob，每行一条；重建索引后生效） -->
+    <a-modal
+      v-model:open="excludeOpen"
+      title="索引排除规则"
+      :confirm-loading="excludeSaving"
+      ok-text="保存"
+      cancel-text="取消"
+      @ok="saveExcludes"
+    >
+      <p class="exclude-tip">
+        每行一条 gitignore 风格 glob（如 <code>docs/**</code>、<code>*.min.js</code>、<code>vendor/</code>）。
+        排除的文件不入索引、不进 Wiki 大纲与页面引用；<b>.gitignore 与隐藏目录（.github 除外）已默认排除</b>。保存后需重新生成 Wiki 或重建索引生效。
+      </p>
+      <a-textarea v-model:value="excludeText" :rows="8" placeholder="docs/**&#10;*.min.js&#10;vendor/" />
+    </a-modal>
 </template>
 
 <style scoped>
@@ -1481,4 +1533,19 @@ const busy = computed(() => generating.value || updating.value || externalRunnin
   line-height: 1.6;
 }
 
+
+.exclude-tip {
+  font-size: 12.5px;
+  color: var(--text-secondary);
+  line-height: 1.7;
+  margin-bottom: 10px;
+}
+.exclude-tip code {
+  font-family: "JetBrains Mono", monospace;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-xs);
+  padding: 0 4px;
+  font-size: 11.5px;
+}
 </style>

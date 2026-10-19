@@ -213,6 +213,7 @@ mod branch_isolation_tests {
             }],
             active_id: "t".into(), embed_provider_id: None, presets_seeded: true,
         }).unwrap();
+        svc.set_outline_agent(false); // 单测走单发大纲（agent 对 mock 的轮次请求会多计一次）
         svc.open_repo(repo.to_str().unwrap()).unwrap();
         // 开缓存验证完整语义：页面维度磁盘隔离 + 大纲/总览内容寻址复用
 

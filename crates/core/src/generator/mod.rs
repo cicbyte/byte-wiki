@@ -30,6 +30,7 @@ use crate::llm_log::LlmLogEntry;
 use crate::service::AppService;
 use crate::{CoreError, CoreResult};
 
+pub mod agent_outline;
 pub mod outline;
 pub mod pages;
 pub mod postprocess;
@@ -124,6 +125,29 @@ pub struct UpdateSummary {
 
 /// 页面重试次数（额外重试 2 次，共 3 次尝试）
 const PAGE_RETRIES: usize = 2;
+
+/// 供应商限流（429 / rate_limit / TPM·RPM 超限）：立即重试只会继续撞墙，
+/// 退避等待是唯一有效手段
+fn is_rate_limited(err: &crate::CoreError) -> bool {
+    let s = err.to_string().to_lowercase();
+    s.contains("429") || s.contains("rate_limit") || s.contains("too many requests") || s.contains("tpm") || s.contains("rpm")
+}
+
+/// 限流退避：第 n 次重试前等 20s * n，推送事件让进度面板可见
+async fn backoff_on_rate_limit(
+    err: &crate::CoreError,
+    attempt: usize,
+    title: &str,
+    on_event: &(dyn Fn(GenerateEvent) + Send + Sync),
+) {
+    if !is_rate_limited(err) {
+        return;
+    }
+    let wait = 20 * attempt as u64;
+    on_event(ev("generating", 0, 0, format!("「{title}」触发限流（429），退避 {wait}s 后重试（页间大 prompt 打爆 TPM）")));
+    tracing::warn!("限流退避 {wait}s：{title}");
+    tokio::time::sleep(std::time::Duration::from_secs(wait)).await;
+}
 
 /// 生成代次：prompt 结构发生实质变化时 bump，旧代页面不再沿用（整批重生成）
 const GEN_VERSION: u32 = 1;
@@ -245,7 +269,7 @@ impl AppService {
         // ---- 阶段 2：LLM 大纲设计 ----
         on_event(ev("outlining", 0, 0, format!("设计 Wiki 大纲（{} 个文件）", known_files.len())));
         let outline = self
-            .design_outline(&client, repo.id, &repo.name, &branch, &modules, &known_files, repo_path, on_event)
+            .design_outline_auto(&client, repo.id, &repo.name, &branch, &modules, &known_files, repo_path, on_event)
             .await?;
         let total = outline.pages.len();
         // 路径分配先行：骨架事件即带目标路径（前端树骨架与生成后磁盘文档无缝衔接）
@@ -386,7 +410,7 @@ impl AppService {
             Some(o) if !o.pages.is_empty() => o,
             _ => {
                 on_event(ev("outlining", 0, 0, "未找到既有大纲，重新设计"));
-                self.design_outline(&client, repo.id, &repo.name, &branch, &modules, &known_files, repo_path, on_event)
+                self.design_outline_auto(&client, repo.id, &repo.name, &branch, &modules, &known_files, repo_path, on_event)
                     .await?
             }
         };
@@ -467,6 +491,58 @@ impl AppService {
 
     /// LLM 大纲设计（流式输出 + 心跳事件；解析失败带错误重试一次）
     #[allow(clippy::too_many_arguments)]
+    /// 大纲入口（auto）：偏好开启则先走 agent 多轮探查；agent 失败或解析失败
+    /// 回退单发管线（新路径不能成为单点故障）
+    #[allow(clippy::too_many_arguments)]
+    async fn design_outline_auto(
+        &self,
+        client: &LlmClient,
+        repo_id: i64,
+        repo_name: &str,
+        branch: &str,
+        modules: &[ModuleCtx],
+        known_files: &HashSet<String>,
+        repo_path: &str,
+        on_event: &(dyn Fn(GenerateEvent) + Send + Sync),
+    ) -> CoreResult<WikiOutline> {
+        let agent_on = self.outline_agent_enabled.load(std::sync::atomic::Ordering::Relaxed)
+            && self.config().map(|c| c.preferences.outline_agent).unwrap_or(true);
+        if agent_on {
+            on_event(ev("outlining", 0, 0, "大纲 agent 探查仓库（多轮）"));
+            let files: Vec<(String, String, u64)> = self.indexed_files(repo_path)?;
+            let readme = read_readme(Path::new(repo_path));
+            let modules_tri: Vec<(String, usize, Vec<String>)> = modules
+                .iter()
+                .map(|m| (m.name.clone(), m.file_count, m.langs.clone()))
+                .collect();
+            let edges: Vec<(String, String, i64)> = modules
+                .iter()
+                .flat_map(|m| m.depends_on.iter().map(|t| (m.name.clone(), t.clone(), 1i64)).collect::<Vec<_>>())
+                .collect();
+            let initial = outline::build_outline_prompt(repo_name, &files, &readme, &modules_tri, &edges);
+            match crate::generator::agent_outline::run_agent_outline(
+                self, client, repo_id, repo_name, repo_path, &initial, on_event,
+            )
+            .await
+            {
+                Ok(text) => match parse_outline(&text) {
+                    Ok(o) => {
+                        let normalized = normalize_outline(o, known_files);
+                        if !normalized.pages.is_empty() {
+                            return Ok(normalized);
+                        }
+                        tracing::warn!("agent 大纲归一化后无有效页面，回退单发");
+                    }
+                    Err(e) => tracing::warn!("agent 大纲解析失败，回退单发：{e}"),
+                },
+                Err(e) => tracing::warn!("agent 大纲失败，回退单发：{e}"),
+            }
+            on_event(ev("outlining", 0, 0, "agent 失败，回退单发大纲"));
+        }
+        self.design_outline(client, repo_id, repo_name, branch, modules, known_files, repo_path, on_event)
+            .await
+    }
+
     async fn design_outline(
         &self,
         client: &LlmClient,
@@ -502,10 +578,19 @@ impl AppService {
                 ));
             }
             let messages = vec![ChatMessage::system(system), ChatMessage::user(user.clone())];
-            let out = self
+            let out = match self
                 .llm_call_logged(client, repo_id, repo_name, branch, "outline", "Wiki 大纲", attempt + 1,
                     &messages, "outlining", 0, 0, "大纲生成中", None, on_event)
-                .await?;
+                .await
+            {
+                Ok(o) => o,
+                Err(e) if is_rate_limited(&e) => {
+                    backoff_on_rate_limit(&e, attempt as usize + 1, "Wiki 大纲", on_event).await;
+                    last_err = e.to_string();
+                    continue;
+                }
+                Err(e) => return Err(e),
+            };
             match parse_outline(&out.text) {
                 Ok(o) => {
                     let normalized = normalize_outline(o, known_files);
@@ -620,7 +705,12 @@ impl AppService {
                         content = Some(c);
                         break;
                     }
-                    Err(e) => last_err = Some(e.to_string()),
+                    Err(e) => {
+                        if attempt < PAGE_RETRIES {
+                            backoff_on_rate_limit(&e, attempt + 1, &page.title, on_event).await;
+                        }
+                        last_err = Some(e.to_string());
+                    }
                 }
             }
 

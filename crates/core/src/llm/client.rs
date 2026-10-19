@@ -206,6 +206,35 @@ impl LlmClient {
         }
     }
 
+    /// Agent 整轮请求（非流式、带工具定义）：发送完整对话历史，返回模型
+    /// 本轮输出（文本与 ToolCall 混合在 choice 里）。多轮循环由调用方驱动
+    /// （rig 0.42 无 multi_turn）。
+    pub async fn completion_round(
+        &self,
+        history: Vec<rig_core::completion::Message>,
+        tools: Vec<rig_core::completion::ToolDefinition>,
+    ) -> CoreResult<rig_core::completion::CompletionResponse> {
+        use rig_core::completion::CompletionModel;
+        async fn run<M: CompletionModel + Clone>(
+            model: &M,
+            history: Vec<rig_core::completion::Message>,
+            tools: Vec<rig_core::completion::ToolDefinition>,
+        ) -> Result<rig_core::completion::CompletionResponse, rig_core::completion::request::CompletionError> {
+            // prompt 占位（Into<Message> 必填），.messages 用完整历史整体覆盖
+            let mut b = model.completion_request("");
+            b = b.messages(history);
+            if !tools.is_empty() {
+                b = b.tools(tools);
+            }
+            b.send().await
+        }
+        match &self.gateway {
+            Gateway::OpenAi(c) => run(&c.completion_model(self.cfg.chat_model.clone()), history, tools).await,
+            Gateway::Ollama(c) => run(&c.completion_model(self.cfg.chat_model.clone()), history, tools).await,
+        }
+        .map_err(|e| CoreError::Other(anyhow::anyhow!("agent 轮次请求失败：{e}")))
+    }
+
     /// 文本向量化（建库与检索共用；与建库同模型由调用方保证）
     pub async fn embed(&self, texts: &[String]) -> CoreResult<Vec<Vec<f32>>> {
         use rig_core::embeddings::EmbeddingModel;

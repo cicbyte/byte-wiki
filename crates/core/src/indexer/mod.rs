@@ -1,6 +1,7 @@
 //! 仓库索引器（FR-02 前置）：文件清单 + 模块结构 + 引用关系 DAG
 //!
-//! - 遍历：`ignore` crate（遵守 .gitignore）+ 额外排除目录（config 偏好 + 二进制产物）
+//! - 遍历：`ignore` crate（遵守 .gitignore）+ 隐藏条目治理（.github 外的
+//!   隐藏目录/文件不入索引）+ 内置排除目录 + 用户自定义 glob 排除（repos 表）
 //! - 模块：一级目录（含源码文件才算），根级文件归 "." 模块
 //! - 引用：按语言提取 import/use 语句（正则实现，接口按 extractor 组织，
 //!   后续可平滑替换为 tree-sitter 实现），相对路径解析到仓库内目标，
@@ -63,6 +64,40 @@ pub(crate) const EXTRA_EXCLUDES: &[&str] = &[
     ".repo", "coverage", ".pytest_cache", ".mutants",
 ];
 
+/// 隐藏条目治理：工具产物类隐藏目录/文件（.qoder/.bc/.zcode 等，总量常达
+/// 数百个 markdown/配置）不入索引——曾把参考 wiki 产物整包送进大纲清单。
+/// 保留 .github（CI 工作流对部署类文档有价值）；根目录本身（depth 0）放行。
+pub(crate) fn keep_entry(e: &ignore::DirEntry) -> bool {
+    if e.depth() == 0 {
+        return true;
+    }
+    let name = e.file_name().to_str().unwrap_or("");
+    !(name.starts_with('.') && name != ".github")
+}
+
+/// 用户自定义排除规则（gitignore 风格 glob）→ ignore overrides。
+/// 全部转成 `!pat` 排除语义；无有效规则返回 None。
+pub(crate) fn exclude_overrides(
+    root: &Path,
+    patterns: &[String],
+) -> Option<ignore::overrides::Override> {
+    let clean: Vec<&str> = patterns
+        .iter()
+        .map(|p| p.trim().trim_start_matches('!'))
+        .filter(|p| !p.is_empty())
+        .collect();
+    if clean.is_empty() {
+        return None;
+    }
+    let mut ob = ignore::overrides::OverrideBuilder::new(root);
+    for pat in clean {
+        if let Err(e) = ob.add(&format!("!{pat}")) {
+            tracing::warn!("排除规则无法编译，已忽略：{pat}（{e}）");
+        }
+    }
+    ob.build().ok()
+}
+
 impl AppService {
     /// 全量索引仓库（替换式）：返回摘要；`on_progress` 每 200 个文件回调一次
     pub fn index_repo(
@@ -89,15 +124,21 @@ impl AppService {
         let mut imports_by_file: Vec<(String, Vec<String>)> = Vec::new();
         let mut count: usize = 0;
 
-        let walker = ignore::WalkBuilder::new(root)
-            .hidden(false)
+        let mut wb = ignore::WalkBuilder::new(root);
+        wb.hidden(false)
             .filter_entry(move |e| {
+                if !keep_entry(e) {
+                    return false;
+                }
                 e.file_name()
                     .to_str()
                     .map(|n| !excludes.contains(n))
                     .unwrap_or(true)
-            })
-            .build();
+            });
+        if let Some(ovr) = exclude_overrides(root, &repo.exclude_patterns) {
+            wb.overrides(ovr);
+        }
+        let walker = wb.build();
 
         for entry in walker.flatten() {
             if !entry.file_type().map(|t| t.is_file()).unwrap_or(false) {

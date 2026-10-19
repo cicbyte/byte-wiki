@@ -25,6 +25,7 @@ import {
   RollbackOutlined,
   ThunderboltOutlined,
   ClusterOutlined,
+  FilterOutlined,
 } from "@ant-design/icons-vue";
 import type { WikiDocEntry, PageProgress } from "@/api/generate";
 
@@ -52,7 +53,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (e: "select", path: string): void;
-  (e: "action", kind: "update" | "regenerate" | "rebuild"): void;
+  (e: "action", kind: "update" | "regenerate" | "rebuild" | "excludes"): void;
   (e: "switchBranch", branch: string): void;
 }>();
 
@@ -267,6 +268,9 @@ const doneCount = computed(
               </a-menu-item>
               <a-menu-item key="rebuild" :disabled="actionsDisabled">
                 <ClusterOutlined /> 重建向量索引
+              </a-menu-item>
+              <a-menu-item key="excludes">
+                <FilterOutlined /> 索引排除规则
               </a-menu-item>
             </a-menu>
           </template>

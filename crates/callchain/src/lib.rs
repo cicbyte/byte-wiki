@@ -808,6 +808,45 @@ fn collect_go_req_tags(node: Node, src: &str, out: &mut Vec<(String, String, Str
 // 建图（与 Python 版同 schema 的 JSON；source 为可选字段）
 // ----------------------------------------------------------------------------
 
+// ----------------------------------------------------------------------------
+// 单文件符号提取（agent 探查工具用）
+// ----------------------------------------------------------------------------
+
+/// 单文件符号：AST 提取的函数/方法档案（行号 1-based、end 含端点，
+/// 与 JSON 产物的 lineno/end_lineno 语义一致）
+pub struct FileSymbol {
+    pub qualname: String,
+    pub start_row: usize,
+    pub end_row: usize,
+    pub is_async: bool,
+    /// 语言/框架约定的入口（fn main、#[command]、@Scheduled 等）
+    pub is_entry: bool,
+    /// 路由（HTTP 方法 + 路径；无则空）
+    pub routes: Vec<String>,
+}
+
+/// 提取单文件符号（按扩展名匹配语言；超大/不支持/解析失败返回 None）。
+/// 复用调用链的 tree-sitter 解析，不遍历仓库——agent 按需读取单文件用。
+pub fn file_symbols(path: &Path) -> Option<(String, Vec<FileSymbol>)> {
+    let ext = path.extension().and_then(|e| e.to_str())?;
+    let conf = lang_confs().into_iter().find(|c| c.exts.contains(&ext))?;
+    let root = path.parent()?;
+    let rec = extract_file(path, root, &conf)?;
+    let syms = rec
+        .funcs
+        .into_iter()
+        .map(|f| FileSymbol {
+            qualname: f.qualname,
+            start_row: f.start_row + 1,
+            end_row: f.end_row + 1,
+            is_async: f.is_async,
+            is_entry: f.entry_hint || !f.routes.is_empty(),
+            routes: f.routes,
+        })
+        .collect();
+    Some((conf.name.to_string(), syms))
+}
+
 /// 提取选项。`excludes` 由调用方注入（bs/桌面端合并 core EXTRA_EXCLUDES + 用户偏好；
 /// standalone 传空走内置表）。
 pub struct ExtractOptions {

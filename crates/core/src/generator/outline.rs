@@ -114,10 +114,37 @@ fn target_pages(file_count: usize) -> (usize, usize) {
 }
 
 /// 文件清单渲染（大纲输入）：排序平铺 + 语言/体积标注，超限截断
+/// 大纲清单不值得占位的扩展（图片/字体/压缩包/锁文件/压缩产物）——
+/// 留在索引里但不出现在给 LLM 的文件清单（省行数与注意力）
+fn listable_in_outline(path: &str) -> bool {
+    const JUNK: &[&str] = &[
+        ".png", ".jpg", ".jpeg", ".gif", ".ico", ".svg", ".webp", ".bmp",
+        ".woff", ".woff2", ".ttf", ".eot", ".otf",
+        ".zip", ".gz", ".tar", ".rar", ".7z", ".pdf",
+        ".lock", ".min.js", ".min.css", ".map",
+    ];
+    let lower = path.to_lowercase();
+    if JUNK.iter().any(|e| lower.ends_with(e)) {
+        return false;
+    }
+    !matches!(
+        path.rsplit('/').next().unwrap_or(path),
+        "Cargo.lock" | "package-lock.json" | "pnpm-lock.yaml" | "yarn.lock" | "uv.lock" | "poetry.lock"
+    )
+}
+
 fn render_file_tree(files: &[(String, String, u64)], max_lines: usize) -> String {
-    let mut sorted: Vec<&(String, String, u64)> = files.iter().collect();
+    let mut sorted: Vec<&(String, String, u64)> = files
+        .iter()
+        .filter(|(p, _, _)| listable_in_outline(p))
+        .collect();
     sorted.sort_by(|a, b| a.0.cmp(&b.0));
+    let total = files.len();
     let mut out = String::new();
+    if total > sorted.len() {
+        out.push_str(&format!("（另有 {} 个二进制/锁文件不在清单内）
+", total - sorted.len()));
+    }
     for (i, (path, lang, size)) in sorted.iter().enumerate() {
         if i >= max_lines {
             out.push_str(&format!("…（另有 {} 个文件未列出）\n", sorted.len() - max_lines));

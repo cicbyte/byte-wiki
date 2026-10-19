@@ -104,11 +104,33 @@ pub struct AppService {
     data_dir: PathBuf,
     /// LLM 响应缓存开关（默认开；测试与强制重生成时关闭）
     pub llm_cache_enabled: std::sync::atomic::AtomicBool,
+    /// 大纲 agent 开关（默认开；单测走单发大纲，避免对 mock 的额外轮次请求）
+    pub outline_agent_enabled: std::sync::atomic::AtomicBool,
     /// 生成任务注册表（后台任务页/页面重入水合）
     pub tasks: crate::tasks::TaskManager,
 }
 
 impl AppService {
+    /// 仓库自定义索引排除规则（gitignore 风格 glob）
+    pub fn repo_exclude_patterns(&self, repo_path: &str) -> CoreResult<Vec<String>> {
+        let canon = crate::canonical_key(Path::new(repo_path))?;
+        match self.db.get_repo_by_path(&canon)? {
+            Some(r) => Ok(r.exclude_patterns),
+            None => Ok(vec![]),
+        }
+    }
+
+    /// 保存仓库自定义索引排除规则（重建索引后生效）
+    pub fn set_repo_exclude_patterns(&self, repo_path: &str, patterns: &[String]) -> CoreResult<()> {
+        let canon = crate::canonical_key(Path::new(repo_path))?;
+        self.db.set_repo_exclude_patterns(&canon, patterns)
+    }
+
+    /// 大纲 agent 开关（默认开；测试关闭走单发）
+    pub fn set_outline_agent(&self, on: bool) {
+        self.outline_agent_enabled.store(on, std::sync::atomic::Ordering::Relaxed);
+    }
+
     /// 在默认位置打开服务（app_root 固定，data_dir 由 config.toml 决定）
     pub fn open_default() -> CoreResult<Self> {
         let app_root = resolve_app_root()?;
@@ -134,6 +156,7 @@ impl AppService {
             data_root: app_root,
             data_dir,
             llm_cache_enabled: std::sync::atomic::AtomicBool::new(true),
+            outline_agent_enabled: std::sync::atomic::AtomicBool::new(true),
             tasks: crate::tasks::TaskManager::default(),
         })
     }

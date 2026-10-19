@@ -27,6 +27,10 @@ pub fn run_migrations(conn: &Connection) -> CoreResult<()> {
         v3_branch_dimension(conn)?;
         version = 3;
     }
+    if version < 4 {
+        v4_repo_exclude_patterns(conn)?;
+        version = 4;
+    }
     let _ = version;
     Ok(())
 }
@@ -232,6 +236,16 @@ fn v3_branch_dimension(conn: &Connection) -> CoreResult<()> {
     Ok(())
 }
 
+/// v4：repos 加 exclude_patterns（JSON 字符串数组，gitignore 风格 glob）——
+/// 用户自定义的索引排除规则（叠加在 .gitignore 与内置排除之上）
+fn v4_repo_exclude_patterns(conn: &Connection) -> CoreResult<()> {
+    conn.execute_batch(
+        "ALTER TABLE repos ADD COLUMN exclude_patterns TEXT NOT NULL DEFAULT '[]';",
+    )?;
+    conn.pragma_update(None, "user_version", 4)?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -242,7 +256,7 @@ mod tests {
         run_migrations(&conn).unwrap();
         run_migrations(&conn).unwrap();
         let v: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
-        assert_eq!(v, 3);
+        assert_eq!(v, 4);
     }
 
     #[test]

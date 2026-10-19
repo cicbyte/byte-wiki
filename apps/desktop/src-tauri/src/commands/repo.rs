@@ -116,3 +116,25 @@ pub fn search_repo_files(repo_path: String, query: String) -> Result<Vec<String>
     }
     Ok(hits)
 }
+
+/// 读取仓库自定义索引排除规则（gitignore 风格 glob）
+#[tauri::command]
+pub fn get_repo_excludes(
+    state: tauri::State<'_, AppState>,
+    path: String,
+) -> Result<Vec<String>, String> {
+    let svc = state.svc();
+    svc.repo_exclude_patterns(&path).map_err(|e| e.to_string())
+}
+
+/// 保存仓库自定义索引排除规则（重建索引后生效）
+#[tauri::command]
+pub fn set_repo_excludes(
+    state: tauri::State<'_, AppState>,
+    path: String,
+    patterns: Vec<String>,
+) -> Result<(), String> {
+    let svc = state.svc();
+    svc.set_repo_exclude_patterns(&path, &patterns)
+        .map_err(|e| e.to_string())
+}

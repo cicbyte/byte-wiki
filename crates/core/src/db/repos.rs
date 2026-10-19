@@ -18,6 +18,8 @@ pub struct RepoInfo {
     pub last_opened_at: Option<String>,
     pub last_indexed_at: Option<String>,
     pub last_generated_at: Option<String>,
+    /// 用户自定义索引排除规则（gitignore 风格 glob；叠加在内置排除与 .gitignore 之上）
+    pub exclude_patterns: Vec<String>,
 }
 
 impl Database {
@@ -45,7 +47,7 @@ impl Database {
     pub fn get_repo_by_path(&self, path: &str) -> CoreResult<Option<RepoInfo>> {
         let conn = self.lock()?;
         conn.query_row(
-            "SELECT id, path, name, branch, file_count, last_opened_at, last_indexed_at, last_generated_at
+            "SELECT id, path, name, branch, file_count, last_opened_at, last_indexed_at, last_generated_at, exclude_patterns
              FROM repos WHERE path = ?1",
             params![path],
             row_to_repo,
@@ -58,7 +60,7 @@ impl Database {
     pub fn list_recent_repos(&self, limit: i64) -> CoreResult<Vec<RepoInfo>> {
         let conn = self.lock()?;
         let mut stmt = conn.prepare(
-            "SELECT id, path, name, branch, file_count, last_opened_at, last_indexed_at, last_generated_at
+            "SELECT id, path, name, branch, file_count, last_opened_at, last_indexed_at, last_generated_at, exclude_patterns
              FROM repos ORDER BY last_opened_at DESC LIMIT ?1",
         )?;
         let rows = stmt
@@ -79,7 +81,26 @@ fn row_to_repo(r: &rusqlite::Row<'_>) -> rusqlite::Result<RepoInfo> {
         last_opened_at: r.get(5)?,
         last_indexed_at: r.get(6)?,
         last_generated_at: r.get(7)?,
+        exclude_patterns: r
+            .get::<_, String>(8)
+            .ok()
+            .and_then(|t| serde_json::from_str(&t).ok())
+            .unwrap_or_default(),
     })
+}
+
+impl Database {
+    /// 更新仓库的自定义排除规则（gitignore 风格 glob；空数组 = 清空）
+    pub fn set_repo_exclude_patterns(&self, path: &str, patterns: &[String]) -> CoreResult<()> {
+        let json = serde_json::to_string(patterns)
+            .map_err(|e| crate::CoreError::Other(anyhow::anyhow!("序列化排除规则失败：{e}")))?;
+        let conn = self.lock()?;
+        conn.execute(
+            "UPDATE repos SET exclude_patterns = ?1 WHERE path = ?2",
+            params![json, path],
+        )?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]

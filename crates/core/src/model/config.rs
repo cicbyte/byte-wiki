@@ -208,6 +208,10 @@ pub struct PreferencesConfig {
     /// 默认预置常见依赖/构建/IDE 目录。
     #[serde(default = "default_exclude_dirs")]
     pub exclude_dirs: Vec<String>,
+    /// 大纲阶段使用 agent 多轮自主探查（读文件/AST 符号/搜索后再出纲；
+    /// 失败自动回退单发大纲）。默认开。
+    #[serde(default = "default_true")]
+    pub outline_agent: bool,
 }
 
 /// 预置的默认排除目录（常见依赖、构建产物、IDE 配置、系统垃圾文件）
@@ -266,6 +270,7 @@ impl Default for PreferencesConfig {
     fn default() -> Self {
         Self {
             exclude_dirs: default_exclude_dirs(),
+            outline_agent: true,
         }
     }
 }

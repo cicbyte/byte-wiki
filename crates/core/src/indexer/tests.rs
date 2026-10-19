@@ -47,6 +47,51 @@ fn make_repo(dir: &Path) -> std::path::PathBuf {
 }
 
 #[test]
+fn user_exclude_patterns_drop_files_from_index() {
+    let (svc, dir) = svc_in_temp();
+    let repo = make_repo(dir.path());
+    svc.open_repo(repo.to_str().unwrap()).unwrap();
+    std::fs::create_dir_all(repo.join("docs").join("deep")).unwrap();
+    std::fs::write(repo.join("docs/deep/a.md"), "# a
+").unwrap();
+    std::fs::write(repo.join("docs/b.md"), "# b
+").unwrap();
+
+    // docs/** 排除后：docs 下两个文件不入索引（其余不变）
+    svc.set_repo_exclude_patterns(repo.to_str().unwrap(), &["docs/**".to_string()])
+        .unwrap();
+    let summary = svc.index_repo(repo.to_str().unwrap(), &|_| {}).unwrap();
+    assert_eq!(summary.files_indexed, 6, "实际：{:?}", summary.files_indexed);
+    let names: Vec<&str> = summary.modules.iter().map(|m| m.name.as_str()).collect();
+    assert!(!names.contains(&"docs"), "docs 应被排除：{names:?}");
+
+    // 清空规则恢复收录
+    svc.set_repo_exclude_patterns(repo.to_str().unwrap(), &[]).unwrap();
+    let summary = svc.index_repo(repo.to_str().unwrap(), &|_| {}).unwrap();
+    assert_eq!(summary.files_indexed, 8, "实际：{:?}", summary.files_indexed);
+}
+
+#[test]
+fn hidden_entries_except_github_are_skipped() {
+    let (svc, dir) = svc_in_temp();
+    let repo = make_repo(dir.path());
+    svc.open_repo(repo.to_str().unwrap()).unwrap();
+    // .qoder（工具产物）应排除；.github/workflows 应保留
+    std::fs::create_dir_all(repo.join(".qoder").join("content")).unwrap();
+    std::fs::write(repo.join(".qoder/content/x.md"), "# x
+").unwrap();
+    std::fs::create_dir_all(repo.join(".github").join("workflows")).unwrap();
+    std::fs::write(repo.join(".github/workflows/ci.yml"), "on: push
+").unwrap();
+
+    let summary = svc.index_repo(repo.to_str().unwrap(), &|_| {}).unwrap();
+    assert_eq!(summary.files_indexed, 7, "实际：{:?}", summary.files_indexed);
+    let names: Vec<&str> = summary.modules.iter().map(|m| m.name.as_str()).collect();
+    assert!(!names.contains(&".qoder"), ".qoder 应被排除：{names:?}");
+    assert!(names.contains(&".github"), ".github 应保留：{names:?}");
+}
+
+#[test]
 fn index_extracts_modules_and_edges() {
     let (svc, dir) = svc_in_temp();
     let repo = make_repo(dir.path());
@@ -57,8 +102,8 @@ fn index_extracts_modules_and_edges() {
         .index_repo(repo.to_str().unwrap(), &|n| progress_hits.lock().unwrap().push(n))
         .unwrap();
 
-    // 文件清单：源码 5 + README + .gitignore；node_modules 与 gen-out 排除
-    assert_eq!(summary.files_indexed, 7, "实际：{:?}", summary.files_indexed);
+    // 文件清单：源码 5 + README；node_modules / gen-out / 隐藏文件（.gitignore）排除
+    assert_eq!(summary.files_indexed, 6, "实际：{:?}", summary.files_indexed);
 
     // 模块：apps / crates / scripts / tools / "."（gen-out、node_modules 不在）
     let names: Vec<&str> = summary.modules.iter().map(|m| m.name.as_str()).collect();

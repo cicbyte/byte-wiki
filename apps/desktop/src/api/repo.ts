@@ -28,6 +28,13 @@ export const repoApi = {
   recentRepos: (limit = 10) => invoke<RepoInfo[]>("recent_repos", { limit }),
 
   indexRepo: (path: string) => invoke<IndexSummary>("index_repo", { path }),
+
+  /** 仓库自定义索引排除规则（gitignore 风格 glob） */
+  getRepoExcludes: (path: string) => invoke<string[]>("get_repo_excludes", { path }),
+
+  /** 保存排除规则（重建索引后生效） */
+  setRepoExcludes: (path: string, patterns: string[]) =>
+    invoke<void>("set_repo_excludes", { path, patterns }),
 };
 
 // ===== 文件浏览页 =====

@@ -10,15 +10,18 @@ use std::sync::OnceLock;
 use crate::llm::ChatMessage;
 
 /// 小文件整读阈值（行）
-const FULL_FILE_LINES: usize = 400;
+const FULL_FILE_LINES: usize = 320;
 /// 大文件切片：保留头部行数（模块文档、imports、常量）
-const SLICE_HEAD_LINES: usize = 240;
+const SLICE_HEAD_LINES: usize = 200;
 /// 单文件渲染行数硬上限
-const MAX_RENDER_LINES: usize = 1200;
+const MAX_RENDER_LINES: usize = 1000;
 /// 行内容截断（字符）
 const MAX_LINE_CHARS: usize = 400;
-/// 单页源码上下文总预算（字符，约 3 万 token）
-const PAGE_CONTEXT_CHARS: usize = 120_000;
+/// 单页源码上下文总预算（字符）。收紧自 120k：实测页面 prompt 曾达 6.7 万
+/// 字符（≈2 万+ token），连续多页很快打爆供应商 TPM 限额（429）。
+/// deepwiki-rs 同思路（64K token 阈值触发压缩），我们用确定性切片替代
+/// LLM 压缩——零额外调用且缓存键稳定。
+const PAGE_CONTEXT_CHARS: usize = 72_000;
 
 /// 签名行识别（函数/类型/导出/装饰器等结构行），切片时保留真实行号
 fn signature_set() -> &'static regex::RegexSet {

@@ -172,6 +172,7 @@ fn make_repo(dir: &Path) -> std::path::PathBuf {
 
 fn svc_with_llm(dir: &Path, base_url: &str) -> AppService {
     let svc = AppService::open_at(dir.join("app"), dir.join("data")).unwrap();
+    svc.set_outline_agent(false);
     svc.set_llm_config(LlmConfig {
         providers: vec![crate::model::LlmProvider {
             id: "test".into(),
@@ -398,6 +399,7 @@ fn scan_existing_wiki_registers_clone() {
     std::fs::write(wiki.join("outline.json"), "{}\n").unwrap(); // 机器清单不进文档树
 
     let svc = AppService::open_at(dir.path().join("app"), dir.path().join("data")).unwrap();
+    svc.set_outline_agent(false);
     svc.open_repo(repo.to_str().unwrap()).unwrap();
 
     assert!(svc.db.list_wiki_docs(1, "main").unwrap().is_empty());
@@ -517,6 +519,7 @@ async fn real_generate_smoke() {
     let dir = tempfile::tempdir().unwrap();
     let repo = make_repo(dir.path());
     let svc = AppService::open_at(dir.path().join("app"), dir.path().join("data")).unwrap();
+    svc.set_outline_agent(false);
     svc.set_llm_config(LlmConfig {
         providers: vec![crate::model::LlmProvider {
             id: "real".into(),
@@ -546,3 +549,4 @@ async fn real_generate_smoke() {
     let overview = std::fs::read_to_string(repo.join(".bytewiki/overview.md")).unwrap();
     assert!(overview.len() > 100, "总览过短");
 }
+
