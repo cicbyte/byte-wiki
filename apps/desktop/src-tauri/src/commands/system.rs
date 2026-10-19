@@ -78,3 +78,26 @@ pub fn open_url(url: String) -> Result<(), String> {
         .map_err(|e| e.to_string())?;
     Ok(())
 }
+
+/// 保存图表导出文件（Wiki 图表查看器的「下载 SVG / 下载 PNG」落盘）
+///
+/// kind = "svg"：data 为 SVG 文本，直接 UTF-8 写入；
+/// kind = "png"：data 为 data URL（base64），解码后写二进制。
+/// path 来自系统保存对话框，扩展名已由前端 filters 保证。
+#[tauri::command]
+pub fn save_diagram(path: String, kind: String, data: String) -> Result<(), String> {
+    let bytes: Vec<u8> = match kind.as_str() {
+        "svg" => data.into_bytes(),
+        "png" => {
+            use base64::Engine as _;
+            let payload = data
+                .strip_prefix("data:image/png;base64,")
+                .unwrap_or(data.trim());
+            base64::engine::general_purpose::STANDARD
+                .decode(payload)
+                .map_err(|e| format!("PNG 数据解码失败：{e}"))?
+        }
+        other => return Err(format!("不支持的导出类型：{other}")),
+    };
+    std::fs::write(&path, bytes).map_err(|e| format!("写入失败：{e}"))
+}

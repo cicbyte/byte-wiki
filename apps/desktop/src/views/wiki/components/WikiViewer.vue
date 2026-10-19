@@ -1,12 +1,15 @@
 <script setup lang="ts">
 /**
  * Wiki 文档渲染：markdown（md-editor-v3 MdPreview，项目既有依赖）
- * + mermaid（.mmd 图谱包成 mermaid 代码块渲染，支持缩放/平移）
+ * + mermaid（本地实例渲染，离线可用；大图点击进全屏查看器缩放/导出）
  * + 链接拦截：`bw-file://路径?L=起-止`（生成器产出的源码引用）→ 文件浏览页定位；
  *   相对 `.md` 链接（总览页目录）→ 文档切换
  */
-import { computed, ref, watch } from "vue";
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import { MdPreview } from "md-editor-v3";
+// mermaid 本地实例接线 + 主题预初始化（详见 composables/mermaidSetup.ts 头注释：
+// 同步 instance 下 md-editor 不会自行 initialize，不预初始化首屏就是出厂淡紫主题）
+import { applyMermaidTheme, setupMermaid } from "@/composables/mermaidSetup";
 // 组件样式必须自持：此前仅 McpConfigPane 引过 lib/style.css（懒加载路由），
 // 没访问过 MCP 页时本组件渲染裸奔（代码块工具栏/语言标签/复制按钮全无样式）
 import "md-editor-v3/lib/style.css";
@@ -14,6 +17,9 @@ import { message } from "ant-design-vue";
 import { ZoomInOutlined, ZoomOutOutlined, ReloadOutlined, LoadingOutlined } from "@ant-design/icons-vue";
 import { api } from "@/api";
 import { useThemeStore } from "@/stores/theme";
+import DiagramLightbox from "./DiagramLightbox.vue";
+
+
 
 const props = defineProps<{
   repoPath: string;
@@ -33,11 +39,55 @@ const emit = defineEmits<{
 
 const themeStore = useThemeStore();
 
+setupMermaid();
+// 主题预初始化 + 跟随切换（md-editor 自身只在主题变化时才 initialize，
+// 首屏渲染前必须先就位，否则出厂淡紫主题）
+applyMermaidTheme(themeStore.isDark);
+watch(
+  () => themeStore.isDark,
+  (dark) => applyMermaidTheme(dark),
+);
+
 const content = ref("");
 const loading = ref(false);
 /** 图谱缩放（.mmd 文档有效） */
 const zoom = ref(1);
 const isGraph = computed(() => props.docPath.endsWith(".mmd"));
+
+// ===== 图表全屏查看器 =====
+const lightboxOpen = ref(false);
+const lightboxSvg = ref<SVGSVGElement | null>(null);
+const lightboxLabel = ref("");
+/** 观察锚点用稳定的 viewer-body：live-empty 占位与 md-host 间切换时
+ * md-host 会卸载重挂，observer 挂它上面会丢 */
+const viewerBody = ref<HTMLElement | null>(null);
+/** mermaid 渲染是 BUILD_FINISHED 后的异步动作，内容（含实时流式）也会整体
+ * 重渲染——用 MutationObserver 监听 DOM 变化，给新出现的图挂点击放大 */
+let figObserver: MutationObserver | null = null;
+let figMarkTimer: number | null = null;
+
+function markFigures() {
+  const host = viewerBody.value;
+  if (!host) return;
+  host.querySelectorAll<HTMLElement>(".md-editor-mermaid").forEach((fig, idx) => {
+    if (fig.dataset.figEnhanced || !fig.querySelector("svg")) return;
+    fig.dataset.figEnhanced = "1";
+    fig.classList.add("fig-zoomable");
+    fig.title = "点击全屏查看（滚轮缩放 · 可导出 SVG / PNG）";
+    fig.dataset.figIdx = String(idx + 1);
+  });
+}
+
+function observeFigures() {
+  figObserver?.disconnect();
+  if (!viewerBody.value) return;
+  figObserver = new MutationObserver(() => {
+    if (figMarkTimer) clearTimeout(figMarkTimer);
+    figMarkTimer = window.setTimeout(markFigures, 150);
+  });
+  figObserver.observe(viewerBody.value, { childList: true, subtree: true });
+  markFigures();
+}
 
 /** 剥掉开头的 YAML frontmatter：cards/ 文档带 title/created/source 头，
  * 直接渲染会把 `---` 变分割线、meta 变正文，且 md-editor-v3 还会把 title 再渲染成一个 H1（标题重复） */
@@ -63,6 +113,16 @@ async function load() {
 
 watch(() => props.docPath, load, { immediate: true });
 
+onMounted(async () => {
+  await nextTick();
+  observeFigures();
+});
+
+onUnmounted(() => {
+  figObserver?.disconnect();
+  if (figMarkTimer) clearTimeout(figMarkTimer);
+});
+
 function zoomBy(delta: number) {
   zoom.value = Math.min(3, Math.max(0.3, Math.round((zoom.value + delta) * 10) / 10));
 }
@@ -77,7 +137,20 @@ function safeDecode(s: string): string {
 }
 
 function onBodyClick(ev: MouseEvent) {
-  const anchor = (ev.target as HTMLElement).closest?.("a");
+  // 图表（mermaid 容器）：进全屏查看器（缩放/平移/导出），优先于链接逻辑
+  const target = ev.target as HTMLElement;
+  const fig = target.closest?.(".md-editor-mermaid");
+  if (fig) {
+    const svg = fig.querySelector("svg");
+    if (svg) {
+      ev.preventDefault();
+      lightboxSvg.value = svg;
+      lightboxLabel.value = `图${(fig as HTMLElement).dataset.figIdx || ""}`;
+      lightboxOpen.value = true;
+      return;
+    }
+  }
+  const anchor = target.closest?.("a");
   if (!anchor) return;
   const href = anchor.getAttribute("href") || "";
   if (href.startsWith("bw-file://")) {
@@ -130,7 +203,7 @@ function onBodyClick(ev: MouseEvent) {
         <span class="zoom-label">{{ Math.round(zoom * 100) }}%</span>
       </template>
     </div>
-    <div class="viewer-body" :class="{ graph: isGraph }" @click.capture="onBodyClick">
+    <div ref="viewerBody" class="viewer-body" :class="{ graph: isGraph }" @click.capture="onBodyClick">
       <!-- 实时模式且尚无正文：排队/思考占位 -->
       <div v-if="liveContent != null && !content" class="live-empty">
         <LoadingOutlined spin />
@@ -148,6 +221,15 @@ function onBodyClick(ev: MouseEvent) {
         />
       </div>
     </div>
+
+    <!-- 图表全屏查看器（点击文档内 mermaid 图打开） -->
+    <DiagramLightbox
+      v-model:open="lightboxOpen"
+      :svg="lightboxSvg"
+      :title="docPath"
+      :fig-label="lightboxLabel"
+      :dark="themeStore.isDark"
+    />
   </div>
 </template>
 
@@ -265,6 +347,16 @@ function onBodyClick(ev: MouseEvent) {
 }
 .md-host {
   max-width: 100%;
+}
+/* 文档内图表：可点击放大的暗示（悬停描边 + 光标） */
+.md-host :deep(.md-editor-mermaid.fig-zoomable) {
+  position: relative;
+  cursor: zoom-in;
+  border-radius: var(--radius-sm);
+  transition: box-shadow 0.15s ease;
+}
+.md-host :deep(.md-editor-mermaid.fig-zoomable:hover) {
+  box-shadow: 0 0 0 1px var(--color-primary-border), 0 2px 10px rgba(0, 0, 0, 0.08);
 }
 /* 深色模式下 md-editor-v3 自带纯黑背景（--md-bk-color:#000）且 preview 内边距为 0，
    会在卡片内形成一个文本贴边的黑框 —— 置透明使其融入卡片背景（与浅色模式一致） */

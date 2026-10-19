@@ -9,4 +9,8 @@ export const systemApi = {
 
   /** 在系统文件管理器中打开指定路径（目录直接打开，文件则定位并选中） */
   openInFolder: (path: string) => invoke<void>("open_in_folder", { path }),
+
+  /** 图表导出落盘（kind: svg=文本 / png=data URL；path 来自系统保存对话框） */
+  saveDiagram: (path: string, kind: "svg" | "png", data: string) =>
+    invoke<void>("save_diagram", { path, kind, data }),
 };

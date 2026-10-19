@@ -24,6 +24,8 @@ tokio-util = "0.7"
 toml = "0.8"
 # 文件浏览页搜索：遵循 .gitignore 的全量遍历（与 core indexer 同源）
 ignore = "0.4"
+# 图表导出：PNG 以 data URL（base64）跨 IPC 传入后解码写盘
+base64 = "0.22"
 
 [features]
 # 默认启用自定义协议（生产构建用）
