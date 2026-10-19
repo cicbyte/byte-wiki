@@ -84,6 +84,8 @@ const externalRunning = ref(false);
 const indexing = ref(false);
 const rebuilding = ref(false);
 const cardModalOpen = ref(false);
+/** 知识卡 tab 内选中阅读的卡片路径 */
+const currentCard = ref("");
 const cardTitle = ref("");
 const cardContent = ref("");
 const creatingCard = ref(false);
@@ -275,7 +277,8 @@ function pickDefaultDoc(): string {
     const hit = docEntries.value.find(([, k]) => k === kind);
     if (hit) return hit[0];
   }
-  return docEntries.value[0]?.[0] ?? "";
+  // 无文档类产物时保持空（右侧显示空态），不回退到非文档项
+  return "";
 }
 
 /** 文档视图清单：不含知识卡（卡片有专门 tab/入口，不混入文档树） */
@@ -773,30 +776,47 @@ const busy = computed(() => generating.value || updating.value || externalRunnin
         </div>
       </div>
 
-      <!-- ============ 知识卡 ============ -->
-      <div v-else-if="tab === 'cards'" class="pane-scroll">
-        <Panel title="知识卡" :icon="BookOutlined" :count="cards.length">
-          <div class="cards-actions">
-            <button class="btn primary" @click="cardModalOpen = true">
-              <FileAddOutlined /> 新建知识卡
+      <!-- ============ 知识卡：左列表 + 右就地阅读 ============ -->
+      <div v-else-if="tab === 'cards'" class="cards-pane">
+        <aside class="cards-list-pane">
+          <div class="cards-list-head">
+            <span>知识卡</span>
+            <span class="cards-count">{{ cards.length }}</span>
+            <button class="btn sm" title="新建知识卡" @click="cardModalOpen = true">
+              <FileAddOutlined />
             </button>
-            <span class="hint">cards/ 为人工知识区：重新生成与增量更新不会覆盖，且可被问答检索</span>
           </div>
-          <EmptyState
-            v-if="!cards.length"
-            banner
-            :icon="BookOutlined"
-            text="暂无知识卡"
-            hint="记录部署要点、踩坑经验、接口约定等高密度知识"
-          />
-          <ul v-else class="card-list">
-            <li v-for="[path, , title] in cards" :key="path" class="card-item" @click="openDocInDocs(path)">
+          <div class="cards-list-body">
+            <div v-if="!cards.length" class="cards-empty">
+              <div class="ce2-title">暂无节点</div>
+              <div class="ce2-sub">记录部署要点、踩坑经验、接口约定</div>
+            </div>
+            <div
+              v-for="[path, , title] in cards"
+              :key="path"
+              class="card-item"
+              :class="{ active: currentCard === path }"
+              @click="currentCard = path"
+            >
               <BookOutlined class="card-icon" />
-              <span class="card-title">{{ title }}</span>
-              <code class="card-path">{{ path }}</code>
-            </li>
-          </ul>
-        </Panel>
+              <div class="card-text">
+                <span class="card-title">{{ title }}</span>
+                <code class="card-path">{{ path }}</code>
+              </div>
+            </div>
+          </div>
+        </aside>
+        <section class="cards-viewer">
+          <WikiViewer
+            v-if="currentCard"
+            :repo-path="wiki.currentRepo.path"
+            :doc-path="currentCard"
+          />
+          <div v-else class="viewer-empty">
+            <div class="ve-title">选择左侧知识卡阅读</div>
+            <div class="ve-sub">cards/ 为人工知识区：重新生成不会覆盖，且可被问答检索</div>
+          </div>
+        </section>
       </div>
         </template>
 
@@ -1226,6 +1246,15 @@ const busy = computed(() => generating.value || updating.value || externalRunnin
   display: flex;
   gap: var(--spacing-sm);
 }
+.cards-viewer {
+  flex: 1;
+  min-width: 0;
+  background: var(--bg-card);
+  border: 1px solid var(--border-card);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  display: flex;
+}
 .viewer-pane {
   flex: 1;
   min-width: 0;
@@ -1288,47 +1317,113 @@ const busy = computed(() => generating.value || updating.value || externalRunnin
   overflow: hidden;
 }
 
-/* 知识卡 */
-.cards-actions {
+/* 知识卡：左列表 + 右阅读 */
+.cards-pane {
+  flex: 1;
+  min-height: 0;
   display: flex;
-  align-items: center;
-  gap: var(--spacing-md);
-  padding: var(--spacing-sm) var(--spacing-lg) var(--spacing-sm);
+  gap: var(--spacing-sm);
+  padding: var(--spacing-md);
 }
-.card-list {
-  list-style: none;
-  margin: 0;
-  padding: var(--spacing-sm) var(--spacing-lg) var(--spacing-lg);
+.cards-list-pane {
+  width: 280px;
+  flex-shrink: 0;
+  background: var(--bg-card);
+  border: 1px solid var(--border-card);
+  border-radius: var(--radius-lg);
   display: flex;
   flex-direction: column;
+  overflow: hidden;
+}
+.cards-list-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 38px;
+  box-sizing: border-box;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--border-light);
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-primary);
+  flex-shrink: 0;
+}
+.cards-list-head .btn {
+  margin-left: auto;
+}
+.cards-count {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 10.5px;
+  color: var(--text-tertiary);
+  background: var(--bg-input);
+  border-radius: var(--radius-xs);
+  padding: 0 6px;
+}
+.cards-list-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 6px;
+}
+.cards-empty {
+  flex: 1;
+  min-height: 140px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  text-align: center;
+}
+.ce2-title {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+.ce2-sub {
+  font-size: 11px;
+  color: var(--text-tertiary);
 }
 .card-item {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 10px 12px;
+  gap: 9px;
+  padding: 8px 10px;
   border-radius: var(--radius-sm);
   cursor: pointer;
   transition: background var(--transition-fast);
 }
 .card-item:hover {
+  background: var(--bg-elevated);
+}
+.card-item.active {
   background: var(--color-primary-bg);
 }
-.card-item + .card-item {
-  border-top: 1px solid var(--border-light);
+.card-icon {
+  color: var(--color-primary);
+  flex-shrink: 0;
+}
+.card-text {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
 }
 .card-icon {
   color: var(--color-primary);
   flex-shrink: 0;
 }
 .card-title {
-  font-size: 13px;
+  font-size: 12.5px;
   font-weight: 600;
   color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .card-path {
   font-family: "JetBrains Mono", monospace;
-  font-size: 11px;
+  font-size: 10.5px;
   color: var(--text-tertiary);
   overflow: hidden;
   text-overflow: ellipsis;

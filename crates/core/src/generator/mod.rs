@@ -1139,10 +1139,12 @@ impl AppService {
                 continue;
             }
             let title = name.trim_end_matches(".md").trim_end_matches(".mmd").trim_end_matches(".json").to_string();
+            // Wiki 视图只收文档类产物：graphs/（调用链/依赖图）有专门页面，不进树
+            if rel.starts_with("graphs/") {
+                continue;
+            }
             let kind = if rel.starts_with("pages/") {
                 "page"
-            } else if rel.starts_with("graphs/") {
-                "graph"
             } else if rel.starts_with("modules/") {
                 "module"
             } else {
