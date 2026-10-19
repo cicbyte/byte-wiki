@@ -35,6 +35,9 @@ const detailLoading = ref(false);
 const detailError = ref("");
 const detail = ref<LlmLogEntry | null>(null);
 const detailItem = ref<LlmLogListItem | null>(null);
+// Tab 分区（System/User/响应）单段占满剩余高度；默认落在最常读的响应，
+// 选择跨抽屉保留（不随打开重置）
+const detailTab = ref("response");
 
 const STAGES: { key: string; label: string }[] = [
   { key: "all", label: "全部" },
@@ -292,18 +295,17 @@ onUnmounted(() => {
           </div>
           <div v-if="detail.error" class="detail-error">{{ detail.error }}</div>
           <div class="detail-body">
-            <details open>
-              <summary>System Prompt（{{ detail.system.length }} 字）</summary>
-              <pre>{{ detail.system }}</pre>
-            </details>
-            <details open>
-              <summary>User Prompt（{{ detail.user.length }} 字）</summary>
-              <pre>{{ detail.user }}</pre>
-            </details>
-            <details open>
-              <summary>响应（{{ detail.response.length }} 字）</summary>
-              <pre>{{ detail.response }}</pre>
-            </details>
+            <a-tabs v-model:activeKey="detailTab" class="detail-tabs" size="small">
+              <a-tab-pane key="system" :tab="`System（${detail.system.length} 字）`">
+                <pre>{{ detail.system }}</pre>
+              </a-tab-pane>
+              <a-tab-pane key="user" :tab="`User（${detail.user.length} 字）`">
+                <pre>{{ detail.user }}</pre>
+              </a-tab-pane>
+              <a-tab-pane key="response" :tab="`响应（${detail.response.length} 字）`">
+                <pre>{{ detail.response }}</pre>
+              </a-tab-pane>
+            </a-tabs>
           </div>
         </template>
         <div v-else class="detail-state">选择一条日志查看详情</div>
@@ -557,21 +559,38 @@ onUnmounted(() => {
 .detail-body {
   flex: 1;
   min-height: 0;
-  overflow-y: auto;
-  padding: 10px 16px 16px;
+  display: flex;
+  flex-direction: column;
+  padding: 0 16px 16px;
 }
-.detail-body details {
-  margin-bottom: 10px;
+/* Tab 分区：单段占满抽屉剩余高度，pre 内部滚动 */
+.detail-tabs {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
-.detail-body summary {
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--text-secondary);
-  cursor: pointer;
-  padding: 4px 0;
-  user-select: none;
+.detail-tabs :deep(.ant-tabs-nav) {
+  margin: 0 0 8px;
 }
-.detail-body pre {
+.detail-tabs :deep(.ant-tabs-content-holder) {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+.detail-tabs :deep(.ant-tabs-content) {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+.detail-tabs :deep(.ant-tabs-tabpane) {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+.detail-tabs pre {
+  flex: 1;
+  min-height: 0;
   margin: 0;
   padding: 10px;
   background: var(--bg-surface);
@@ -582,7 +601,6 @@ onUnmounted(() => {
   font-family: "JetBrains Mono", monospace;
   white-space: pre-wrap;
   word-break: break-word;
-  max-height: 480px;
   overflow-y: auto;
   color: var(--text-primary);
 }
