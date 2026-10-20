@@ -5,10 +5,14 @@
 
 mod backup;
 mod callchain;
+mod repo;
 mod server;
 
 // ---- 备份 / 恢复 ----
 pub use backup::{BackupArgs, RestoreArgs, run_backup, run_restore};
+
+// ---- 仓库 ----
+pub use repo::{OpenArgs, ReposArgs, run_open, run_repos};
 
 // ---- 调用链 ----
 pub use callchain::{CallchainArgs, CallchainQueryArgs, run_callchain, run_callchain_query};

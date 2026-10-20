@@ -31,6 +31,10 @@ enum Commands {
     /// 从备份恢复（覆盖当前数据）
     Restore(cmd::RestoreArgs),
     /// 生成函数级调用链（tree-sitter 多语言，产物随仓库共享）
+    /// 登记（打开）仓库：后续 callchain/wiki 的前置
+    Open(cmd::OpenArgs),
+    /// 列出最近登记的仓库
+    Repos(cmd::ReposArgs),
     Callchain(cmd::CallchainArgs),
     /// 查询既有调用链产物（节点/上下游/入口；测试用）
     CallchainQuery(cmd::CallchainQueryArgs),
@@ -59,6 +63,8 @@ fn main() -> anyhow::Result<()> {
         match command {
             Commands::Backup(a) => cmd::run_backup(a, cli.json).await,
             Commands::Restore(a) => cmd::run_restore(a, cli.json).await,
+            Commands::Open(a) => cmd::run_open(a, cli.json).await,
+            Commands::Repos(a) => cmd::run_repos(a, cli.json).await,
             Commands::Callchain(a) => cmd::run_callchain(a, cli.json).await,
             Commands::CallchainQuery(a) => cmd::run_callchain_query(a, cli.json).await,
             Commands::Mcp(a) => cmd::run_mcp(a).await,
