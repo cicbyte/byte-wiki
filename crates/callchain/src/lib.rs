@@ -248,6 +248,30 @@ fn http_verb(name: &str) -> Option<&'static str> {
 /// python 装饰器中的 Flask/FastAPI 路由识别，标签美化 `METHOD /path`
 /// （`.route(` 的方法看 methods= 实参，缺省 GET；解析失败回退装饰器首行截断）
 fn routes_from_deco(deco: &str) -> Vec<String> {
+    // CLI 命令装饰器（click/typer）：@click.command() / @cli.command("name") /
+    // @click.group() / @app.command()——命令名取显式参数或标注下的函数名
+    //（函数名在 visit 层已知，这里产出 "cli:group" / "cli:command" 语义标记，
+    //  具体命令名由调用方拼装）
+    let head = deco.trim_start_matches('@').trim();
+    if let Some(attr_call) = head.strip_suffix(')').filter(|h| h.ends_with('(')) {
+        let attr = attr_call.trim_end_matches('(').trim();
+        // attr 形如 click.command / cli.group / app.command
+        if let Some(member) = attr.rsplit('.').next() {
+            if matches!(member, "command" | "group") && attr.contains('.') {
+                let owner = attr.rsplit_once('.').map(|(o, _)| o.to_string()).unwrap_or_default();
+                return vec![format!("cli:{owner}.{member}")];
+            }
+        }
+    } else {
+        // 无括号形态：@click.command（click 允许省略括号）
+        let attr = head.trim();
+        if let Some(member) = attr.rsplit('.').next() {
+            if matches!(member, "command" | "group") && attr.contains('.') {
+                let owner = attr.rsplit_once('.').map(|(o, _)| o.to_string()).unwrap_or_default();
+                return vec![format!("cli:{owner}.{member}")];
+            }
+        }
+    }
     const VERBS: [&str; 8] = [
         ".route(", ".api_route(", ".get(", ".post(", ".put(", ".delete(", ".patch(", ".head(",
     ];
@@ -1485,6 +1509,41 @@ impl Other {
         ]);
         let g = extract_default(&root);
         assert!(has_edge(&g, "Query.run", "Query.query", "receiver"), "self.query → 同 impl 容器（消歧）");
+    }
+
+    #[test]
+    fn python_click_decorator_marks_entry() {
+        // click/typer CLI 命令装饰器 → 入口标记（带 owner 语义）
+        let (_d, root) = tmp_repo(&[(
+            "cli.py",
+            r#"
+import click
+
+@click.group()
+def cli():
+    pass
+
+@cli.command()
+def ship():
+    pass
+
+@click.command()
+def solo():
+    pass
+"#,
+        )]);
+        let g = extract_default(&root);
+        let nodes = g["nodes"].as_array().unwrap();
+        let find = |name: &str| nodes.iter().find(|n| n["name"] == name).unwrap();
+        let cli = find("cli");
+        assert_eq!(cli["is_entry"], true, "@click.group() → 入口");
+        assert!(cli["routes"].to_string().contains("cli:click.group"));
+        let ship = find("ship");
+        assert_eq!(ship["is_entry"], true, "@cli.command() → 入口");
+        assert!(ship["routes"].to_string().contains("cli:cli.command"));
+        let solo = find("solo");
+        assert_eq!(solo["is_entry"], true, "@click.command() → 入口");
+        assert!(solo["routes"].to_string().contains("cli:click.command"));
     }
 
     #[test]
