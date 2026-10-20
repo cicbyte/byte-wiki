@@ -764,6 +764,9 @@ const busy = computed(() => generating.value || updating.value || externalRunnin
                   回 {{ wiki.currentRepo?.branch }} 生成
                 </button>
                 <template v-else>
+                  <button class="btn primary sm" :disabled="busy || generating" @click="runGenerate()">
+                    {{ generating ? "生成中…" : "生成 Wiki" }}
+                  </button>
                   <button
                     v-for="b in switchableBranches"
                     :key="b"
