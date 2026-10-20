@@ -171,7 +171,7 @@ function fmtTime(iso: string | null): string {
             {{ cloning ? "克隆中…" : "克隆" }}
           </button>
         </div>
-        <p class="hint">克隆保存在数据目录 repos/ 下，此后作为本地仓库管理；仅支持 http(s) 地址（本机需安装 git）。</p>
+        <p class="hint">克隆到 ~/.cicbyte/share/repos/<平台>/<用户>/<仓库名>，此后作为本地仓库管理；仅支持 http(s) 地址（本机需安装 git）。</p>
         <p class="hint">仅支持 Git 仓库（含 .git 目录）；代码默认不出本机（local-first）。</p>
       </div>
     </a-modal>

@@ -79,7 +79,7 @@ pub fn set_exclude_dirs(dirs: Vec<String>) -> CoreResult<()> {
     Ok(())
 }
 
-fn dirs_or_home() -> CoreResult<PathBuf> {
+pub(crate) fn dirs_or_home() -> CoreResult<PathBuf> {
     if let Some(h) = home_dir_via_env() {
         return Ok(h);
     }
