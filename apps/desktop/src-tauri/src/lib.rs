@@ -51,6 +51,7 @@ pub fn run() {
             commands::repo::search_repo_files,
             commands::repo::get_repo_excludes,
             commands::repo::set_repo_excludes,
+            commands::repo::clone_repo,
             commands::generate::generate_wiki,
             commands::generate::update_wiki,
             commands::generate::list_wiki_docs,

@@ -90,6 +90,16 @@ fn row_to_repo(r: &rusqlite::Row<'_>) -> rusqlite::Result<RepoInfo> {
 }
 
 impl Database {
+    /// 记录远程克隆来源（本地打开的仓库为空串）
+    pub fn set_repo_origin_url(&self, path: &str, url: &str) -> CoreResult<()> {
+        let conn = self.lock()?;
+        conn.execute(
+            "UPDATE repos SET origin_url = ?1 WHERE path = ?2",
+            params![url, path],
+        )?;
+        Ok(())
+    }
+
     /// 更新仓库的自定义排除规则（gitignore 风格 glob；空数组 = 清空）
     pub fn set_repo_exclude_patterns(&self, path: &str, patterns: &[String]) -> CoreResult<()> {
         let json = serde_json::to_string(patterns)

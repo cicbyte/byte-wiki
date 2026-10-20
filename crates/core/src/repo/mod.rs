@@ -21,6 +21,50 @@ fn head_branch(repo_root: &Path) -> Option<String> {
 
 impl AppService {
     /// 打开仓库：校验为 Git 仓库 → 快速统计 → 登记入库（刷新 last_opened_at）
+    /// 克隆远程 Git 仓库到本地托管目录（{data_dir}/repos/<名>，重名加序号）
+    /// 并按本地仓库登记——后续索引/生成/分支隔离全走现有管线。
+    /// 仅 http(s) URL；git 以独立参数调用（无 shell，无注入面）。
+    #[allow(clippy::result_large_err)]
+    pub fn clone_git_repo(&self, url: &str) -> CoreResult<RepoInfo> {
+        let u = url.trim();
+        if !(u.starts_with("https://") || u.starts_with("http://")) || u.contains(char::is_whitespace) {
+            return Err(CoreError::Other(anyhow::anyhow!("仅支持 http(s) Git URL：{u}")));
+        }
+        let name = u
+            .trim_end_matches('/')
+            .rsplit('/')
+            .next()
+            .unwrap_or("repo")
+            .trim_end_matches(".git");
+        if name.is_empty() {
+            return Err(CoreError::Other(anyhow::anyhow!("无法从 URL 解析仓库名：{u}")));
+        }
+        let base = self.data_dir().join("repos");
+        std::fs::create_dir_all(&base)?;
+        let mut target = base.join(name);
+        let mut n = 1;
+        while target.exists() {
+            n += 1;
+            target = base.join(format!("{name}-{n}"));
+        }
+        let out = std::process::Command::new("git")
+            .arg("clone")
+            .arg(u)
+            .arg(&target)
+            .output()
+            .map_err(|e| CoreError::Other(anyhow::anyhow!("git 执行失败（本机需安装 git）：{e}")))?;
+        if !out.status.success() {
+            let _ = std::fs::remove_dir_all(&target); // 清理半成品
+            return Err(CoreError::Other(anyhow::anyhow!(
+                "克隆失败：{}",
+                String::from_utf8_lossy(&out.stderr).trim()
+            )));
+        }
+        let info = self.open_repo(&target.to_string_lossy())?;
+        self.db.set_repo_origin_url(&info.path, u)?;
+        Ok(info)
+    }
+
     pub fn open_repo(&self, path: &str) -> CoreResult<RepoInfo> {
         let root = Path::new(path);
         if !root.is_dir() {

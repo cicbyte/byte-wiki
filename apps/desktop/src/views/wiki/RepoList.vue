@@ -62,6 +62,28 @@ async function doOpen(path: string) {
   }
 }
 
+// ===== 远程 Git 克隆（http(s) URL → 本地托管目录） =====
+const cloneInput = ref("");
+const cloning = ref(false);
+
+async function cloneFromUrl() {
+  const url = cloneInput.value.trim();
+  if (!url) return;
+  cloning.value = true;
+  try {
+    const info = await api.cloneRepo(url);
+    message.success(`已克隆仓库：${info.name}`);
+    cloneInput.value = "";
+    openModalVisible.value = false;
+    wiki.refreshRecent();
+    router.push(`/repo/${info.id}`);
+  } catch (e: any) {
+    message.error(typeof e === "string" ? e : "克隆失败");
+  } finally {
+    cloning.value = false;
+  }
+}
+
 function fmtTime(iso: string | null): string {
   if (!iso) return "未生成";
   return iso.replace("T", " ").replace("Z", "");
@@ -137,6 +159,19 @@ function fmtTime(iso: string | null): string {
             浏览…
           </button>
         </div>
+        <div class="open-row" style="margin-top: 14px">
+          <a-input
+            v-model:value="cloneInput"
+            placeholder="或输入远程 Git URL，如 https://github.com/user/repo"
+            class="path-input"
+            :disabled="cloning"
+            @keydown.enter="cloneFromUrl"
+          />
+          <button class="btn primary" :disabled="cloning || !cloneInput.trim()" @click="cloneFromUrl">
+            {{ cloning ? "克隆中…" : "克隆" }}
+          </button>
+        </div>
+        <p class="hint">克隆保存在数据目录 repos/ 下，此后作为本地仓库管理；仅支持 http(s) 地址（本机需安装 git）。</p>
         <p class="hint">仅支持 Git 仓库（含 .git 目录）；代码默认不出本机（local-first）。</p>
       </div>
     </a-modal>

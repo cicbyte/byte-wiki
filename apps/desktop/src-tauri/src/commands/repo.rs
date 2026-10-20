@@ -138,3 +138,10 @@ pub fn set_repo_excludes(
     svc.set_repo_exclude_patterns(&path, &patterns)
         .map_err(|e| e.to_string())
 }
+
+/// 克隆远程 Git 仓库到本地托管目录并登记（http(s) URL）
+#[tauri::command]
+pub fn clone_repo(state: tauri::State<'_, AppState>, url: String) -> Result<RepoInfo, String> {
+    let svc = state.svc();
+    svc.clone_git_repo(&url).map_err(|e| e.to_string())
+}

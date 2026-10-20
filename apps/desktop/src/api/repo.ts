@@ -29,6 +29,9 @@ export const repoApi = {
 
   indexRepo: (path: string) => invoke<IndexSummary>("index_repo", { path }),
 
+  /** 克隆远程 Git 仓库（http(s) URL）到本地托管目录并登记 */
+  cloneRepo: (url: string) => invoke<RepoInfo>("clone_repo", { url }),
+
   /** 仓库自定义索引排除规则（gitignore 风格 glob） */
   getRepoExcludes: (path: string) => invoke<string[]>("get_repo_excludes", { path }),
 

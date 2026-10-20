@@ -31,6 +31,10 @@ pub fn run_migrations(conn: &Connection) -> CoreResult<()> {
         v4_repo_exclude_patterns(conn)?;
         version = 4;
     }
+    if version < 5 {
+        v5_repo_origin_url(conn)?;
+        version = 5;
+    }
     let _ = version;
     Ok(())
 }
@@ -246,6 +250,15 @@ fn v4_repo_exclude_patterns(conn: &Connection) -> CoreResult<()> {
     Ok(())
 }
 
+/// v5：repos 加 origin_url——远程克隆的来源地址（本地打开为空）
+fn v5_repo_origin_url(conn: &Connection) -> CoreResult<()> {
+    conn.execute_batch(
+        "ALTER TABLE repos ADD COLUMN origin_url TEXT NOT NULL DEFAULT '';",
+    )?;
+    conn.pragma_update(None, "user_version", 5)?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -256,7 +269,7 @@ mod tests {
         run_migrations(&conn).unwrap();
         run_migrations(&conn).unwrap();
         let v: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
-        assert_eq!(v, 4);
+        assert_eq!(v, 5);
     }
 
     #[test]
