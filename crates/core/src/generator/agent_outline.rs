@@ -263,6 +263,60 @@ fn exec_tool(ctx: &mut ToolCtx, name: &str, args: &serde_json::Value) -> String 
 
 // ============ Agent 循环 ============
 
+/// 增量缓冲：流 delta 按 400ms 批量推送（避免每 token 一个 IPC 事件）
+struct DeltaBuf {
+    think: String,
+    content: String,
+    last_flush: std::time::Instant,
+}
+
+impl DeltaBuf {
+    fn new() -> Self {
+        Self { think: String::new(), content: String::new(), last_flush: std::time::Instant::now() }
+    }
+    fn push(&mut self, channel: &str, delta: &str) {
+        let buf = if channel == "think" { &mut self.think } else { &mut self.content };
+        buf.push_str(delta);
+    }
+    fn maybe_flush(&mut self, call: &str, on_event: &dyn Fn(GenerateEvent)) {
+        if self.last_flush.elapsed() < std::time::Duration::from_millis(400) {
+            return;
+        }
+        self.flush(call, on_event);
+    }
+    fn flush(&mut self, call: &str, on_event: &dyn Fn(GenerateEvent)) {
+        if !self.think.is_empty() {
+            push_stream(on_event, call, "think", std::mem::take(&mut self.think));
+        }
+        if !self.content.is_empty() {
+            push_stream(on_event, call, "content", std::mem::take(&mut self.content));
+        }
+        self.last_flush = std::time::Instant::now();
+    }
+}
+
+fn push_stream(on_event: &dyn Fn(GenerateEvent), call: &str, channel: &str, delta: String) {
+    on_event(GenerateEvent {
+        phase: "outlining".into(),
+        current: 0,
+        total: 0,
+        message: String::new(),
+        prompt_tokens: 0,
+        completion_tokens: 0,
+        pages: None,
+        repo_id: None,
+        branch: None,
+        stream: Some(crate::generator::StreamChunk {
+            call: call.to_string(),
+            channel: channel.into(),
+            delta,
+            page_id: None,
+            repo_id: None,
+            branch: None,
+        }),
+    });
+}
+
 /// 事件助手：终端浮窗流一行 meta
 fn stream_note(on_event: &dyn Fn(GenerateEvent), text: String) {
     on_event(GenerateEvent {
@@ -359,13 +413,33 @@ pub async fn run_agent_outline(
                 "【预算用尽】请立即基于已掌握的信息输出最终大纲 XML，不要再调用任何工具。".to_string(),
             ));
         }
+        let round_label = format!("大纲 agent 轮次 {rounds}");
+        // 回调签名要求 Fn：内部可变性走 Mutex（单消费者，锁无争用）
+        let dbuf = std::sync::Mutex::new(DeltaBuf::new());
+        let flush_buf = |dbuf: &std::sync::Mutex<DeltaBuf>, force: bool| {
+            let mut b = dbuf.lock().unwrap();
+            if force {
+                b.flush(&round_label, on_event);
+            } else {
+                b.maybe_flush(&round_label, on_event);
+            }
+        };
+        let on_text = |d: &str| {
+            dbuf.lock().unwrap().push("content", d);
+            flush_buf(&dbuf, false);
+        };
+        let on_thinking = |d: &str| {
+            dbuf.lock().unwrap().push("think", d);
+            flush_buf(&dbuf, false);
+        };
         let resp: CompletionResponse = client
-            .completion_round(history.clone(), defs.clone())
+            .completion_round_stream(history.clone(), defs.clone(), &on_text, &on_thinking)
             .await
             .map_err(|e| {
                 stream_note(on_event, format!("✘ 大纲 agent 第 {} 轮调用失败：{e}", rounds + 1));
                 e
             })?;
+        flush_buf(&dbuf, true);
         tokens.0 += resp.usage.input_tokens;
         tokens.1 += resp.usage.output_tokens;
         rounds += 1;

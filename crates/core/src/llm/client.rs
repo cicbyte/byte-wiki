@@ -206,6 +206,72 @@ impl LlmClient {
         }
     }
 
+    /// Agent 整轮请求（流式、带工具定义）：消费增量（on_text/on_thinking 回调，
+    /// 终端浮窗实时出字），流结束返回聚合后的完整 choice（含 ToolCall）与 usage
+    /// ——agent 循环的回填/出纲判定与非流式路径完全一致。
+    pub async fn completion_round_stream(
+        &self,
+        history: Vec<rig_core::completion::Message>,
+        tools: Vec<rig_core::completion::ToolDefinition>,
+        on_text: &(dyn Fn(&str) + Send + Sync),
+        on_thinking: &(dyn Fn(&str) + Send + Sync),
+    ) -> CoreResult<rig_core::completion::CompletionResponse> {
+        use futures_util::StreamExt;
+        use rig_core::completion::CompletionModel;
+        use rig_core::streaming::{StreamedAssistantContent, StreamingCompletionResponse};
+
+        async fn drive(
+            mut stream: StreamingCompletionResponse,
+            on_text: &(dyn Fn(&str) + Send + Sync),
+            on_thinking: &(dyn Fn(&str) + Send + Sync),
+        ) -> Result<rig_core::completion::CompletionResponse, rig_core::completion::request::CompletionError> {
+            while let Some(part) = stream.next().await {
+                match part? {
+                    StreamedAssistantContent::Text(t) => {
+                        if !t.text.is_empty() {
+                            on_text(&t.text);
+                        }
+                    }
+                    StreamedAssistantContent::ReasoningDelta { reasoning, .. } => {
+                        if !reasoning.is_empty() {
+                            on_thinking(&reasoning);
+                        }
+                    }
+                    _ => {} // 聚合所需事件由流内部处理（工具调用/最终记录）
+                }
+            }
+            // 流耗尽后聚合 choice 与 usage 就绪
+            let mut resp = rig_core::completion::CompletionResponse::new(
+                std::mem::take(&mut stream.choice),
+                stream.response.as_ref().map(|f| f.usage.clone()).unwrap_or_default(),
+                stream.provider().to_string(),
+            );
+            resp.message_id = stream.message_id.clone();
+            Ok(resp)
+        }
+
+        async fn round<M: CompletionModel + Clone>(
+            model: &M,
+            history: Vec<rig_core::completion::Message>,
+            tools: Vec<rig_core::completion::ToolDefinition>,
+            on_text: &(dyn Fn(&str) + Send + Sync),
+            on_thinking: &(dyn Fn(&str) + Send + Sync),
+        ) -> Result<rig_core::completion::CompletionResponse, rig_core::completion::request::CompletionError> {
+            let mut b = model.completion_request("");
+            b = b.messages(history);
+            if !tools.is_empty() {
+                b = b.tools(tools);
+            }
+            let stream = b.stream().await?;
+            drive(stream, on_text, on_thinking).await
+        }
+        match &self.gateway {
+            Gateway::OpenAi(c) => round(&c.completion_model(self.cfg.chat_model.clone()), history, tools, on_text, on_thinking).await,
+            Gateway::Ollama(c) => round(&c.completion_model(self.cfg.chat_model.clone()), history, tools, on_text, on_thinking).await,
+        }
+        .map_err(|e| CoreError::Other(anyhow::anyhow!("agent 轮次请求失败：{e}")))
+    }
+
     /// Agent 整轮请求（非流式、带工具定义）：发送完整对话历史，返回模型
     /// 本轮输出（文本与 ToolCall 混合在 choice 里）。多轮循环由调用方驱动
     /// （rig 0.42 无 multi_turn）。
