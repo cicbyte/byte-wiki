@@ -55,7 +55,7 @@ fn lang_confs() -> Vec<LangConf> {
             name: "javascript",
             exts: &["js", "jsx", "mjs", "cjs"],
             lang: tree_sitter_javascript::LANGUAGE,
-            func_kinds: &["function_declaration", "generator_function_declaration", "method_definition"],
+            func_kinds: &["function_declaration", "generator_function_declaration", "method_definition", "arrow_function"],
             call_kinds: &["call_expression"],
             class_kinds: &["class_declaration"],
         },
@@ -63,7 +63,7 @@ fn lang_confs() -> Vec<LangConf> {
             name: "typescript",
             exts: &["ts", "mts", "cts"],
             lang: tree_sitter_typescript::LANGUAGE_TYPESCRIPT,
-            func_kinds: &["function_declaration", "generator_function_declaration", "method_definition"],
+            func_kinds: &["function_declaration", "generator_function_declaration", "method_definition", "arrow_function"],
             call_kinds: &["call_expression"],
             class_kinds: &["class_declaration", "abstract_class_declaration"],
         },
@@ -72,7 +72,7 @@ fn lang_confs() -> Vec<LangConf> {
             name: "typescript",
             exts: &["tsx"],
             lang: tree_sitter_typescript::LANGUAGE_TSX,
-            func_kinds: &["function_declaration", "generator_function_declaration", "method_definition"],
+            func_kinds: &["function_declaration", "generator_function_declaration", "method_definition", "arrow_function"],
             call_kinds: &["call_expression"],
             class_kinds: &["class_declaration", "abstract_class_declaration"],
         },
@@ -164,10 +164,47 @@ fn def_name(node: Node, src: &str) -> Option<String> {
     node.child_by_field_name("name")
         .map(|n| text_of(n, src).to_string())
         .filter(|s| !s.is_empty())
+        .or_else(|| {
+            // 命名箭头函数/函数表达式：const createStore = (state) => {...}
+            // （匿名回调箭头返回 None，不入符号表）
+            if node.kind() == "arrow_function" || node.kind() == "function_expression" {
+                // 包裹层跳过：双层括号（f = ((x)=>…)）与 TS 断言（f = ((x)=>…) as T）
+                let mut p = node.parent()?;
+                while matches!(p.kind(), "parenthesized_expression" | "as_expression" | "type_assertion") {
+                    p = p.parent()?;
+                }
+                if p.kind() == "variable_declarator" {
+                    return def_name(p, src);
+                }
+            }
+            None
+        })
 }
 
 /// 从调用表达式提取（被调名, 接收者）。按被调节点的结构分派：
 /// identifier → 直接名；attribute/member/selector/field → 取成员名，接收者记原文供人工核对。
+/// std/stdlib 高频方法名：仓库内同名定义不代表调用点在调它（12 仓验证中
+/// ripgrep 全仓唯一的 `GramQuery.unwrap` 承接了 1000+ 处 `Option::unwrap`
+/// 的 heuristic 误连）。这些名字不参与 heuristic 连边与 receiver 消歧；
+/// 同文件 local 边仍保留（同文件内语义关联强）。
+fn is_std_like_method(name: &str) -> bool {
+    const STDLIB: &[&str] = &[
+        // rust std
+        "unwrap", "unwrap_or", "unwrap_or_default", "unwrap_or_else", "expect",
+        "clone", "to_string", "to_owned", "into", "from", "iter", "into_iter",
+        "collect", "map", "filter", "find", "len", "is_empty", "push", "pop",
+        "as_str", "as_bytes", "to_vec", "default", "eq", "hash", "fmt", "new",
+        // python builtin
+        "append", "extend", "get", "set", "items", "keys", "values", "split",
+        "strip", "join", "format", "copy", "update", "close", "read", "write",
+        // js/ts
+        "then", "catch", "toString", "valueOf",
+        // go
+        "String", "Error",
+    ];
+    STDLIB.contains(&name)
+}
+
 fn callee_of(node: Node, src: &str) -> Option<(String, Option<String>)> {
     let f = node
         .child_by_field_name("function")
@@ -1067,20 +1104,26 @@ pub fn extract(
                 }
                 let mut targets: Vec<(String, &str)> = Vec::new();
                 if recv.is_none() {
-                    // 裸调用：local（同文件同名）→ heuristic（全局唯一）→ 丢弃
+                    // 裸调用：local（同文件同名）→ heuristic（全局唯一且非 std 高频名）→ 丢弃
                     if let Some(gis) = local_idx.get(&(fi, callee.clone())) {
                         for t in gis {
                             targets.push((format!("{}::{}", f.module, f.funcs[*t].qualname), "local"));
                         }
-                    } else if let Some(cands) = global_idx.get(callee.as_str()) {
-                        if cands.len() == 1 {
-                            let (cfi, cgi) = cands[0];
-                            targets.push((
-                                format!("{}::{}", files[cfi].module, files[cfi].funcs[cgi].qualname),
-                                "heuristic",
-                            ));
+                    } else if !is_std_like_method(callee) {
+                        if let Some(cands) = global_idx.get(callee.as_str()) {
+                            if cands.len() == 1 {
+                                let (cfi, cgi) = cands[0];
+                                targets.push((
+                                    format!("{}::{}", files[cfi].module, files[cfi].funcs[cgi].qualname),
+                                    "heuristic",
+                                ));
+                            }
                         }
                     }
+                } else if is_std_like_method(callee) {
+                    // std/stdlib 高频方法名：全仓唯一同名定义大概率是巧合（如全仓唯一的
+                    // GramQuery.unwrap 承接了上千处 Option::unwrap 的 heuristic 误连），
+                    // 不连 heuristic/receiver 边；同文件 local 语义强，上面分支已处理
                 } else {
                     // 方法调用 obj.m()：唯一候选 → heuristic；多候选 → 接收者消歧
                     // （rust trait 分发/变量名调用：cmd.run() 的 8 个 run 候选靠
@@ -1544,6 +1587,33 @@ def solo():
         let solo = find("solo");
         assert_eq!(solo["is_entry"], true, "@click.command() → 入口");
         assert!(solo["routes"].to_string().contains("cli:click.command"));
+    }
+
+    #[test]
+    fn ts_named_arrow_functions_extracted() {
+        // zustand 形态：普通箭头 / as 断言包裹箭头 / 匿名回调不入表
+        let (_d, root) = tmp_repo(&[(
+            "vanilla.ts",
+            r#"
+export const identity = (arg) => arg
+
+export const createStore = ((createState) =>
+  createState ? impl(createState) : impl) as CreateStore
+
+const impl = (createState) => {
+  const api = { getState: () => null }
+  return api
+}
+
+arr.map((x) => x * 2)
+"#,
+        )]);
+        let g = extract_default(&root);
+        let names: Vec<&str> = g["nodes"].as_array().unwrap().iter().map(|n| n["name"].as_str().unwrap()).collect();
+        assert!(names.contains(&"identity"), "普通命名箭头：{names:?}");
+        assert!(names.contains(&"createStore"), "as 断言包裹箭头：{names:?}");
+        assert!(names.contains(&"impl"), "impl：{names:?}");
+        assert!(!names.iter().any(|n| *n == "x"), "匿名回调不入表：{names:?}");
     }
 
     #[test]
