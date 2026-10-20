@@ -1058,8 +1058,9 @@ pub fn extract(
                         }
                     }
                 } else {
-                    // 方法调用 obj.m()：仅 heuristic（方法名全局唯一），不得进 local——
-                    // 同文件存在同名自由函数时连 local 边是虚标精确性
+                    // 方法调用 obj.m()：唯一候选 → heuristic；多候选 → 接收者消歧
+                    // （rust trait 分发/变量名调用：cmd.run() 的 8 个 run 候选靠
+                    // 接收者文本与容器段模糊匹配收敛；仍不唯一则丢弃，宁缺毋滥）
                     if let Some(cands) = global_idx.get(callee.as_str()) {
                         if cands.len() == 1 {
                             let (cfi, cgi) = cands[0];
@@ -1067,6 +1068,87 @@ pub fn extract(
                                 format!("{}::{}", files[cfi].module, files[cfi].funcs[cgi].qualname),
                                 "heuristic",
                             ));
+                        } else if cands.len() > 1 {
+                            let recv_text = recv.as_deref().unwrap_or("");
+                            // 接收者提示集：recv 末段（obj.field.method 取 field 段）
+                            // + 所属 impl 容器（self 方法）+ 类型限定路径首段
+                            let recv_hints: Vec<String> = {
+                                let seg = recv_text
+                                    .rsplit(['.', ':'])
+                                    .next()
+                                    .unwrap_or(recv_text)
+                                    .trim()
+                                    .to_string();
+                                let mut v = vec![seg.clone()];
+                                if seg == "self" {
+                                    // self.m() → 调用方所在 impl 容器（qualname 去掉方法段）
+                                    if let Some(container) = g.qualname.rsplit_once('.').map(|(c, _)| c.to_string()) {
+                                        v.push(container);
+                                    }
+                                }
+                                // Database::open 形态：recv 即完整路径，首段也是类型提示
+                                if recv_text.contains("::") {
+                                    let head = recv_text.split("::").next().unwrap_or("").trim().to_string();
+                                    if !head.is_empty() {
+                                        v.push(head);
+                                    }
+                                }
+                                v.retain(|s| !s.is_empty());
+                                v
+                            };
+                            let matches_hint = |qn: &str| -> bool {
+                                let container = qn.rsplit_once('.').map(|(c, _)| c).unwrap_or(qn);
+                                recv_hints.iter().any(|h| {
+                                    let h = h.to_lowercase();
+                                    let c = container.to_lowercase();
+                                    c == h || c.starts_with(&h) || h.starts_with(&c)
+                                })
+                            };
+                            let src_id = format!("{}::{}", f.module, g.qualname);
+                            let hit: Vec<(usize, usize)> = cands
+                                .iter()
+                                .copied()
+                                .filter(|(cfi2, cgi2)| {
+                                    let dst = format!("{}::{}", files[*cfi2].module, files[*cfi2].funcs[*cgi2].qualname);
+                                    dst != src_id
+                                        && matches_hint(&files[*cfi2].funcs[*cgi2].qualname)
+                                })
+                                .collect();
+                            // 收窄后空集 = recv 提示命中的只有自身（match 臂变量与
+                            // 枚举类型同名的 trait 分发：cmd.run() 里 cmd 既是变量又是
+                            // 枚举 Cmd）——小候选集时回退全候选减自身（分发到各变体
+                            // impl）。候选过多（如全仓 N 个 new）说明是高频构造器，
+                            // 广播只会制造入度爆炸的假枢纽，放弃。
+                            // 回退触发条件：recv 提示与调用方自身容器同名（match 臂
+                            // 变量 == 枚举类型名的精确特征）；Builder/Opts 等无关
+                            // 接收者的空收窄一律不广播
+                            let self_container = g
+                                .qualname
+                                .rsplit_once('.')
+                                .map(|(c, _)| c.to_lowercase())
+                                .unwrap_or_default();
+                            let fallback_ok = recv_hints
+                                .iter()
+                                .any(|h| h.to_lowercase() == self_container);
+                            // 上限 12：覆盖主流 trait 分发规模（zoxide run 有 8 候选），
+                            // 仍拦住 new/with 这类全仓几十候选的构造器广播
+                            let effective: Vec<(usize, usize)> = if hit.is_empty() && fallback_ok && cands.len() <= 12 {
+                                cands
+                                    .iter()
+                                    .copied()
+                                    .filter(|(cfi2, cgi2)| {
+                                        format!("{}::{}", files[*cfi2].module, files[*cfi2].funcs[*cgi2].qualname) != src_id
+                                    })
+                                    .collect()
+                            } else {
+                                hit
+                            };
+                            for (cfi, cgi) in effective {
+                                targets.push((
+                                    format!("{}::{}", files[cfi].module, files[cfi].funcs[cgi].qualname),
+                                    "receiver",
+                                ));
+                            }
                         }
                     }
                 }
@@ -1303,6 +1385,106 @@ public class Calc {
         )]);
         let g = extract_default(&root);
         assert!(has_edge(&g, "Calc.compute", "Calc.square", "local"), "类内方法互调 → local（qualname 携带类名）");
+    }
+
+    #[test]
+    fn rust_trait_dispatch_resolved_by_receiver() {
+        // zoxide 风格：match 臂变量调用 trait 方法（cmd.run()，run 多候选）
+        // + self 方法 + 类型限定调用（Database::open）
+        let (_d, root) = tmp_repo(&[
+            (
+                "main.rs",
+                r#"
+fn main() {
+    let cmd = Cmd::parse();
+    cmd.run();
+}
+"#,
+            ),
+            (
+                "cmd/mod.rs",
+                r#"
+pub trait Run {
+    fn run(&self) -> Result<()>;
+}
+
+impl Run for Cmd {
+    fn run(&self) -> Result<()> {
+        match self {
+            Cmd::Add(cmd) => cmd.run(),
+            Cmd::Query(cmd) => cmd.run(),
+        }
+    }
+}
+"#,
+            ),
+            (
+                "cmd/add.rs",
+                r#"
+impl Run for Add {
+    fn run(&self) -> Result<()> {
+        let mut db = Database::open()?;
+        self.write(&mut db)
+    }
+}
+"#,
+            ),
+            (
+                "cmd/query.rs",
+                r#"
+impl Run for Query {
+    fn run(&self) -> Result<()> {
+        Ok(())
+    }
+}
+"#,
+            ),
+            (
+                "db/mod.rs",
+                r#"
+impl Database {
+    pub fn open() -> Result<Database> { Ok(Database {}) }
+}
+"#,
+            ),
+        ]);
+        let g = extract_default(&root);
+        // cmd.run()：recv=cmd ↔ 候选容器 Cmd（唯一命中，其余 Add/Query 不匹配）
+        assert!(has_edge(&g, "Cmd.run", "Add.run", "receiver"), "match 臂 cmd.run() → Add.run（接收者消歧）");
+        assert!(has_edge(&g, "Cmd.run", "Query.run", "receiver"), "match 臂 cmd.run() → Query.run（接收者消歧）");
+        // main 里 cmd.run()：recv=cmd ↔ Cmd.run
+        assert!(has_edge(&g, "main", "Cmd.run", "receiver"), "main → Cmd.run");
+        // Database::open()：recv 路径首段 Database ↔ 容器 Database（open 唯一，本就是 heuristic）
+        assert!(g["edges"].as_array().unwrap().iter().any(|e| e["dst"].as_str().unwrap_or("").ends_with("Database.open")), "Database::open 有边");
+    }
+
+    #[test]
+    fn rust_self_call_resolved_by_impl_container() {
+        // self.query(...) 在 Query impl 内 → Query.query（同名方法他处无）
+        let (_d, root) = tmp_repo(&[
+            (
+                "cmd/query.rs",
+                r#"
+impl Query {
+    fn run(&self) -> Result<()> {
+        self.query()
+    }
+    fn query(&self) -> Result<()> { Ok(()) }
+}
+"#,
+            ),
+            (
+                "cmd/other.rs",
+                r#"
+impl Other {
+    fn run(&self) -> Result<()> { Ok(()) }
+    fn query(&self) -> Result<()> { Ok(()) }
+}
+"#,
+            ),
+        ]);
+        let g = extract_default(&root);
+        assert!(has_edge(&g, "Query.run", "Query.query", "receiver"), "self.query → 同 impl 容器（消歧）");
     }
 
     #[test]
