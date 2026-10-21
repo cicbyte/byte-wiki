@@ -36,3 +36,11 @@
 三层调整（同日，交互方案改为抽屉）：验证反馈路径展开仍不生效，改为「源码抽屉就地查看」——引用链接不再跳文件页。新建 `apps/desktop/src/views/wiki/components/SourceDrawer.vue`（与 CallGraphPanel「打开函数/打开整个文件」同款交互：右侧 62% 抽屉、Monaco 只读、双 nextTick 后滚动居中 + 行区间高亮）；`RepoSpace.vue` 文档页与知识卡页的 `@open-file` 均接抽屉，抽屉内「在文件页打开（展开路径）」按钮保留原 reveal 链路作为显式动作。
 
 滚动定位根因修正（同日）：靠下行目标滚不到（两个抽屉同病）——reveal 执行时编辑器仍处 `v-show="!loading"` 隐藏态，Monaco 对 display:none 容器是 0×0 布局，`revealLineInCenter` 被夹成空操作，`automaticLayout` 的重排发生在 reveal 之后不补发滚动。两处统一改为：内容就绪先解除隐藏 → 双 nextTick → `ed.layout()` 强制重测 → reveal + 装饰。
+
+## 2026-09-21 切换 Wiki 文档先显示再抖动修复（#580）
+
+**变更内容**（`apps/desktop/src/views/wiki/components/WikiViewer.vue`）
+- mermaid 异步渲染占位：`.md-editor-mermaid:not(:has(svg))` 隐藏渲染前的图源码文本闪现 + `min-height: 120px` 预留高度——此前源码先当正文渲染、几十到几百毫秒后换 SVG 高度突变，把下方内容顶一下（每页强制 ≥2 张图，故每次切文档必现）。
+- 切文档滚动复位：`load()` 内容就绪后 `scrollTo` 顶部——此前旧文档滚动位置被带进新文档。
+
+**验收结果**：vue-tsc 无错误（HMR 生效）。

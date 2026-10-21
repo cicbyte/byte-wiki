@@ -103,6 +103,8 @@ async function load() {
       ? await api.readWikiDocFor(props.repoPath, props.docPath, props.viewBranch)
       : await api.readWikiDoc(props.repoPath, props.docPath);
     content.value = isGraph.value ? "```mermaid\n" + raw + "\n```" : stripFrontmatter(raw);
+    // 切文档滚顶复位：不复位会把上一篇的滚动位置带进新文档（短文被夹、长文落到中部）
+    viewerBody.value?.scrollTo({ top: 0 });
   } catch (e: any) {
     content.value = "";
     message.error(typeof e === "string" ? e : "读取文档失败");
@@ -357,6 +359,13 @@ function onBodyClick(ev: MouseEvent) {
 }
 .md-host :deep(.md-editor-mermaid.fig-zoomable:hover) {
   box-shadow: 0 0 0 1px var(--color-primary-border), 0 2px 10px rgba(0, 0, 0, 0.08);
+}
+/* mermaid 异步渲染占位：渲染完成前容器里是图源码文本（先当正文显示，几十到几百
+   毫秒后换成 SVG 高度突变，把下方内容顶一下——「切文档先显示再抖一下」的主源）。
+   隐藏源码闪现 + 预留最小高度，把 pop-in 落差压到最小 */
+.md-host :deep(.md-editor-mermaid:not(:has(svg))) {
+  min-height: 120px;
+  visibility: hidden;
 }
 /* 深色模式下 md-editor-v3 自带纯黑背景（--md-bk-color:#000）且 preview 内边距为 0，
    会在卡片内形成一个文本贴边的黑框 —— 置透明使其融入卡片背景（与浅色模式一致） */
