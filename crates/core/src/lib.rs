@@ -8,6 +8,7 @@
 pub mod cards;
 pub mod branch;
 pub mod callchain;
+pub mod callchain_db;
 pub mod db;
 pub mod error;
 pub mod generator;

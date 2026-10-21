@@ -276,7 +276,7 @@ function buildMarkdown(includeTitle: boolean): string {
   if (!root || !stats.value) return "";
   const repo = wiki.currentRepo;
   const L: string[] = [];
-  const routes = root.node.routes.length ? `（${root.node.routes.join(" / ")}）` : "";
+  const routes = root.node.routes?.length ? `（${root.node.routes.join(" / ")}）` : "";
   if (includeTitle) L.push(`# 链路走读：${root.node.qualname}${routes}`, "");
   L.push(
     `> 仓库：${repo?.name ?? "?"}${repo?.branch ? ` @ ${repo.branch}` : ""} · 起点：${root.node.file}:${root.node.lineno} · ` +
@@ -286,13 +286,13 @@ function buildMarkdown(includeTitle: boolean): string {
   L.push("## 执行流大纲", "");
   for (const e of entries.value) {
     const indent = "  ".repeat(e.num.split(".").length - 1);
-    const r = e.node.routes.length ? ` \`${e.node.routes[0]}\`` : "";
+    const r = e.node.routes?.length ? ` \`${e.node.routes[0]}\`` : "";
     L.push(`${indent}- ${e.num} ${e.node.qualname} — \`${e.node.file}:${e.node.lineno}-${e.node.end_lineno}\`${r}`);
   }
   for (const e of entries.value) {
     const src = codeMap.value.get(e.id);
     L.push("", `## ${e.num}. ${e.node.qualname}`, "");
-    L.push(`\`${e.node.file}:${e.node.lineno}-${e.node.end_lineno}\`${e.node.routes.length ? ` · ${e.node.routes.join(" / ")}` : ""}`, "");
+    L.push(`\`${e.node.file}:${e.node.lineno}-${e.node.end_lineno}\`${e.node.routes?.length ? ` · ${e.node.routes.join(" / ")}` : ""}`, "");
     // 4 反引号围栏：代码内含 ``` 也不破
     L.push("````" + (LANG_OF[e.node.file.split(".").pop() ?? ""] ?? ""));
     L.push(src?.code ?? "（源码未加载）");
@@ -329,7 +329,7 @@ async function exportCard() {
   try {
     const md = buildMarkdown(false);
     // title 带路由信息：createCard 自动写 `# title` 作为唯一 H1 并用于 wiki_docs 登记
-    const routes = root.node.routes.length ? `（${root.node.routes[0]}）` : "";
+    const routes = root.node.routes?.length ? `（${root.node.routes[0]}）` : "";
     const rel = await api.createCard(
       wiki.currentRepo!.path,
       `链路走读：${root.node.qualname}${routes}`,
@@ -358,7 +358,7 @@ function backToGraph() {
       <div class="wk-title">
         <BookOutlined class="wk-title-icon" />
         <span v-if="rootEntry">走读：{{ rootEntry.node.qualname }}</span>
-        <span v-if="rootEntry?.node.routes.length" class="wk-title-route">{{ rootEntry.node.routes[0] }}</span>
+        <span v-if="rootEntry?.node.routes?.length" class="wk-title-route">{{ rootEntry.node.routes[0] }}</span>
       </div>
       <span v-if="stats" class="wk-stats">
         {{ stats.fns }} 函数 · {{ stats.files }} 文件 · {{ stats.lines }} 行
@@ -422,7 +422,7 @@ function backToGraph() {
           :lang="'plaintext'"
           :code="codeMap.get(e.id)?.code ?? ''"
           :truncated="codeMap.get(e.id)?.truncated ?? false"
-          :routes="e.node.routes"
+          :routes="e.node.routes ?? []"
           :call-links="e.calls"
           :expanded="expandedIds.has(e.id)"
           :index="i"

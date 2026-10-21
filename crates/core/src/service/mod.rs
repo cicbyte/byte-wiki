@@ -108,6 +108,9 @@ pub struct AppService {
     pub outline_agent_enabled: std::sync::atomic::AtomicBool,
     /// 生成任务注册表（后台任务页/页面重入水合）
     pub tasks: crate::tasks::TaskManager,
+    /// 调用链图缓存（#573：按产物 mtime/len 失效，LRU ≤3 仓——
+    /// 概览/子图/搜索/走读链不再每次全量解析 json / 扫全表）
+    pub callgraph_cache: std::sync::Mutex<crate::callchain::GraphCache>,
 }
 
 impl AppService {
@@ -165,6 +168,7 @@ impl AppService {
             llm_cache_enabled: std::sync::atomic::AtomicBool::new(true),
             outline_agent_enabled: std::sync::atomic::AtomicBool::new(true),
             tasks: crate::tasks::TaskManager::default(),
+            callgraph_cache: std::sync::Mutex::new(crate::callchain::GraphCache::default()),
         })
     }
 

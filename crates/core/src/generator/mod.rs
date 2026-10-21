@@ -1286,7 +1286,7 @@ impl AppService {
     pub fn scan_existing_wiki(&self, repo_root: &Path) -> CoreResult<Vec<(String, String, String)>> {
         // 当前分支产物 + 共享知识卡
         let branch = crate::branch::current_branch(repo_root);
-        let mut out = self.scan_wiki_dir(&crate::branch::wiki_root(repo_root, &branch), "pages/")?;
+        let out = self.scan_wiki_dir(&crate::branch::wiki_root(repo_root, &branch), "pages/")?;
         let cards = self.scan_wiki_dir(&crate::branch::cards_root(repo_root), "cards/")?;
         let mut out: Vec<(String, String, String)> = out.into_iter().map(|(p, k, t)| (p, k, t)).collect();
         out.extend(cards);
@@ -1316,6 +1316,10 @@ impl AppService {
             let name = rel.rsplit('/').next().unwrap_or(&rel).to_string();
             if name == "index.json" || name == "outline.json" || name == ".gen-meta.json" {
                 continue; // 机器可读清单不进文档树
+            }
+            // 调用链 db 及其 WAL sidecar 是机器产物（#573），json 导出才是登记口径
+            if name.starts_with("callgraph.db") {
+                continue;
             }
             let title = name
                 .trim_end_matches(".md")
