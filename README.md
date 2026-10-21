@@ -30,7 +30,7 @@ npm run tauri build  # 打包
 ### CLI
 
 ```bash
-cargo run -p bs -- --help
+cargo run -p byte-wiki-cli -- --help  # 二进制名 bw
 # backup / restore：数据目录备份恢复
 # callchain <repo>：函数级调用链（产物落 <repo>/.bytewiki/graphs/callchain/）
 # mcp / api：MCP 与 REST 服务（骨架）

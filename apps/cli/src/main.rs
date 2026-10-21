@@ -1,7 +1,7 @@
 //! byte-wiki CLI 入口
 //!
-//! 子命令式：`bs <command>`。当前提供备份/恢复与 MCP/REST 服务管理；
-//! Repo Wiki 的仓库打开、索引、生成命令随后续功能填充。
+//! 子命令式：`bw <command>`（二进制名与 byte-stash 的 bs 区分，两者可并存于 PATH）。
+//! 当前提供备份/恢复、仓库登记、调用链与 MCP/REST 服务管理。
 
 mod cmd;
 
@@ -9,7 +9,7 @@ use clap::{Parser, Subcommand};
 
 #[derive(Parser, Debug)]
 #[command(
-    name = "bs",
+    name = "bw",
     version,
     about = "byte-wiki — 本地优先的仓库级知识引擎（Repo Wiki）",
     long_about = "local-first 的桌面知识引擎：为本地 Git 仓库生成结构化 Wiki（架构 / 模块 / 图谱），\n支持 RAG 问答、变更增量更新与团队共享。本 CLI 提供备份与服务管理。",

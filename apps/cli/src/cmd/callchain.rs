@@ -94,7 +94,7 @@ pub async fn run_callchain_query(args: CallchainQueryArgs, json: bool) -> anyhow
     // 图概览（#570 大图模式的入口面板数据；#573 后毫秒级）
     if args.overview {
         let Some(ov) = svc.callgraph_overview(&args.repo)? else {
-            anyhow::bail!("该仓库尚未生成调用链（先运行：bs callchain <repo>）");
+            anyhow::bail!("该仓库尚未生成调用链（先运行：bw callchain <repo>）");
         };
         if json {
             println!("{}", serde_json::json!({
@@ -119,7 +119,7 @@ pub async fn run_callchain_query(args: CallchainQueryArgs, json: bool) -> anyhow
     // BFS 双向子图（seed 的 N 跳邻域，节点数封顶）
     if let Some(seed) = &args.focus {
         let Some(sub) = svc.callgraph_focus(&args.repo, seed, args.depth.max(1), args.cap.max(1))? else {
-            anyhow::bail!("该仓库尚未生成调用链（先运行：bs callchain <repo>）");
+            anyhow::bail!("该仓库尚未生成调用链（先运行：bw callchain <repo>）");
         };
         if json {
             println!("{sub}");
@@ -134,7 +134,7 @@ pub async fn run_callchain_query(args: CallchainQueryArgs, json: bool) -> anyhow
     // 走读链（服务端 DFS：先序、主路径贪心最深；块数封顶 --limit）
     if let Some(root) = &args.chain {
         let Some(ch) = svc.callgraph_chain(&args.repo, root, args.limit.clamp(1, 400))? else {
-            anyhow::bail!("该仓库尚未生成调用链（先运行：bs callchain <repo>）");
+            anyhow::bail!("该仓库尚未生成调用链（先运行：bw callchain <repo>）");
         };
         if json {
             println!("{}", serde_json::to_value(&ch)?);
@@ -153,7 +153,7 @@ pub async fn run_callchain_query(args: CallchainQueryArgs, json: bool) -> anyhow
     }
 
     let Some(g) = svc.read_callgraph(&args.repo)? else {
-        anyhow::bail!("该仓库尚未生成调用链（先运行：bs callchain <repo>）");
+        anyhow::bail!("该仓库尚未生成调用链（先运行：bw callchain <repo>）");
     };
     let nodes = g["nodes"].as_array().cloned().unwrap_or_default();
     let edges = g["edges"].as_array().cloned().unwrap_or_default();

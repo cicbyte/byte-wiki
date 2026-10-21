@@ -54,4 +54,16 @@
 - `crates/core/src/callchain.rs`：概览入口轻量 json 补 `lineno/end_lineno`（外部壳点入口直接跳函数体）。
 - `apps/vscode/`：活动栏 Byte Wiki 容器 + 两个视图——Wiki 页面树（`wikiTree.ts` 直读 `.bytewiki/branches/<分支>`）、调用链入口树（`callchainTree.ts`，`bs callchain-query --overview`）；页面 webview 预览（`wikiPreview.ts` + `media/render.js`：markdown-it UMD + mermaid 本地 vendor 离线渲染，`bw-file://` 引用 → 编辑器选中队列行区间，相对 .md 链接切文档）；走读链大纲（`chainView.ts` + `media/chain.js`：主路径标 ★、块/调用点击跳转）；生成调用链 / 节点搜索命令；`sourceLocator.ts` 编辑器定位 + 装饰高亮。既有片段/模板命令全部保留；复用 `cliClient.runBs` 与 `byteWiki.cliPath` 配置。
 
-**验收结果**：core 调用链测试 8 项绿；扩展 `tsc --noEmit` + esbuild 构建通过；扩展消费的三类 JSON（overview/chain/grep）经 `bs --json` 实测形状对齐（zoxide）；ZCode overview 经 CLI 0.4s（含进程启动）。待用户 VSCode F5 实测交互。
+**验收结果**：core 调用链测试 8 项绿；扩展 `tsc --noEmit` + esbuild 构建通过；扩展消费的三类 JSON（overview/chain/grep）经 CLI `--json` 实测形状对齐（zoxide）；ZCode overview 经 CLI 0.4s（含进程启动）。待用户 VSCode F5 实测交互。
+
+## 2026-09-21 CLI 重命名 bs → bw（#581 跟进）
+
+**根因**：用户反馈扩展「还是失败」。取证发现 PATH 上的 `C:\dev\bin\bs.exe` 是 **byte-stash** 的 bs（纯知识库/片段工具，无 callchain 子命令）——扩展探测 `bs --version` 通过、执行 `callchain-query` 报未知子命令。byte-wiki 的 CLI 从 byte-stash fork 起就叫 bs，二者同名冲突；正确名应为 `bw`。
+
+**变更内容**
+- `apps/cli/Cargo.toml`：包名 `bs` → `byte-wiki-cli`，二进制 `bs` → `bw`；description 更新为 byte-wiki 语义。
+- `apps/cli/src/main.rs`：clap `name = "bw"`；`cmd/callchain.rs` 提示文案 bs→bw。
+- 根 `README.md` 的 `cargo run -p` 示例更新。
+- `apps/vscode/`：`byteWiki.cliPath` 默认值与全部文案/注释/README 改为 bw；`setBsPath` 快捷项指向 `target/release/bw.exe`。
+
+**验收结果**：`bw --version` = `bw 0.1.0`；`bw callchain-query --overview/--chain/--grep` zoxide 实测通过；node spawnSync 探测 PATH `bw` 正常；扩展 tsc/esbuild 通过。已复制 `bw.exe` 到用户 PATH 目录 `C:\dev\bin\`（与旧 bs 并存，可删）。

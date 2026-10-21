@@ -23,6 +23,8 @@ import { openWikiPage } from "./wikiPreview";
 import { openChainView } from "./chainView";
 import { openSourceAt } from "./sourceLocator";
 import { callchainGenerate, callchainSearch, type OverviewEntry } from "./callchainClient";
+import * as fs from "fs";
+import * as path from "path";
 
 export function activate(context: vscode.ExtensionContext): void {
   registerCompletionProvider(context);
@@ -41,6 +43,47 @@ export function activate(context: vscode.ExtensionContext): void {
     }),
     vscode.commands.registerCommand("byteWiki.refreshPages", () => pagesProvider.refresh()),
     vscode.commands.registerCommand("byteWiki.refreshCallchain", () => callchainProvider.refresh()),
+
+    // 设置 bw CLI 路径：本仓库构建产物快捷项 / 浏览文件 / 打开设置项
+    vscode.commands.registerCommand("byteWiki.setBsPath", async () => {
+      const cfg = vscode.workspace.getConfiguration("byteWiki");
+      const cur = cfg.get<string>("cliPath") ?? "bw";
+      const picks: (vscode.QuickPickItem & { target?: string })[] = [];
+      const w = ws();
+      if (w) {
+        const candidate = path.join(w, "target", "release", "bw.exe");
+        if (fs.existsSync(candidate)) {
+          picks.push({ label: "$(check) 使用本仓库构建产物", description: candidate, target: candidate });
+        }
+      }
+      picks.push(
+        { label: "$(file) 浏览文件…", target: "__browse" },
+        { label: `$(settings-gear) 打开设置项 byteWiki.cliPath（当前：${cur}）`, target: "__settings" },
+      );
+      const pick = await vscode.window.showQuickPick(picks, { placeHolder: "设置 bw CLI 路径" });
+      if (!pick) return;
+      if (pick.target === "__settings") {
+        void vscode.commands.executeCommand("workbench.action.openSettings", "byteWiki.cliPath");
+        return;
+      }
+      let target = pick.target;
+      if (target === "__browse") {
+        const uris = await vscode.window.showOpenDialog({
+          title: "选择 bw 可执行文件",
+          openLabel: "选择",
+          canSelectMany: false,
+          filters:
+            process.platform === "win32"
+              ? { 可执行文件: ["exe"], 所有文件: ["*"] }
+              : { 所有文件: ["*"] },
+        });
+        if (!uris?.length) return;
+        target = uris[0].fsPath;
+      }
+      await cfg.update("cliPath", target, vscode.ConfigurationTarget.Global);
+      void vscode.window.showInformationMessage(`bw CLI 路径已设置：${target}`);
+      callchainProvider.refresh();
+    }),
 
     vscode.commands.registerCommand("byteWiki.openFunction", (e?: OverviewEntry) => {
       const w = ws();
@@ -148,12 +191,13 @@ export function activate(context: vscode.ExtensionContext): void {
     }),
   );
 
-  // 配置变更 → 清缓存 + 重探测 transport（mode/cliPath 变了）
+  // 配置变更 → 清缓存 + 重探测 transport（mode/cliPath 变了）+ 调用链树重探 bs
   context.subscriptions.push(
     vscode.workspace.onDidChangeConfiguration((e) => {
       if (e.affectsConfiguration("byteWiki")) {
         clearCache();
         resetTransport();
+        callchainProvider.refresh();
       }
     }),
   );

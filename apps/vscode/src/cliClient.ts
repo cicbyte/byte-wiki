@@ -17,7 +17,7 @@ import { BsError } from "./errors";
 const TIMEOUT_MS = 5000;
 
 function cliPath(): string {
-  return vscode.workspace.getConfiguration("byteWiki").get<string>("cliPath") || "bs";
+  return vscode.workspace.getConfiguration("byteWiki").get<string>("cliPath") || "bw";
 }
 
 /** spawn bs，收集 stdout（可选写 stdin），超时 kill。返回 stdout 字符串。
@@ -29,7 +29,7 @@ export function runBs(args: string[], stdin?: string, timeoutMs = TIMEOUT_MS): P
     try {
       child = spawn(bin, args, { windowsHide: true });
     } catch (e) {
-      reject(new BsError(`无法启动 bs CLI：${(e as Error).message}`, "conn"));
+      reject(new BsError(`无法启动 bw CLI：${(e as Error).message}`, "conn"));
       return;
     }
     const stdoutChunks: Buffer[] = [];
@@ -47,8 +47,8 @@ export function runBs(args: string[], stdin?: string, timeoutMs = TIMEOUT_MS): P
       clearTimeout(timer);
       // ENOENT = bs 不在 PATH
       const msg = (e as NodeJS.ErrnoException).code === "ENOENT"
-        ? `找不到 bs CLI（不在 PATH）。请在设置 byteWiki.cliPath 指定路径，或改用 HTTP 模式。`
-        : `启动 bs CLI 失败：${e.message}`;
+        ? `找不到 bw CLI（不在 PATH）。请在设置 byteWiki.cliPath 指定路径，或改用 HTTP 模式。`
+        : `启动 bw CLI 失败：${e.message}`;
       reject(new BsError(msg, "conn"));
     });
     child.on("close", (code) => {

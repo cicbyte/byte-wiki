@@ -10,9 +10,9 @@ Wiki/调用链视图直读仓库 `.bytewiki/` 产物 + `bs callchain-query`（db
 2. 用 VSCode 打开 `apps/vscode`，按 **F5**（launch.json 已配好）→ 弹出扩展开发宿主窗口
 3. 在开发宿主里打开一个已生成过 Wiki/调用链的仓库（如测试矩阵仓），活动栏出现 **Byte Wiki** 容器：
    - **Wiki 页面**：点击文档 → webview 渲染（mermaid 本地 vendor 离线可用）；正文里的 `路径:行` 引用链接 → 直接在编辑器中选中并高亮对应行区间；相对 .md 链接 → 切换文档
-   - **调用链入口**：入口清单（零入口库显示公共 API 面）→ 点击跳函数体（编辑器选中队列）；行内 **⺆** 按钮打开**走读链**（DFS 先序大纲，主路径标 ★，块与调用均可点击跳转）；标题栏 ▶ 可直接生成（走 `bs open` + `bs callchain`），🔍 搜索节点
+   - **调用链入口**：入口清单（零入口库显示公共 API 面）→ 点击跳函数体（编辑器选中队列）；行内 **⺆** 按钮打开**走读链**（DFS 先序大纲，主路径标 ★，块与调用均可点击跳转）；标题栏 ▶ 可直接生成（走 `bw open` + `bw callchain`），🔍 搜索节点
 
-> `bs` 不在 PATH 时，在设置里配 `byteWiki.cliPath` 指向绝对路径（如仓库根 `target/release/bs.exe`）。
+> `bs` 不在 PATH 时，调用链树会显示「未检测到 bs CLI」空状态，点击它（或视图标题栏 ⚙）即可设置路径——提供「使用本仓库构建产物 / 浏览文件 / 打开设置项 `byteWiki.cliPath`」三种方式，设置后自动刷新。
 
 ## 安装
 
@@ -57,13 +57,13 @@ code --install-extension byte-wiki-vscode-0.0.1.vsix
 
 | | CLI（推荐） | HTTP |
 |---|---|---|
-| 触发条件 | `bs` 在 PATH（或配 `cliPath`） | 桌面端开启 REST + 填 `apiKey` |
+| 触发条件 | `bw` 在 PATH（或配 `cliPath`） | 桌面端开启 REST + 填 `apiKey` |
 | 依赖桌面端 | ❌ 不需要 | ✅ 需要 |
-| 数据来源 | `bs` 进程直接读本地库 | REST 请求 |
+| 数据来源 | `bw` 进程直接读本地库 | REST 请求 |
 | 远程访问 | ❌ 仅本地 | ✅ |
 
 配置 `byteWiki.mode`：
-- **`auto`**（默认）：检测到 `bs` 就用 CLI，否则 HTTP
+- **`auto`**（默认）：检测到 `bw` 就用 CLI，否则 HTTP
 - **`cli`**：强制 CLI
 - **`http`**：强制 HTTP
 
@@ -72,7 +72,7 @@ code --install-extension byte-wiki-vscode-0.0.1.vsix
 | 设置 | 说明 |
 |---|---|
 | `byteWiki.mode` | `auto` / `cli` / `http`（默认 `auto`） |
-| `byteWiki.cliPath` | `bs` 命令名或路径（默认 `bs`） |
+| `byteWiki.cliPath` | `bw` 命令名或路径（默认 `bw`；byte-wiki 的 CLI 二进制名是 bw，区别于 byte-stash 的 bs） |
 | `byteWiki.baseUrl` | HTTP 模式：REST API 地址 |
 | `byteWiki.apiKey` | HTTP 模式：API Key |
 | `byteWiki.enableTriggers` | 是否启用编辑器 trigger 补全（默认 `true`） |

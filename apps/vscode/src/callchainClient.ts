@@ -1,11 +1,11 @@
 /**
- * 调用链数据访问 —— `bs callchain-query` 封装（#581）。
+ * 调用链数据访问 —— `bw callchain-query` 封装（#581）。
  *
  * 后端命令对照（apps/cli/src/cmd/callchain.rs）：
- *   overview → bs --json callchain-query <repo> --overview
- *   chain    → bs --json callchain-query <repo> --chain <id> --limit <n>
- *   search   → bs --json callchain-query <repo> --grep <pat> --limit <n>
- *   generate → bs --json open <repo>（登记幂等）+ bs --json callchain <repo>
+ *   overview → bw --json callchain-query <repo> --overview
+ *   chain    → bw --json callchain-query <repo> --chain <id> --limit <n>
+ *   search   → bw --json callchain-query <repo> --grep <pat> --limit <n>
+ *   generate → bw --json open <repo>（登记幂等）+ bw --json callchain <repo>
  *
  * 读取走 AppService 的 db 优先 + mtime 缓存路径（#573），毫秒级；
  * 未生成产物时 bs 以非零退出，runBs 抛 BsError。

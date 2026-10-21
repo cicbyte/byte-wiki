@@ -1,13 +1,14 @@
 [package]
-name = "bs"
-description = "byte-wiki CLI：本地知识库（项目 / 片段 / 笔记）+ MCP server 入口"
+name = "byte-wiki-cli"
+description = "byte-wiki CLI（bw）：Repo Wiki / 函数级调用链 / MCP & REST 服务入口"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
 
+# 二进制名 bw：与 byte-stash 的 bs 彻底区分（两者可并存于 PATH）
 [[bin]]
-name = "bs"
+name = "bw"
 path = "src/main.rs"
 
 [dependencies]

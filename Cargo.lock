@@ -372,21 +372,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "bs"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "byte-wiki-core",
- "clap",
- "serde",
- "serde_json",
- "tokio",
- "tokio-util",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
 name = "bs58"
 version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -431,6 +416,21 @@ dependencies = [
  "tree-sitter-python",
  "tree-sitter-rust",
  "tree-sitter-typescript",
+]
+
+[[package]]
+name = "byte-wiki-cli"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "byte-wiki-core",
+ "clap",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
