@@ -44,3 +44,14 @@
 - 切文档滚动复位：`load()` 内容就绪后 `scrollTo` 顶部——此前旧文档滚动位置被带进新文档。
 
 **验收结果**：vue-tsc 无错误（HMR 生效）。
+
+## 2026-09-21 VSCode 扩展：查看 Wiki 与调用链（#581）
+
+在既有 snippets 扩展（apps/vscode，byte-stash 移植、esbuild+TS）上版本归零为 0.0.1，不新建平行项目。
+
+**变更内容**
+- `apps/cli/src/cmd/callchain.rs`：`callchain-query` 补 `--overview` / `--focus <seed>`（--depth/--cap）/ `--chain <id>` 三个查询子命令（AppService 既有快路径）。
+- `crates/core/src/callchain.rs`：概览入口轻量 json 补 `lineno/end_lineno`（外部壳点入口直接跳函数体）。
+- `apps/vscode/`：活动栏 Byte Wiki 容器 + 两个视图——Wiki 页面树（`wikiTree.ts` 直读 `.bytewiki/branches/<分支>`）、调用链入口树（`callchainTree.ts`，`bs callchain-query --overview`）；页面 webview 预览（`wikiPreview.ts` + `media/render.js`：markdown-it UMD + mermaid 本地 vendor 离线渲染，`bw-file://` 引用 → 编辑器选中队列行区间，相对 .md 链接切文档）；走读链大纲（`chainView.ts` + `media/chain.js`：主路径标 ★、块/调用点击跳转）；生成调用链 / 节点搜索命令；`sourceLocator.ts` 编辑器定位 + 装饰高亮。既有片段/模板命令全部保留；复用 `cliClient.runBs` 与 `byteWiki.cliPath` 配置。
+
+**验收结果**：core 调用链测试 8 项绿；扩展 `tsc --noEmit` + esbuild 构建通过；扩展消费的三类 JSON（overview/chain/grep）经 `bs --json` 实测形状对齐（zoxide）；ZCode overview 经 CLI 0.4s（含进程启动）。待用户 VSCode F5 实测交互。

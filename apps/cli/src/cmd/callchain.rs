@@ -45,7 +45,7 @@ pub async fn run_callchain(args: CallchainArgs, json: bool) -> anyhow::Result<()
 }
 
 
-/// 调用链查询（读现有产物，不重新生成；测试/核对用）
+/// 调用链查询（读现有产物，不重新生成；测试/核对用；VSCode 扩展等外部壳的数据源）
 #[derive(Args, Debug)]
 pub struct CallchainQueryArgs {
     /// 仓库路径
@@ -63,13 +63,95 @@ pub struct CallchainQueryArgs {
     #[arg(long)]
     pub entries: bool,
 
-    /// 限制输出条数（默认 50；id 查询不受限）
+    /// 图概览：总数 + 入口清单（零入口库为公共 API 面 top30）+ 模块表
+    #[arg(long)]
+    pub overview: bool,
+
+    /// seed 节点的 N 跳双向子图（配合 --depth/--cap；VSCode 画布等外部位图数据源）
+    #[arg(long)]
+    pub focus: Option<String>,
+
+    /// focus 的跳数
+    #[arg(long, default_value_t = 2)]
+    pub depth: usize,
+
+    /// focus 的节点数封顶
+    #[arg(long, default_value_t = 300)]
+    pub cap: usize,
+
+    /// 走读链：从该节点按 DFS 先序展开（块数封顶用 --limit）
+    #[arg(long)]
+    pub chain: Option<String>,
+
+    /// 限制输出条数（默认 50；id 查询不受限；chain 作为块数上限）
     #[arg(long, default_value_t = 50)]
     pub limit: usize,
 }
 
 pub async fn run_callchain_query(args: CallchainQueryArgs, json: bool) -> anyhow::Result<()> {
     let svc = open_service(json)?;
+
+    // 图概览（#570 大图模式的入口面板数据；#573 后毫秒级）
+    if args.overview {
+        let Some(ov) = svc.callgraph_overview(&args.repo)? else {
+            anyhow::bail!("该仓库尚未生成调用链（先运行：bs callchain <repo>）");
+        };
+        if json {
+            println!("{}", serde_json::json!({
+                "total_nodes": ov.total_nodes, "total_edges": ov.total_edges,
+                "total_entries": ov.total_entries, "entries_are_api": ov.entries_are_api,
+                "entries": ov.entries, "modules": ov.modules,
+            }));
+        } else {
+            println!(
+                "📊 函数 {} · 边 {} · 入口 {}{} · 模块 {}",
+                ov.total_nodes, ov.total_edges, ov.total_entries,
+                if ov.entries_are_api { "（公共 API 回退）" } else { "" },
+                ov.modules.len()
+            );
+            for e in ov.entries.iter().take(args.limit) {
+                println!("  {} [{}]", e["id"].as_str().unwrap_or(""), e["file"].as_str().unwrap_or(""));
+            }
+        }
+        return Ok(());
+    }
+
+    // BFS 双向子图（seed 的 N 跳邻域，节点数封顶）
+    if let Some(seed) = &args.focus {
+        let Some(sub) = svc.callgraph_focus(&args.repo, seed, args.depth.max(1), args.cap.max(1))? else {
+            anyhow::bail!("该仓库尚未生成调用链（先运行：bs callchain <repo>）");
+        };
+        if json {
+            println!("{sub}");
+        } else {
+            let nodes = sub["nodes"].as_array().map(|a| a.len()).unwrap_or(0);
+            let edges = sub["edges"].as_array().map(|a| a.len()).unwrap_or(0);
+            println!("🎯 子图：{nodes} 节点 / {edges} 边（seed={seed} depth={} cap={}）", args.depth.max(1), args.cap.max(1));
+        }
+        return Ok(());
+    }
+
+    // 走读链（服务端 DFS：先序、主路径贪心最深；块数封顶 --limit）
+    if let Some(root) = &args.chain {
+        let Some(ch) = svc.callgraph_chain(&args.repo, root, args.limit.clamp(1, 400))? else {
+            anyhow::bail!("该仓库尚未生成调用链（先运行：bs callchain <repo>）");
+        };
+        if json {
+            println!("{}", serde_json::to_value(&ch)?);
+        } else {
+            println!("⛓ 走读链（起点 {root}，{} 块{}）：", ch.entries.len(), if ch.truncated { "，已截断" } else { "" });
+            for e in &ch.entries {
+                let file = e.node["file"].as_str().unwrap_or("");
+                let ln = e.node["lineno"].as_u64().unwrap_or(0);
+                println!("  {} {} — {file}:{ln}", e.num, e.node["qualname"].as_str().unwrap_or(""));
+            }
+            if !ch.main_path.is_empty() {
+                println!("主路径：{}", ch.main_path.join(" → "));
+            }
+        }
+        return Ok(());
+    }
+
     let Some(g) = svc.read_callgraph(&args.repo)? else {
         anyhow::bail!("该仓库尚未生成调用链（先运行：bs callchain <repo>）");
     };

@@ -1,34 +1,35 @@
 # Byte-Wiki for VSCode
 
-在 VSCode 中直接插入 [byte-wiki](../../) 的**代码片段**与**代码模板**，模板支持 Tera 变量预渲染。
+在 VSCode 中查看 byte-wiki 生成的**仓库 Wiki**（markdown + mermaid，引用一键跳源码行）与**函数级调用链**（入口清单、走读链、点击跳函数体）；以及插入 [byte-wiki](../../) 的**代码片段**与**代码模板**（Tera 变量预渲染）。
 
-支持 **两种数据通道**：CLI（`bs` 进程，免开桌面端）与 HTTP（REST API），默认自动选择。
+Wiki/调用链视图直读仓库 `.bytewiki/` 产物 + `bs callchain-query`（db 主存储毫秒级查询），无需打开桌面端；片段/模板支持 **CLI / HTTP 两种数据通道**，默认自动选择。
 
-## 快速开始（auto 模式，推荐）
+## 快速开始（F5 开发调试）
 
-若已安装 byte-wiki CLI（`bs` 在 PATH），插件**自动走 CLI**，无需打开桌面端、无需任何配置：
+1. `cd apps/vscode && npm install`
+2. 用 VSCode 打开 `apps/vscode`，按 **F5**（launch.json 已配好）→ 弹出扩展开发宿主窗口
+3. 在开发宿主里打开一个已生成过 Wiki/调用链的仓库（如测试矩阵仓），活动栏出现 **Byte Wiki** 容器：
+   - **Wiki 页面**：点击文档 → webview 渲染（mermaid 本地 vendor 离线可用）；正文里的 `路径:行` 引用链接 → 直接在编辑器中选中并高亮对应行区间；相对 .md 链接 → 切换文档
+   - **调用链入口**：入口清单（零入口库显示公共 API 面）→ 点击跳函数体（编辑器选中队列）；行内 **⺆** 按钮打开**走读链**（DFS 先序大纲，主路径标 ★，块与调用均可点击跳转）；标题栏 ▶ 可直接生成（走 `bs open` + `bs callchain`），🔍 搜索节点
 
-1. 安装插件（见下）
-2. 直接在编辑器输入模板 `trigger`，或命令面板 `Byte-Wiki: 插入片段或模板`
-
-检测不到 `bs` 时自动回退 HTTP 模式（需桌面端开 REST）。
+> `bs` 不在 PATH 时，在设置里配 `byteWiki.cliPath` 指向绝对路径（如仓库根 `target/release/bs.exe`）。
 
 ## 安装
 
 ### 1. 获取 `.vsix`
 
-**方式 A · 从源码构建**（需 Node ≥ 18 + pnpm）
+**方式 A · 从源码构建**（需 Node ≥ 18）
 
 ```bash
 cd apps/vscode
-pnpm install
-pnpm build       # esbuild 打包到 dist/extension.js
-pnpm package     # 产出 byte-wiki-vscode-0.1.0.vsix
+npm install
+npm run build    # esbuild 打包到 dist/extension.js
+npm run package  # 产出 byte-wiki-vscode-<版本>.vsix
 ```
 
 **方式 B · 直接用现成包**
 
-已有 `byte-wiki-vscode-0.1.0.vsix`（他人分发 / CI 产物）则跳过上一步。
+已有 `byte-wiki-vscode-<版本>.vsix`（他人分发 / CI 产物）则跳过上一步。
 
 ### 2. 安装到 VSCode
 
@@ -36,13 +37,13 @@ pnpm package     # 产出 byte-wiki-vscode-0.1.0.vsix
 
 1. 打开扩展面板（`Ctrl+Shift+X`）
 2. 右上角 `…` 菜单 → **从 VSIX 安装…（Install from VSIX…）**
-3. 选中 `byte-wiki-vscode-0.1.0.vsix`
+3. 选中 `byte-wiki-vscode-0.0.1.vsix`
 4. 安装完成，按提示重新加载窗口
 
 **方式 B · 命令行**
 
 ```bash
-code --install-extension byte-wiki-vscode-0.1.0.vsix
+code --install-extension byte-wiki-vscode-0.0.1.vsix
 ```
 
 > VSCode Insiders / Cursor / Windsurf 等，把 `code` 换成对应命令（`code-insiders` / `cursor` / `windsurf`）。

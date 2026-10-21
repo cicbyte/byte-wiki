@@ -396,6 +396,7 @@ fn overview_of(g: &GraphData) -> CallgraphOverview {
         serde_json::json!({
             "id": n.id, "module": n.module, "qualname": n.qualname,
             "name": n.name, "file": n.file, "routes": n.routes,
+            "lineno": n.lineno, "end_lineno": n.end_lineno,
             "is_exported": n.is_exported, "is_entry": n.is_entry,
         })
     };

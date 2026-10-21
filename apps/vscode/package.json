@@ -1,8 +1,8 @@
 {
   "name": "byte-wiki-vscode",
   "displayName": "Byte-Wiki",
-  "description": "在 VSCode 中插入 byte-wiki 的代码片段与代码模板",
-  "version": "0.2.1",
+  "description": "在 VSCode 中查看 byte-wiki 的仓库 Wiki 与函数调用链；插入/捕获片段与模板",
+  "version": "0.0.1",
   "publisher": "byte-wiki",
   "license": "MIT",
   "repository": {
@@ -17,6 +17,27 @@
   "main": "./dist/extension.js",
   "activationEvents": ["onStartupFinished"],
   "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "byte-wiki",
+          "title": "Byte Wiki",
+          "icon": "media/book.svg"
+        }
+      ]
+    },
+    "views": {
+      "byte-wiki": [
+        {
+          "id": "byteWiki.pages",
+          "name": "Wiki 页面"
+        },
+        {
+          "id": "byteWiki.callchain",
+          "name": "调用链入口"
+        }
+      ]
+    },
     "commands": [
       { "command": "byteWiki.insertAny", "title": "插入片段或模板", "category": "Byte-Wiki" },
       { "command": "byteWiki.insertSnippet", "title": "插入片段", "category": "Byte-Wiki" },
@@ -25,7 +46,14 @@
       { "command": "byteWiki.captureSelectionTemplate", "title": "存选中为模板", "category": "Byte-Wiki" },
       { "command": "byteWiki.captureFileSnippet", "title": "存文件为片段", "category": "Byte-Wiki" },
       { "command": "byteWiki.captureFileTemplate", "title": "存文件为模板", "category": "Byte-Wiki" },
-      { "command": "byteWiki.importFolder", "title": "导入为项目", "category": "Byte-Wiki" }
+      { "command": "byteWiki.importFolder", "title": "导入为项目", "category": "Byte-Wiki" },
+      { "command": "byteWiki.openPage", "title": "打开 Wiki 页面", "category": "Byte-Wiki", "icon": "$(preview)" },
+      { "command": "byteWiki.refreshPages", "title": "刷新 Wiki 页面", "category": "Byte-Wiki", "icon": "$(refresh)" },
+      { "command": "byteWiki.refreshCallchain", "title": "刷新调用链", "category": "Byte-Wiki", "icon": "$(refresh)" },
+      { "command": "byteWiki.generateCallchain", "title": "生成调用链（bs callchain）", "category": "Byte-Wiki", "icon": "$(play)" },
+      { "command": "byteWiki.openChain", "title": "走读链（DFS 先序）", "category": "Byte-Wiki", "icon": "$(list-tree)" },
+      { "command": "byteWiki.openFunction", "title": "打开函数源码", "category": "Byte-Wiki", "icon": "$(go-to-file)" },
+      { "command": "byteWiki.searchNode", "title": "搜索调用链节点", "category": "Byte-Wiki", "icon": "$(search)" }
     ],
     "submenus": [
       { "id": "byteWiki.context", "label": "Byte-Wiki" },
@@ -43,12 +71,12 @@
             "强制 CLI：通过 bs 进程访问本地库（需 bs 在 PATH 或配置 cliPath）",
             "强制 HTTP：通过桌面端 REST API（需开启 REST 服务）"
           ],
-          "markdownDescription": "数据访问方式。`auto`（默认）= 检测到 bs CLI 就走 CLI（免开桌面端），否则回退 HTTP。"
+          "markdownDescription": "数据访问方式（片段/模板功能）。`auto`（默认）= 检测到 bs CLI 就走 CLI（免开桌面端），否则回退 HTTP。Wiki/调用链视图直读 `.bytewiki/` 产物 + `bs callchain-query`，不走此开关。"
         },
         "byteWiki.cliPath": {
           "type": "string",
           "default": "bs",
-          "markdownDescription": "`bs` CLI 可执行文件路径或命令名（默认 `bs`，假设在 PATH）。CLI/auto 模式使用。"
+          "markdownDescription": "`bs` CLI 可执行文件路径或命令名（默认 `bs`，假设在 PATH）。CLI/auto 模式与调用链查询共用。"
         },
         "byteWiki.baseUrl": {
           "type": "string",
@@ -73,6 +101,16 @@
       }
     },
     "menus": {
+      "view/title": [
+        { "command": "byteWiki.refreshPages", "when": "view == byteWiki.pages", "group": "navigation" },
+        { "command": "byteWiki.generateCallchain", "when": "view == byteWiki.callchain", "group": "navigation" },
+        { "command": "byteWiki.searchNode", "when": "view == byteWiki.callchain", "group": "navigation" },
+        { "command": "byteWiki.refreshCallchain", "when": "view == byteWiki.callchain", "group": "navigation" }
+      ],
+      "view/item/context": [
+        { "command": "byteWiki.openChain", "when": "view == byteWiki.callchain && viewItem == entry", "group": "inline" },
+        { "command": "byteWiki.openFunction", "when": "view == byteWiki.callchain && viewItem == entry", "group": "inline@2" }
+      ],
       "editor/context": [
         { "submenu": "byteWiki.context", "group": "byteWiki@1", "when": "editorTextFocus" }
       ],
@@ -100,7 +138,11 @@
         { "command": "byteWiki.captureSelectionTemplate", "when": "editorHasSelection" },
         { "command": "byteWiki.captureFileSnippet" },
         { "command": "byteWiki.captureFileTemplate" },
-        { "command": "byteWiki.importFolder" }
+        { "command": "byteWiki.importFolder" },
+        { "command": "byteWiki.refreshPages" },
+        { "command": "byteWiki.refreshCallchain" },
+        { "command": "byteWiki.generateCallchain" },
+        { "command": "byteWiki.searchNode" }
       ]
     }
   },

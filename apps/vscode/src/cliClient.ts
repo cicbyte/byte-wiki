@@ -20,8 +20,9 @@ function cliPath(): string {
   return vscode.workspace.getConfiguration("byteWiki").get<string>("cliPath") || "bs";
 }
 
-/** spawn bs，收集 stdout（可选写 stdin），超时 kill。返回 stdout 字符串。 */
-function runBs(args: string[], stdin?: string, timeoutMs = TIMEOUT_MS): Promise<string> {
+/** spawn bs，收集 stdout（可选写 stdin），超时 kill。返回 stdout 字符串。
+ *  （wiki/调用链视图等扩展内其他模块复用同一传输通道） */
+export function runBs(args: string[], stdin?: string, timeoutMs = TIMEOUT_MS): Promise<string> {
   return new Promise((resolve, reject) => {
     const bin = cliPath();
     let child;

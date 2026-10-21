@@ -6,6 +6,9 @@
  * - 内部命令 byteWiki._expandItem（补全项选中后展开插入）
  * - 命令 byteWiki.insertAny / insertSnippet / insertTemplate（命令面板 + 右键菜单）
  * - 配置变更 → 清缓存（下次读取拉新）
+ * - #581：活动栏 Byte Wiki 容器——Wiki 页面树（直读 .bytewiki）+ 调用链入口树
+ *   （bs callchain-query），页面 webview 预览（markdown+mermaid，引用跳编辑器行）、
+ *   走读链大纲、生成调用链、节点搜索
  */
 import * as vscode from "vscode";
 import { registerCompletionProvider } from "./completionProvider";
@@ -14,9 +17,97 @@ import { expandAndInsert } from "./insert";
 import { captureSelection, captureFile, importFolder } from "./capture";
 import { clearCache, resetTransport } from "./client";
 import type { StashItem } from "./types";
+import { WikiPagesProvider, workspaceRoot } from "./wikiTree";
+import { CallchainProvider } from "./callchainTree";
+import { openWikiPage } from "./wikiPreview";
+import { openChainView } from "./chainView";
+import { openSourceAt } from "./sourceLocator";
+import { callchainGenerate, callchainSearch, type OverviewEntry } from "./callchainClient";
 
 export function activate(context: vscode.ExtensionContext): void {
   registerCompletionProvider(context);
+
+  // ============ #581：Wiki / 调用链视图 ============
+  const pagesProvider = new WikiPagesProvider();
+  const callchainProvider = new CallchainProvider();
+  const ws = () => workspaceRoot();
+
+  context.subscriptions.push(
+    vscode.window.registerTreeDataProvider("byteWiki.pages", pagesProvider),
+    vscode.window.registerTreeDataProvider("byteWiki.callchain", callchainProvider),
+
+    vscode.commands.registerCommand("byteWiki.openPage", (docRel: string) => {
+      openWikiPage(context, docRel);
+    }),
+    vscode.commands.registerCommand("byteWiki.refreshPages", () => pagesProvider.refresh()),
+    vscode.commands.registerCommand("byteWiki.refreshCallchain", () => callchainProvider.refresh()),
+
+    vscode.commands.registerCommand("byteWiki.openFunction", (e?: OverviewEntry) => {
+      const w = ws();
+      if (!w || !e) return;
+      void openSourceAt(w, { file: e.file, start: e.lineno, end: e.end_lineno });
+    }),
+    vscode.commands.registerCommand("byteWiki.openChain", (e?: OverviewEntry) => {
+      const w = ws();
+      if (!w) return;
+      if (e) {
+        void openChainView(context, e.id, e.qualname);
+        return;
+      }
+      // 命令面板裸调用：从入口清单挑一个
+      const all = callchainProvider.allEntries();
+      if (!all.length) {
+        void vscode.window.showInformationMessage("调用链数据尚未加载（先刷新或生成）");
+        return;
+      }
+      void vscode.window
+        .showQuickPick(
+          all.map((x) => ({ label: x.qualname, description: x.file, id: x.id })),
+          { placeHolder: "选择走读链起点" },
+        )
+        .then((pick) => {
+          if (pick) void openChainView(context, pick.id, pick.label);
+        });
+    }),
+
+    vscode.commands.registerCommand("byteWiki.generateCallchain", async () => {
+      const w = ws();
+      if (!w) return;
+      await vscode.window.withProgress(
+        { location: vscode.ProgressLocation.Notification, title: "Byte Wiki：生成调用链…", cancellable: false },
+        async () => {
+          try {
+            await callchainGenerate(w);
+            callchainProvider.refresh();
+            void vscode.window.showInformationMessage("调用链已生成");
+          } catch (e) {
+            void vscode.window.showErrorMessage(`生成失败：${e instanceof Error ? e.message : e}`);
+          }
+        },
+      );
+    }),
+
+    vscode.commands.registerCommand("byteWiki.searchNode", async () => {
+      const w = ws();
+      if (!w) return;
+      const pat = await vscode.window.showInputBox({ placeHolder: "搜索 qualname / 文件（包含匹配）", prompt: "如 Query、cmd/query.rs" });
+      if (!pat) return;
+      try {
+        const hits = await callchainSearch(w, pat, 30);
+        if (!hits.length) {
+          void vscode.window.showInformationMessage(`无命中：${pat}`);
+          return;
+        }
+        const pick = await vscode.window.showQuickPick(
+          hits.map((x) => ({ label: x.qualname, description: `${x.file}${x.is_entry ? " · 入口" : ""}`, id: x.id, entry: x })),
+          { placeHolder: `命中 ${hits.length} 个，选择要打开的函数` },
+        );
+        if (pick) void openSourceAt(w, { file: pick.entry.file, start: pick.entry.lineno, end: pick.entry.end_lineno });
+      } catch (e) {
+        void vscode.window.showErrorMessage(`搜索失败：${e instanceof Error ? e.message : e}`);
+      }
+    }),
+  );
 
   // 内部命令：补全项选中后展开插入
   context.subscriptions.push(
