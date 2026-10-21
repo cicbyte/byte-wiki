@@ -63,6 +63,15 @@ export interface ChainSource {
 }
 
 
+
+/** 走读链元数据（服务端 DFS 产物） */
+export interface CallgraphChain {
+  root: string;
+  entries: { id: string; num: string; node: CallGraphNode; calls: { target_id: string; target_num: string; target_name: string; line: number; is_ref: boolean }[] }[];
+  main_path: string[];
+  truncated: boolean;
+}
+
 /** 大图概览（后端持全图，前端只拿轻量负载） */
 export interface CallgraphOverview {
   total_nodes: number;
@@ -123,6 +132,10 @@ export const callchainApi = {
       "callgraph_search",
       { path: repoPath, pattern, limit },
     ),
+
+  /** 走读链（服务端 DFS：先序 + 主路径 + 引用去重；大图不整包读） */
+  chain: (repoPath: string, root: string, cap?: number) =>
+    invoke<CallgraphChain | null>("callgraph_chain", { path: repoPath, root, cap }),
 
   /** 读取调用链规则 */
   getRules: () => invoke<CallchainRules>("get_callchain_rules"),

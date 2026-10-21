@@ -177,3 +177,17 @@ pub fn callgraph_search(
     svc.callgraph_search(&path, &pattern, limit.unwrap_or(30))
         .map_err(|e| e.to_string())
 }
+
+
+/// 走读链（服务端 DFS 先序；大图不再整包读）
+#[tauri::command]
+pub fn callgraph_chain(
+    state: tauri::State<'_, AppState>,
+    path: String,
+    root: String,
+    cap: Option<usize>,
+) -> Result<Option<byte_wiki_core::callchain::CallgraphChain>, String> {
+    let svc = state.svc();
+    svc.callgraph_chain(&path, &root, cap.unwrap_or(400))
+        .map_err(|e| e.to_string())
+}

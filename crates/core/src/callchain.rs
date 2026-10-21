@@ -30,6 +30,35 @@ pub struct CallchainSummary {
     pub duration_ms: u128,
 }
 
+/// 走读链（服务端 DFS：语义与前端 buildChain 一致——先序、子节点按首次
+/// 调用行排序、已访问仅作引用、主路径贪心最深子树、环防护）。返回轻量
+/// 链元数据（不含源码，源码走既有 getChainSources 按需批量取）。
+#[derive(serde::Serialize)]
+pub struct ChainCallLink {
+    pub target_id: String,
+    pub target_num: String,
+    pub target_name: String,
+    pub line: u64,
+    /// 引用（目标已在前文渲染）vs 新块
+    pub is_ref: bool,
+}
+
+#[derive(serde::Serialize)]
+pub struct ChainEntry {
+    pub id: String,
+    pub num: String,
+    pub node: serde_json::Value,
+    pub calls: Vec<ChainCallLink>,
+}
+
+#[derive(serde::Serialize)]
+pub struct CallgraphChain {
+    pub root: String,
+    pub entries: Vec<ChainEntry>,
+    pub main_path: Vec<String>,
+    pub truncated: bool,
+}
+
 /// 调用图概览（大图模式：全图由后端持有，前端只拿轻量负载 <200KB）
     #[derive(serde::Serialize)]
 pub struct CallgraphOverview {
@@ -318,7 +347,173 @@ impl AppService {
         Ok(hits)
     }
 
+    pub fn callgraph_chain(
+        &self,
+        repo_path: &str,
+        root: &str,
+        cap: usize,
+    ) -> CoreResult<Option<CallgraphChain>> {
+        let Some(g) = self.read_callgraph(repo_path)? else {
+            return Ok(None);
+        };
+        let nodes = g["nodes"].as_array().cloned().unwrap_or_default();
+        let edges = g["edges"].as_array().cloned().unwrap_or_default();
+        let light = |n: &serde_json::Value| {
+            serde_json::json!({
+                "id": n["id"], "module": n["module"], "qualname": n["qualname"],
+                "name": n["name"], "file": n["file"],
+                "lineno": n["lineno"], "end_lineno": n["end_lineno"],
+                "is_entry": n["is_entry"], "is_exported": n.get("is_exported").unwrap_or(&serde_json::json!(false)),
+            })
+        };
+        let node_by_id: std::collections::HashMap<String, serde_json::Value> = nodes
+            .into_iter()
+            .map(|n| (n["id"].as_str().unwrap_or("").to_string(), n))
+            .collect();
+        let Some(root_node) = node_by_id.get(root) else {
+            return Err(crate::CoreError::Other(anyhow::anyhow!("节点不存在：{root}")));
+        };
+        let root_node = root_node.clone();
+        // 出边表：目标 -> 首次调用行（同目标多边取最早）
+        let mut out: std::collections::HashMap<String, Vec<(String, u64)>> = std::collections::HashMap::new();
+        for e in &edges {
+            let (s, d) = (e["src"].as_str().unwrap_or(""), e["dst"].as_str().unwrap_or(""));
+            if !node_by_id.contains_key(d) {
+                continue;
+            }
+            let line = e["line"].as_u64().unwrap_or(0);
+            let v = out.entry(s.to_string()).or_default();
+            match v.iter_mut().find(|(t, _)| t == d) {
+                Some((_, l)) => {
+                    if line < *l {
+                        *l = line;
+                    }
+                }
+                None => v.push((d.to_string(), line)),
+            }
+        }
+        // 子树深度（环防护）
+        fn depth_of(
+            id: &str,
+            out: &std::collections::HashMap<String, Vec<(String, u64)>>,
+            cache: &mut std::collections::HashMap<String, usize>,
+        ) -> usize {
+            if let Some(&d) = cache.get(id) {
+                return d;
+            }
+            cache.insert(id.to_string(), 0); // 环防护：进行中按 0
+            let mut d = 1;
+            if let Some(children) = out.get(id) {
+                for (t, _) in children {
+                    let c = depth_of(t, out, cache);
+                    d = d.max(1 + c);
+                }
+            }
+            cache.insert(id.to_string(), d);
+            d
+        }
+        let mut depth_cache: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+
+        let mut num: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+        let mut entries: Vec<ChainEntry> = Vec::new();
+        let mut main_path: Vec<String> = vec![root.to_string()];
+        let mut truncated = false;
+
+        // 显式栈 DFS（先序）：栈元素 (id, prefix, is_main)
+        let mut stack: Vec<(String, String, bool)> = vec![(root.to_string(), "1".into(), true)];
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+        seen.insert(root.to_string());
+        while let Some((id, prefix, is_main)) = stack.pop() {
+            if entries.len() >= cap {
+                truncated = true;
+                break;
+            }
+            let node = node_by_id.get(&id).cloned();
+            let Some(node) = node else { continue };
+            num.insert(id.clone(), prefix.clone());
+            // 子节点按首次调用行排序
+            let mut children: Vec<(String, u64)> = out.get(&id).cloned().unwrap_or_default();
+            children.sort_by_key(|(_, l)| *l);
+            // 主路径贪心：最深子树
+            let main_child = if is_main {
+                children
+                    .iter()
+                    .max_by_key(|(t, _)| depth_of(t, &out, &mut depth_cache))
+                    .map(|(t, _)| t.clone())
+            } else {
+                None
+            };
+            let mut calls: Vec<ChainCallLink> = Vec::new();
+            for (t, line) in &children {
+                if seen.contains(t) || num.contains_key(t) {
+                    // 引用：目标已渲染/在栈上将渲染
+                    calls.push(ChainCallLink {
+                        target_id: t.clone(),
+                        target_num: num.get(t).cloned().unwrap_or_else(|| "?".into()),
+                        target_name: node_by_id
+                            .get(t)
+                            .map(|n| n["qualname"].as_str().unwrap_or("").to_string())
+                            .unwrap_or_default(),
+                        line: *line,
+                        is_ref: true,
+                    });
+                } else {
+                    calls.push(ChainCallLink {
+                        target_id: t.clone(),
+                        target_num: String::new(), // 新块编号在渲染时才定（下方 push 时回填不了——改两段式）
+                        target_name: node_by_id
+                            .get(t)
+                            .map(|n| n["qualname"].as_str().unwrap_or("").to_string())
+                            .unwrap_or_default(),
+                        line: *line,
+                        is_ref: false,
+                    });
+                }
+            }
+            entries.push(ChainEntry {
+                id: id.clone(),
+                num: prefix.clone(),
+                node: light(&node),
+                calls,
+            });
+            // 子节点逆序压栈（先序：首个子最先弹出）
+            let n_children = children.len();
+            for (i, (t, _)) in children.iter().enumerate().rev() {
+                if seen.contains(t) || num.contains_key(t) {
+                    continue;
+                }
+                if entries.len() + stack.len() >= cap {
+                    truncated = true;
+                    break;
+                }
+                seen.insert(t.clone());
+                let child_num = format!("{prefix}.{}", n_children - i);
+                let child_is_main = is_main && Some(t.clone()) == main_child;
+                if child_is_main {
+                    main_path.push(t.clone());
+                }
+                stack.push((t.clone(), child_num, child_is_main));
+            }
+        }
+        // 新块引用编号回填（两段式：全部 num 定后再补非 ref 链接的 target_num）
+        for e in entries.iter_mut() {
+            for c in e.calls.iter_mut() {
+                if c.target_num.is_empty() {
+                    c.target_num = num.get(&c.target_id).cloned().unwrap_or_else(|| "?".into());
+                }
+            }
+        }
+        let _ = root_node;
+        Ok(Some(CallgraphChain {
+            root: root.to_string(),
+            entries,
+            main_path,
+            truncated,
+        }))
+    }
+
     /// 读取既有调用链产物（不存在返回 None；克隆加载 / 桌面端调用链 tab 用）
+
 
     pub fn read_callgraph(&self, repo_path: &str) -> CoreResult<Option<serde_json::Value>> {
         let p = crate::branch::wiki_root(Path::new(repo_path), &crate::branch::current_branch(Path::new(repo_path)))

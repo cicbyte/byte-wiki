@@ -21,6 +21,7 @@ import {
   SaveOutlined,
 } from "@ant-design/icons-vue";
 import { api } from "@/api";
+import { callchainApi } from "@/api/callchain";
 import type { CallgraphData, CallGraphNode, CallgraphEdge } from "@/api/callchain";
 import type { WalkCallLink } from "./WalkBlock.vue";
 import WalkBlock from "./WalkBlock.vue";
@@ -48,6 +49,8 @@ const entries = ref<WalkEntry[]>([]);
 /** 主路径节点集合（默认展开） */
 const expandedIds = ref<Set<string>>(new Set());
 const activeId = ref("");
+/** 服务端 DFS 主路径（mainPathOnly 用；不再依赖整包 edges） */
+const chainMainPath = ref<string[]>([]);
 
 // ===== 链计算 =====
 function buildChain(graph: CallgraphData, rootId: string) {
@@ -152,20 +155,34 @@ async function load() {
       return;
     }
     const qn = String(route.query.node ?? "");
-    const text = await api.callchainRead(info.path);
-    const graph = JSON.parse(text) as CallgraphData;
-    data.value = graph;
-    if (!qn || !graph.nodes.some((n) => n.id === qn)) {
+    if (!qn) {
       loadError.value = "未指定有效节点";
       return;
     }
-    rootNodeId.value = qn;
-    const chain = buildChain(graph, qn);
-    if (!chain) {
+    // 服务端 DFS 链（大图 27MB 不再整包过 IPC；语义与原前端 buildChain 一致）
+    const chain = await callchainApi.chain(info.path, qn, 400);
+    if (!chain || !chain.entries.length) {
       loadError.value = "节点不存在";
       return;
     }
-    entries.value = chain.order;
+    rootNodeId.value = qn;
+    entries.value = chain.entries.map((e) => ({
+      id: e.id,
+      num: e.num,
+      node: e.node,
+      calls: e.calls.map((c) => ({
+        targetId: c.target_id,
+        targetNum: c.target_num,
+        targetName: c.target_name,
+        line: c.line,
+        kind: c.is_ref ? "ref" : "heuristic",
+      })),
+    }));
+    chainMainPath.value = chain.main_path;
+    expandedIds.value = new Set(chain.main_path);
+    if (chain.truncated) {
+      message.warning(`链路过大，已截断到前 ${entries.value.length} 个函数（按先序）`);
+    }
     if (entries.value.length > 200) {
       message.warning(`链路较大（${entries.value.length} 个函数），已渲染全部大纲，代码按需展开`);
     }
@@ -230,24 +247,8 @@ function collapseAll() {
   expandedIds.value = new Set(rootNodeId.value ? [rootNodeId.value] : []);
 }
 function mainPathOnly() {
-  expandedIds.value = new Set([rootNodeId.value]);
-  // 主路径集合在 buildChain 时只标记了 visit(isMain) 的节点——重新从 entries 推导过深的主干
-  // （简单近似：大纲中一级链即主路径体验足够，全部折叠后逐个展开第一子链）
-  let cur = rootNodeId.value;
-  const outMap = new Map<string, CallgraphEdge[]>();
-  for (const e of data.value?.edges ?? []) (outMap.get(e.src) ?? outMap.set(e.src, []).get(e.src)!).push(e);
-  const seen = new Set<string>();
-  while (cur) {
-    seen.add(cur);
-    const kids = (outMap.get(cur) ?? []).filter((e) => data.value!.nodes.some((n) => n.id === e.dst) && !seen.has(e.dst));
-    if (!kids.length) break;
-    // 取在渲染序中最早出现的子节点（与编号一致）
-    const idx = new Map(entries.value.map((e, i) => [e.id, i]));
-    kids.sort((a, b) => (idx.get(a.dst) ?? 0) - (idx.get(b.dst) ?? 0));
-    cur = kids[0].dst;
-    if (seen.has(cur)) break;
-  }
-  expandedIds.value = seen;
+  // 服务端 DFS 已算好主路径（贪心最深子树），直接采用
+  expandedIds.value = new Set(chainMainPath.value.length ? chainMainPath.value : [rootNodeId.value]);
 }
 
 function jumpTo(id: string) {

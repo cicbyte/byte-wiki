@@ -79,6 +79,7 @@ pub fn run() {
             commands::callchain::callgraph_overview,
             commands::callchain::callgraph_focus,
             commands::callchain::callgraph_search,
+            commands::callchain::callgraph_chain,
             commands::callchain::read_repo_file,
             commands::callchain::get_chain_sources,
             // 变更检测 + 知识卡（M2）
