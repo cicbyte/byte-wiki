@@ -53,10 +53,21 @@ impl AppService {
         if let Ok(cfg) = self.config() {
             excludes.extend(cfg.preferences.exclude_dirs);
         }
+        // 规则管理：文件排除 / 入口排除 / 自定义入口正则（config preferences.callchain）
+        let rules = self
+            .config()
+            .map(|c| c.preferences.callchain)
+            .unwrap_or_default();
+        let entry_re = rules
+            .entry_regex
+            .as_deref()
+            .and_then(|p| regex::Regex::new(p).ok());
         let opts = byte_wiki_callchain::ExtractOptions {
-            entry_regex: None,
+            entry_regex: entry_re,
             excludes: excludes.into_iter().collect(),
             embed_source: false,
+            exclude_globs: rules.exclude_globs,
+            entry_exclude_globs: rules.entry_exclude_globs,
         };
 
         let graph = byte_wiki_callchain::extract(root, &opts, on_progress)

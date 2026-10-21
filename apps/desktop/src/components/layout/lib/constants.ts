@@ -65,7 +65,10 @@ export const menuGroups: MenuGroup[] = [
     key: "system",
     label: "系统",
     icon: SettingOutlined,
-    children: [{ key: "/settings", icon: SettingOutlined, label: "设置" }],
+    children: [
+      { key: "/callchain-rules", icon: NodeIndexOutlined, label: "调用链规则" },
+      { key: "/settings", icon: SettingOutlined, label: "设置" },
+    ],
   },
 ];
 

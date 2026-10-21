@@ -119,3 +119,23 @@ pub fn get_chain_sources(
     }
     Ok(out)
 }
+
+
+/// 读取调用链规则（config preferences.callchain）
+#[tauri::command]
+pub fn get_callchain_rules(state: tauri::State<'_, AppState>) -> Result<byte_wiki_core::model::CallchainRules, String> {
+    let svc = state.svc();
+    svc.config()
+        .map(|c| c.preferences.callchain)
+        .map_err(|e| e.to_string())
+}
+
+/// 保存调用链规则（重新生成调用链后生效）
+#[tauri::command]
+pub fn set_callchain_rules(
+    state: tauri::State<'_, AppState>,
+    rules: byte_wiki_core::model::CallchainRules,
+) -> Result<(), String> {
+    let svc = state.svc();
+    svc.set_callchain_rules(rules).map_err(|e| e.to_string())
+}

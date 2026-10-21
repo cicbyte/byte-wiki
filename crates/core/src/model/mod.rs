@@ -5,7 +5,7 @@
 
 pub mod config;
 
-pub use config::{ApiConfig, AppConfig, BackupConfig, LlmConfig, LlmProvider, PreferencesConfig, preset_providers};
+pub use config::{ApiConfig, AppConfig, BackupConfig, CallchainRules, LlmConfig, LlmProvider, PreferencesConfig, preset_providers};
 
 #[cfg(test)]
 mod tests {

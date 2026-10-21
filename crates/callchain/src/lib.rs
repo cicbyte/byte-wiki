@@ -130,6 +130,9 @@ struct FuncRec {
     entry_hint: bool,
     /// go/GoFrame：handler 签名中的 `*XxxReq` 类型名（用于反查 Req struct tag 的路由元数据）
     req_type: Option<String>,
+    /// 公共 API（库的入口面）：Rust pub / Go 首字母大写 / JS-TS export /
+    /// Python 顶层无下划线 / Java public
+    is_exported: bool,
     calls: Vec<(String, Option<String>, usize)>, // (被调名, 接收者文本, 1-based 行号)
 }
 
@@ -160,6 +163,48 @@ fn text_of<'a>(node: Node, src: &'a str) -> &'a str {
 }
 
 /// 取定义节点的函数名（各语言定义节点均有 name 字段，此函数是通用的）
+/// 公共 API 判定（语言约定）：
+/// - rust：`pub` 可见性修饰（pub(crate)/pub(super)/pub(in ..) 是内部可见，不算）
+/// - go：标识符首字母大写
+/// - js/ts：祖先链上有 export_statement（覆盖 export function / export const 箭头）
+/// - python：模块顶层定义且名不以 _ 开头（约定俗成的公开面）
+/// - java：含 public 修饰符
+fn is_exported(node: Node, src: &str, conf: &LangConf, name: &str, stack: &[String]) -> bool {
+    match conf.name {
+        // tree-sitter-rust 的 function_item 不暴露 visibility 字段——pub 是
+        // 无名子节点（visibility_modifier kind）；pub(crate)/pub(super) 含 '('
+        "rust" => {
+            let mut cur = node.walk();
+            let hit = node
+                .children(&mut cur)
+                .any(|c| c.kind() == "visibility_modifier" && !text_of(c, src).contains('('));
+            hit
+        }
+        "go" => name.chars().next().map(|c| c.is_uppercase()).unwrap_or(false),
+        "javascript" | "typescript" => {
+            let mut p = node.parent();
+            while let Some(cur) = p {
+                match cur.kind() {
+                    "export_statement" => return true,
+                    // 包裹层继续上溯；进入函数体/语句块即停（内部定义不可能导出）
+                    "parenthesized_expression" | "as_expression" | "type_assertion"
+                    | "variable_declarator" | "lexical_declaration" | "declaration" => {
+                        p = cur.parent();
+                    }
+                    _ => return false,
+                }
+            }
+            false
+        }
+        "python" => stack.is_empty() && !name.starts_with('_'),
+        "java" => node
+            .parent()
+            .map(|b| text_of(b, src).starts_with("public ") || text_of(b, src).contains(" public "))
+            .unwrap_or(false),
+        _ => false,
+    }
+}
+
 fn def_name(node: Node, src: &str) -> Option<String> {
     node.child_by_field_name("name")
         .map(|n| text_of(n, src).to_string())
@@ -499,6 +544,7 @@ fn visit(
                 routes,
                 entry_hint,
                 req_type,
+                is_exported: is_exported(node, src, conf, &name, &stack),
                 calls: Vec::new(),
             };
             let idx = funcs.len();
@@ -877,6 +923,8 @@ fn collect_go_req_tags(node: Node, src: &str, out: &mut Vec<(String, String, Str
 /// 与 JSON 产物的 lineno/end_lineno 语义一致）
 pub struct FileSymbol {
     pub qualname: String,
+    /// 公共 API（导出符号）
+    pub is_exported: bool,
     pub start_row: usize,
     pub end_row: usize,
     pub is_async: bool,
@@ -902,6 +950,7 @@ pub fn file_symbols(path: &Path) -> Option<(String, Vec<FileSymbol>)> {
             end_row: f.end_row + 1,
             is_async: f.is_async,
             is_entry: f.entry_hint || !f.routes.is_empty(),
+            is_exported: f.is_exported,
             routes: f.routes,
         })
         .collect();
@@ -917,6 +966,10 @@ pub struct ExtractOptions {
     pub excludes: Vec<String>,
     /// 节点是否内嵌函数源码（standalone 导出 true；app 管线 false）
     pub embed_source: bool,
+    /// 规则管理：不收录的文件 glob（仓库相对路径）
+    pub exclude_globs: Vec<String>,
+    /// 规则管理：仍收录但不标入口的文件 glob（入口噪声治理）
+    pub entry_exclude_globs: Vec<String>,
 }
 
 impl Default for ExtractOptions {
@@ -925,8 +978,35 @@ impl Default for ExtractOptions {
             entry_regex: None,
             excludes: Vec::new(),
             embed_source: true,
+            exclude_globs: Vec::new(),
+            entry_exclude_globs: Vec::new(),
         }
     }
+}
+
+/// 编译一组 glob（仓库相对路径，gitignore 风格：** 与 *）；坏模式告警跳过
+fn compile_globs(patterns: &[String]) -> Option<globset::GlobSet> {
+    let mut b = globset::GlobSetBuilder::new();
+    let mut any = false;
+    for p in patterns {
+        // gitignore 语义：非根锚定模式在任意目录层级命中
+        //（examples/** 也要匹配 crates/grep/examples/…）
+        let pat = if p.starts_with('/') {
+            p.trim_start_matches('/').to_string()
+        } else if p.starts_with("**/") {
+            p.clone()
+        } else {
+            format!("**/{p}")
+        };
+        match globset::Glob::new(&pat) {
+            Ok(g) => {
+                b.add(g);
+                any = true;
+            }
+            Err(_) => eprintln!("调用链规则 glob 无效，已跳过：{p}"),
+        }
+    }
+    if any { b.build().ok() } else { None }
 }
 
 /// 提取调用图。`on_progress` 在遍历解析阶段回调（已处理文件数，每 20 个一次 + 收尾一次），
@@ -954,15 +1034,29 @@ pub fn extract(
                     .unwrap_or(true)
         })
         .build();
+    let excl_set = compile_globs(&opts.exclude_globs);
+    let entry_excl_set = compile_globs(&opts.entry_exclude_globs);
     let mut paths: Vec<PathBuf> = Vec::new();
     for entry in walker.flatten() {
         if !entry.file_type().map(|t| t.is_file()).unwrap_or(false) {
             continue;
         }
         let ext = entry.path().extension().and_then(|e| e.to_str()).unwrap_or("");
-        if confs.iter().any(|c| c.exts.contains(&ext)) {
-            paths.push(entry.path().to_path_buf());
+        if !confs.iter().any(|c| c.exts.contains(&ext)) {
+            continue;
         }
+        // 规则管理：文件级 glob 排除（按仓库相对路径匹配）
+        if let Some(set) = &excl_set {
+            let rel = entry
+                .path()
+                .strip_prefix(root)
+                .map(|r| r.to_string_lossy().replace('\\', "/"))
+                .unwrap_or_default();
+            if set.is_match(&rel) {
+                continue;
+            }
+        }
+        paths.push(entry.path().to_path_buf());
     }
     // 排序保证产物确定性（重复运行 JSON 稳定，便于 diff/基线对照）
     paths.sort();
@@ -1072,7 +1166,13 @@ pub fn extract(
                 .as_ref()
                 .map(|re| re.is_match(&g.qualname) || re.is_match(&id))
                 .unwrap_or(false);
-            let is_entry = !g.routes.is_empty() || g.entry_hint || matched;
+            // 规则管理：入口排除 glob（文件仍在图中，仅去入口标记——
+            // build.rs/examples/benches/tests 的 main 与装饰器命令是入口噪声）
+            let entry_excluded = entry_excl_set
+                .as_ref()
+                .map(|set| set.is_match(&f.file))
+                .unwrap_or(false);
+            let is_entry = (!g.routes.is_empty() || g.entry_hint || matched) && !entry_excluded;
             let mut node = json!({
                 "id": id,
                 "module": f.module,
@@ -1084,6 +1184,7 @@ pub fn extract(
                 "routes": g.routes,
                 "async": g.is_async,
                 "is_entry": is_entry,
+                "is_exported": g.is_exported,
             });
             if opts.embed_source {
                 let source: Vec<&str> = f
@@ -1614,6 +1715,105 @@ arr.map((x) => x * 2)
         assert!(names.contains(&"createStore"), "as 断言包裹箭头：{names:?}");
         assert!(names.contains(&"impl"), "impl：{names:?}");
         assert!(!names.iter().any(|n| *n == "x"), "匿名回调不入表：{names:?}");
+    }
+
+    #[test]
+    fn exported_flags_across_languages() {
+        let (_d, root) = tmp_repo(&[
+            (
+                "lib.rs",
+                r#"
+pub fn api_open() {}
+pub(crate) fn internal_a() {}
+fn internal_b() {}
+"#,
+            ),
+            (
+                "svc.go",
+                r#"
+func Exported() {}
+func internal() {}
+"#,
+            ),
+            (
+                "mod.ts",
+                r#"
+export function visible() {}
+function hidden() {}
+export const namedArrow = (x) => x
+"#,
+            ),
+            (
+                "app.py",
+                r#"
+def public_fn():
+    pass
+
+def _private():
+    pass
+"#,
+            ),
+        ]);
+        let g = extract_default(&root);
+        let flag = |q: &str| {
+            g["nodes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|n| n["qualname"] == q)
+                .map(|n| n["is_exported"].as_bool().unwrap())
+        };
+        assert_eq!(flag("api_open"), Some(true), "rust pub fn → 导出");
+        assert_eq!(flag("internal_a"), Some(false), "pub(crate) → 内部");
+        assert_eq!(flag("internal_b"), Some(false), "私有 → 内部");
+        assert_eq!(flag("Exported"), Some(true), "go 大写 → 导出");
+        assert_eq!(flag("internal"), Some(false), "go 小写 → 内部");
+        assert_eq!(flag("visible"), Some(true), "ts export function → 导出");
+        assert_eq!(flag("hidden"), Some(false), "ts 无 export → 内部");
+        assert_eq!(flag("namedArrow"), Some(true), "ts export const 箭头 → 导出");
+        assert_eq!(flag("public_fn"), Some(true), "py 顶层公开名 → 导出");
+        assert_eq!(flag("_private"), Some(false), "py 下划线 → 内部");
+    }
+
+    #[test]
+    fn rules_gate_entries_and_files() {
+        // 规则管理：入口排除 glob（任意层级）+ 文件排除 glob + 默认噪声治理语义
+        let (_d, root) = tmp_repo(&[
+            ("src/main.rs", "fn main() { helper(); }
+fn helper() {}
+"),
+            ("build.rs", "fn main() {}
+"),
+            ("examples/demo.rs", "fn main() {}
+"),
+            ("crates/x/examples/nested.rs", "fn main() {}
+"),
+            ("vendor/gen.rs", "fn generated() {}
+"),
+        ]);
+        let opts = ExtractOptions {
+            entry_exclude_globs: vec![
+                "build.rs".into(),
+                "examples/**".into(),
+                "benches/**".into(),
+                "tests/**".into(),
+            ],
+            exclude_globs: vec!["vendor/**".into()],
+            ..Default::default()
+        };
+        let g = extract(&root, &opts, &|_| {}).unwrap();
+        let entries: Vec<&str> = g["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|n| n["is_entry"] == true)
+            .map(|n| n["id"].as_str().unwrap())
+            .collect();
+        assert_eq!(entries, vec!["src/main::main"], "仅真 main 入口：{entries:?}");
+        let ids: Vec<&str> = g["nodes"].as_array().unwrap().iter().map(|n| n["id"].as_str().unwrap()).collect();
+        assert!(!ids.iter().any(|i| i.contains("vendor")), "vendor 排除：{ids:?}");
+        // build.rs/examples 文件仍在图中（仅去入口标记）
+        assert!(ids.iter().any(|i| i.contains("build::")), "build.rs 仍在图：{ids:?}");
     }
 
     #[test]

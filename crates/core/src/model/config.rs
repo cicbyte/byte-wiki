@@ -212,6 +212,44 @@ pub struct PreferencesConfig {
     /// 失败自动回退单发大纲）。默认开。
     #[serde(default = "default_true")]
     pub outline_agent: bool,
+    /// 调用链规则（入口噪声治理与自定义识别；规则页管理）
+    #[serde(default)]
+    pub callchain: CallchainRules,
+}
+
+/// 调用链规则：文件收录与入口判定的用户可配面
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct CallchainRules {
+    /// 不收录进调用图的文件 glob（仓库相对路径，如 "vendor/**"）
+    #[serde(default)]
+    pub exclude_globs: Vec<String>,
+    /// 仍收录但不标入口的文件 glob——治「build.rs/examples/benches/tests
+    /// 里一堆 main/装饰器命令」的入口噪声
+    #[serde(default = "default_entry_excludes")]
+    pub entry_exclude_globs: Vec<String>,
+    /// 自定义入口 qualname 正则（叠加内置识别，如 "^(run|start)_")
+    #[serde(default)]
+    pub entry_regex: Option<String>,
+}
+
+impl Default for CallchainRules {
+    fn default() -> Self {
+        Self {
+            exclude_globs: vec![],
+            entry_exclude_globs: default_entry_excludes(),
+            entry_regex: None,
+        }
+    }
+}
+
+fn default_entry_excludes() -> Vec<String> {
+    vec![
+        "build.rs".into(),
+        "examples/**".into(),
+        "benches/**".into(),
+        "tests/**".into(),
+        "test/**".into(),
+    ]
 }
 
 /// 预置的默认排除目录（常见依赖、构建产物、IDE 配置、系统垃圾文件）
@@ -271,6 +309,7 @@ impl Default for PreferencesConfig {
         Self {
             exclude_dirs: default_exclude_dirs(),
             outline_agent: true,
+            callchain: CallchainRules::default(),
         }
     }
 }

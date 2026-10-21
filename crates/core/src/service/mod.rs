@@ -126,6 +126,13 @@ impl AppService {
         self.db.set_repo_exclude_patterns(&canon, patterns)
     }
 
+    /// 保存调用链规则（config preferences.callchain）
+    pub fn set_callchain_rules(&self, rules: crate::model::CallchainRules) -> CoreResult<()> {
+        let mut cfg = self.config()?;
+        cfg.preferences.callchain = rules;
+        write_config(&self.data_root, &cfg)
+    }
+
     /// 大纲 agent 开关（默认开；测试关闭走单发）
     pub fn set_outline_agent(&self, on: bool) {
         self.outline_agent_enabled.store(on, std::sync::atomic::Ordering::Relaxed);

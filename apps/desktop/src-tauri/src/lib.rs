@@ -74,6 +74,8 @@ pub fn run() {
             commands::generate::rebuild_embeddings,
             // 调用链（函数级视图）
             commands::callchain::generate_callchain,
+            commands::callchain::get_callchain_rules,
+            commands::callchain::set_callchain_rules,
             commands::callchain::read_repo_file,
             commands::callchain::get_chain_sources,
             // 变更检测 + 知识卡（M2）

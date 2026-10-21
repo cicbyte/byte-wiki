@@ -16,6 +16,7 @@ path = "src/main.rs"
 
 [dependencies]
 tree-sitter.workspace = true
+globset.workspace = true
 tree-sitter-language.workspace = true
 tree-sitter-python.workspace = true
 tree-sitter-javascript.workspace = true

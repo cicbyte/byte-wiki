@@ -53,10 +53,21 @@ fn main() -> Result<()> {
     } else {
         Some(regex::Regex::new(&args.entry)?)
     };
+    // 与 core CallchainRules::default 同源的入口噪声治理默认值
+    //（standalone 不依赖 core，避免 crate 循环）
+    let default_entry_excludes = vec![
+        "build.rs".to_string(),
+        "examples/**".to_string(),
+        "benches/**".to_string(),
+        "tests/**".to_string(),
+        "test/**".to_string(),
+    ];
     let opts = byte_wiki_callchain::ExtractOptions {
         entry_regex: entry_re,
         excludes: args.excludes,
         embed_source: !args.no_source,
+        exclude_globs: vec![],
+        entry_exclude_globs: default_entry_excludes,
     };
 
     let t0 = std::time::Instant::now();

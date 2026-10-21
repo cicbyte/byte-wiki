@@ -11,6 +11,8 @@ repository = "https://github.com/cicbyte/byte-wiki"
 
 [workspace.dependencies]
 # === 调用链解析（callchain crate 用）===
+# glob 匹配（调用链规则管理：文件/入口排除）
+globset = "0.4"
 tree-sitter = "0.25"
 tree-sitter-language = "0.1"
 tree-sitter-python = "0.23"

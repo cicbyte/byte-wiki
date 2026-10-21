@@ -250,8 +250,45 @@ const filteredEntries = computed<EntryItem[]>(() => {
   if (!d) return [];
   const kw = entrySearch.value.trim().toLowerCase();
   const vf = verbFilter.value;
-  return d.nodes
-    .filter((n) => n.is_entry)
+  const entries = d.nodes.filter((n) => n.is_entry);
+  if (!entries.length) {
+    // 库类仓库（zustand/koa 等）：无进程入口——回退展示公共 API。
+    // 导出符号才是库的入口面（仓库内几乎不被调用，仅测试在调）；
+    // 包入口文件（index/mod/lib/__init__）的导出视为门面优先，
+    // 测试调用量作参考标注；无导出标记的旧产物退回入度 top（内部高频）
+    const indeg = new Map<string, number>();
+    for (const e of d.edges) indeg.set(e.dst, (indeg.get(e.dst) ?? 0) + 1);
+    const isFacade = (n: CallGraphNode) =>
+      /(^|\/)(index|mod|lib|main|__init__)\.[a-z]+$/.test(n.file);
+    const exported = d.nodes.filter((n) => n.is_exported);
+    const pool = exported.length
+      ? exported.sort(
+          (a, b) =>
+            Number(isFacade(b)) - Number(isFacade(a)) ||
+            (indeg.get(b.id) ?? 0) - (indeg.get(a.id) ?? 0) ||
+            a.qualname.localeCompare(b.qualname),
+        )
+      : d.nodes
+          .map((n) => ({ n }))
+          .sort((a, b) => (indeg.get(b.n.id) ?? 0) - (indeg.get(a.n.id) ?? 0))
+          .map(({ n }) => n);
+    return pool.slice(0, 30).map((n) => ({
+      node: n,
+      verb: "",
+      label: exported.length
+        ? `${n.qualname.split(".").pop() || n.qualname}${isFacade(n) ? " · 门面" : ""}（测试调用 ${indeg.get(n.id) ?? 0}）`
+        : `${n.qualname.split(".").pop() || n.qualname}（被调 ${indeg.get(n.id) ?? 0}）`,
+    }))
+    .filter(
+      (it) =>
+        (!vf || it.verb === vf) &&
+        (!kw ||
+          (it.node.qualname + " " + (it.node.routes[0] ?? "") + " " + it.node.module)
+            .toLowerCase()
+            .includes(kw)),
+    );
+  }
+  return entries
     .map(parseEntry)
     .filter(
       (it) =>
@@ -287,11 +324,23 @@ const entryGroups = computed<{ key: string; label: string; tooltip: string; item
     const key = it.node.routes.length ? it.node.module : CUSTOM_KEY;
     (byKey.get(key) ?? byKey.set(key, []).get(key)!).push(it);
   }
+  const libraryMode = entryCount.value === 0;
   const groups = [...byKey.entries()].map(([key, items]) => {
     items.sort(
       (a, b) =>
         VERB_ORDER.indexOf(a.verb) - VERB_ORDER.indexOf(b.verb) || a.label.localeCompare(b.label),
     );
+    if (libraryMode) {
+      const hasExport = (data.value?.nodes ?? []).some((n) => n.is_exported);
+      return {
+        key,
+        label: hasExport ? "公共 API（库无进程入口）" : "核心函数（库无进程入口）",
+        tooltip: hasExport
+          ? "导出符号即库的入口面：门面文件（index/mod/lib/__init__）导出优先，括号为测试调用量"
+          : "库类仓库无 main/路由/装饰器入口：按被调次数展示内部高频（旧产物无导出标记）",
+        items,
+      };
+    }
     if (key === CUSTOM_KEY) {
       return { key, label: "自定义入口", tooltip: "fn main / #[command] / @Scheduled 等约定入口", items };
     }
@@ -844,7 +893,13 @@ let srcDecorations: { clear(): void } | null = null;
             <div v-if="!entryGroups.length" class="cg-entry-empty">
               <div class="cee-title">暂无节点</div>
               <div class="cee-sub">
-                {{ entrySearch || verbFilter ? "调整搜索或筛选条件" : "入口由框架路由自动识别" }}
+                {{
+                  entrySearch || verbFilter
+                    ? "调整搜索或筛选条件"
+                    : entryCount
+                      ? "入口由框架路由自动识别"
+                      : "该仓库暂无可识别入口（也无可展示的核心函数）"
+                }}
               </div>
             </div>
           </div>

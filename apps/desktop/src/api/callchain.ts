@@ -27,6 +27,8 @@ export interface CallGraphNode {
   routes: string[];
   async?: boolean;
   is_entry: boolean;
+  /** 公共 API（导出符号：Rust pub / Go 大写 / JS-TS export / Python 顶层公开 / Java public） */
+  is_exported?: boolean;
   source?: string;
   callers: number;
   callees: number;
@@ -60,6 +62,16 @@ export interface ChainSource {
   truncated: boolean;
 }
 
+/** 调用链规则（config preferences.callchain） */
+export interface CallchainRules {
+  /** 不收录进调用图的文件 glob */
+  exclude_globs: string[];
+  /** 仍收录但不标入口的文件 glob（入口噪声治理） */
+  entry_exclude_globs: string[];
+  /** 自定义入口 qualname 正则（叠加内置识别） */
+  entry_regex?: string | null;
+}
+
 export const callchainApi = {
   /** 生成调用链（进度经 CALLCHAIN_EVENT 推送） */
   callchainGenerate: (path: string) => invoke<CallchainSummary>("generate_callchain", { path }),
@@ -81,4 +93,10 @@ export const callchainApi = {
   /** 订阅生成进度（已解析文件数），返回取消函数 */
   callchainOnProgress: (handler: (n: number) => void): Promise<UnlistenFn> =>
     listen<number>(CALLCHAIN_EVENT, (ev) => handler(ev.payload)),
+
+  /** 读取调用链规则 */
+  getRules: () => invoke<CallchainRules>("get_callchain_rules"),
+
+  /** 保存调用链规则（重新生成调用链后生效） */
+  setRules: (rules: CallchainRules) => invoke<void>("set_callchain_rules", { rules }),
 };
