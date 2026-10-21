@@ -1,112 +1,105 @@
 """
-生成 byte-wiki 任务栏图标（蓝色方块底 + 白色层叠卡片）
+生成 byte-wiki 任务栏图标（靛紫渐变底 + 白色翻开书本）
 
 输出：
   icon.png  — 512x512 高清 PNG
   icon.ico  — 多尺寸 ICO（16/24/32/48/64/128/256），供 Tauri 打包
 
-设计：蓝色圆角方块底（#3B82F6）铺满画布，上面叠三张白色卡片错落旋转。
-白色卡片在蓝底上用透明度分层（0.5/0.75/1.0），半透明白在蓝色上呈浅蓝，
-层次清晰且不会像透明背景版那样"脏"。蓝底保证任何 Windows 任务栏背景下都醒目。
+设计：byte-wiki 是仓库级知识引擎（Wiki）——标识为「翻开的书」。
+靛紫渐变底（#6366F1 → #8B5CF6）与 byte-stash（纯蓝 #3B82F6 + 层叠卡片）
+一眼区分（层叠卡片是 stash 语义，旧图标为 fork 继承）。白色书页摊开、
+中缝留隙；大尺寸页面带文字行示意，≤24px 简化为纯书页保证可辨。
 
-与软件内 Logo.vue（透明动态着色版）语义一致——都是"层叠卡片"，
-只是任务栏静态位图需要底色保证可见性。
+与软件内 Logo.vue（透明动态着色书本）语义一致。
 """
 from PIL import Image, ImageDraw
 
-PRIMARY = (59, 130, 246, 255)   # #3B82F6 蓝色底
-WHITE = (255, 255, 255, 255)    # 白色卡片
+TOP = (99, 102, 241, 255)      # #6366F1 靛
+BOTTOM = (139, 92, 246, 255)   # #8B5CF6 紫
+WHITE = (255, 255, 255, 255)
+GAP = (109, 106, 240, 255)     # 中缝色（近底色，压一档区分两页）
 
 
-def _with_alpha(color_rgba, opacity):
-    r, g, b, _ = color_rgba
-    return (r, g, b, int(255 * opacity))
+def vertical_gradient(size: int, top, bottom) -> Image.Image:
+    img = Image.new("RGBA", (size, size))
+    px = img.load()
+    for y in range(size):
+        t = y / max(size - 1, 1)
+        c = tuple(int(top[i] + (bottom[i] - top[i]) * t) for i in range(4))
+        for x in range(size):
+            px[x, y] = c
+    return img
+
+
+def rounded_mask(size: int, radius: int) -> Image.Image:
+    m = Image.new("L", (size, size), 0)
+    ImageDraw.Draw(m).rounded_rectangle([0, 0, size, size], radius=radius, fill=255)
+    return m
 
 
 def make_logo(size: int) -> Image.Image:
-    """
-    生成指定尺寸的图标：蓝底圆角方块 + 白色层叠卡片。
-
-    所有尺寸统一设计（不再分 simple/full）——蓝底保证了小尺寸也清晰，
-    不需要简化版。卡片靠旋转角度错落 + 透明度分层。
-    """
-    SS = 4  # 超采样倍数
+    """指定尺寸图标：渐变圆角底 + 白色翻开书本（64 坐标系设计，超采样抗锯齿）"""
+    SS = 4
     S = size * SS
-    canvas = Image.new("RGBA", (S, S), (0, 0, 0, 0))
-    d = ImageDraw.Draw(canvas)
     k = S / 64
 
-    # 1. 蓝色圆角方块底，铺满画布（圆角随尺寸：大尺寸圆角大，小尺寸接近直角）
-    # Windows 图标圆角惯例：约画布 18% 的半径。小尺寸（16px）适当收小避免变形。
-    if size <= 24:
-        corner_r = 12 * k   # 小尺寸稍小圆角
-    else:
-        corner_r = 14 * k
-    d.rounded_rectangle([0, 0, S, S], radius=corner_r, fill=PRIMARY)
+    # 1. 渐变圆角底（Windows 惯例圆角约 18-22%）
+    corner_r = (12 if size <= 24 else 14) * k
+    grad = vertical_gradient(S, TOP, BOTTOM)
+    canvas = Image.new("RGBA", (S, S), (0, 0, 0, 0))
+    canvas.paste(grad, (0, 0), rounded_mask(S, int(corner_r)))
 
-    # 2. 白色层叠卡片：三张错落旋转，居中
-    # 卡片参数（64 坐标系）：宽 30、高 36，居中放置。旋转中心 (32,32)。
-    card_w, card_h = 30 * k, 36 * k
-    card_x = (S - card_w) / 2   # = 17k
-    card_y = (S - card_h) / 2   # = 14k
-    cx = cy = S / 2
-    card_r = 3 * k              # 卡片圆角
+    d = ImageDraw.Draw(canvas)
 
-    # 后卡片（旋转 -12°，opacity 0.5）—— 在蓝底上呈浅蓝
-    back = Image.new("RGBA", (S, S), (0, 0, 0, 0))
-    ImageDraw.Draw(back).rounded_rectangle(
-        [card_x, card_y, card_x + card_w, card_y + card_h],
-        radius=card_r, fill=_with_alpha(WHITE, 0.5),
-    )
-    back = back.rotate(-12, resample=Image.BICUBIC, expand=False, center=(cx, cy))
+    # 2. 翻开的书：两页摊开（梯形页 + 底部 V 形书脊），中缝留隙
+    #    64 坐标系：书宽 40（12~52），页顶 y=18，页底 y=46，中缝在 x=32
+    page_top_out, page_top_in = 14 * k, 19 * k   # 外沿高、内沿略低（书页自然弯曲）
+    page_bot = 46 * k
+    spine_dip = 49 * k                            # 中缝底部下沉成 V
 
-    # 中卡片（旋转 -3°，opacity 0.78）
-    mid = Image.new("RGBA", (S, S), (0, 0, 0, 0))
-    ImageDraw.Draw(mid).rounded_rectangle(
-        [card_x, card_y, card_x + card_w, card_y + card_h],
-        radius=card_r, fill=_with_alpha(WHITE, 0.78),
-    )
-    mid = mid.rotate(-3, resample=Image.BICUBIC, expand=False, center=(cx, cy))
+    # 左页（外沿 (12,18) → 内沿 (31,19) → 内底 (31,46+沉降) → 外底 (12,46)）
+    left = [
+        (12 * k, page_top_out + 2 * k),
+        (31 * k, page_top_in),
+        (31 * k, page_bot),
+        (12 * k, page_bot - 1 * k),
+    ]
+    # 微弧页面：外底略抬、内底沿 V 下沉
+    left[2] = (31 * k, spine_dip - 2 * k)
+    right = [(S - x, y) for (x, y) in left]      # 右页镜像
 
-    # 前卡片（不旋转，实色白 + 标题行挖空露出蓝底）
-    front = Image.new("RGBA", (S, S), (0, 0, 0, 0))
-    fd = ImageDraw.Draw(front)
-    fd.rounded_rectangle(
-        [card_x, card_y, card_x + card_w, card_y + card_h],
-        radius=card_r, fill=WHITE,
-    )
-    # 挖空两条标题行（透明 → 露出蓝底），相对卡片左上角的偏移
-    # 卡片 x=17k，内边距 5k → 标题行 x=22k；卡片宽 30k，标题行宽 20k/14k
-    # 卡片 y=14k，标题行 y=24k、30k（卡片上 1/3~中部）
-    fd.rectangle([22 * k, 24 * k, (22 + 20) * k, (24 + 2.4) * k], fill=(0, 0, 0, 0))
-    fd.rectangle([22 * k, 30 * k, (22 + 14) * k, (30 + 2.4) * k], fill=(0, 0, 0, 0))
+    d.polygon(left, fill=WHITE)
+    d.polygon(right, fill=WHITE)
 
-    # 合成：蓝底 → 后卡片 → 中卡片 → 前卡片
-    canvas.alpha_composite(back)
-    canvas.alpha_composite(mid)
-    canvas.alpha_composite(front)
+    # 3. 文字行（仅大尺寸）：靛紫色细线在白页上，左右各 2 行
+    if size > 24:
+        ink = (99, 102, 241, 200)
+        for i, (x0, x1, y) in enumerate([
+            (17 * k, 27 * k, 24 * k), (17 * k, 24 * k, 29 * k),   # 左页两行
+            (37 * k, 47 * k, 24 * k), (40 * k, 47 * k, 29 * k),   # 右页两行（错位）
+        ]):
+            d.rounded_rectangle(
+                [x0, y, x1, y + 1.8 * k],
+                radius=0.9 * k, fill=ink,
+            )
 
     return canvas.resize((size, size), Image.LANCZOS)
 
 
 def main():
     import os
-    out_dir = os.path.dirname(os.path.abspath(__file__))
-
-    # 高清 PNG（512）
-    big = make_logo(512)
-    big.save(os.path.join(out_dir, "icon.png"))
-    print("✓ icon.png (512x512)")
-
-    # ICO 多尺寸：传一张 256x256 高清图 + sizes 列表，Pillow 自动缩放嵌入各尺寸
-    ico_sizes = [(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)]
-    ico_src = make_logo(256)
-    ico_src.save(
-        os.path.join(out_dir, "icon.ico"),
+    here = os.path.dirname(os.path.abspath(__file__))
+    # 高清 PNG
+    make_logo(512).save(os.path.join(here, "icon.png"))
+    # 多尺寸 ICO
+    sizes = [16, 24, 32, 48, 64, 128, 256]
+    imgs = [make_logo(s) for s in sizes]
+    imgs[-1].save(
+        os.path.join(here, "icon.ico"),
         format="ICO",
-        sizes=ico_sizes,
+        append_images=imgs[:-1],
     )
-    print(f"✓ icon.ico ({[s[0] for s in ico_sizes]})")
+    print(f"已生成 icon.png(512) 与 icon.ico({sizes})")
 
 
 if __name__ == "__main__":

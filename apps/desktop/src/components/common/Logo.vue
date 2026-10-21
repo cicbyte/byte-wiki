@@ -1,15 +1,15 @@
 <script setup lang="ts">
 /**
- * byte-wiki Logo（层叠卡片 · 透明背景 · 动态着色）
+ * byte-wiki Logo（翻开的书 · 透明背景 · 动态着色）
  *
- * 三张层叠卡片错落旋转，靠 opacity 区分层次；前卡片用 mask 挖空两条标题行，
- * 在小尺寸下也有辨识度。
+ * 摊开的双页 + 中缝留隙 + 前页文字行镂空，小尺寸下书形轮廓仍可辨。
+ * （旧版层叠卡片为 byte-stash 的 stash 语义，fork 继承——已换为 wiki 书本）
  *
  * 着色：SVG 用 fill="currentColor"，颜色由 CSS color 控制——
  *   - 不传 color：继承父元素文字色（浅主题自动深、深主题自动浅）
- *   - 传 color：用指定色（如主色蓝 var(--color-primary)）
+ *   - 传 color：用指定色（如 var(--color-primary)）
  *
- * 本体透明无背景方块，因此不会有黑边/底色问题，任意背景上都能融入。
+ * 本体透明无背景方块，任意背景上都能融入。
  */
 import { useId } from "vue";
 
@@ -39,18 +39,24 @@ const maskId = `logo-mask-${useId()}`;
     role="img"
   >
     <defs>
-      <!-- 前卡片标题行镂空 mask：白=保留，黑=挖空（透出背景） -->
+      <!-- 右页文字行镂空 mask：白=保留，黑=挖空（透出背景） -->
       <mask :id="maskId">
         <rect width="64" height="64" fill="white" />
-        <rect x="25" y="23" width="16" height="2.4" rx="1.2" fill="black" />
-        <rect x="25" y="29" width="11" height="2.4" rx="1.2" fill="black" />
+        <rect x="37" y="24" width="10" height="2.2" rx="1.1" fill="black" />
+        <rect x="40" y="29" width="7" height="2.2" rx="1.1" fill="black" />
       </mask>
     </defs>
-    <!-- 后卡片（旋转 -12°，最淡） -->
-    <rect x="18" y="15" width="28" height="34" rx="4" fill="currentColor" opacity="0.28" transform="rotate(-12 32 32)" />
-    <!-- 中卡片（旋转 -3°，中等） -->
-    <rect x="18" y="15" width="28" height="34" rx="4" fill="currentColor" opacity="0.5" transform="rotate(-3 32 32)" />
-    <!-- 前卡片（不旋转，实色 + 标题行镂空） -->
-    <rect x="18" y="15" width="28" height="34" rx="4" fill="currentColor" :mask="`url(#${maskId})`" />
+    <!-- 左页（书页自然摊开：外沿高、内沿低、内底沿书脊下沉；opacity 区分双页） -->
+    <path
+      d="M12 16 L31 19 L31 44 Q31 47 28.5 46.4 L13 42.4 Q12 42.1 12 41 Z"
+      fill="currentColor"
+      opacity="0.55"
+    />
+    <!-- 右页（镜像；文字行经 mask 镂空） -->
+    <path
+      d="M52 16 L33 19 L33 44 Q33 47 35.5 46.4 L51 42.4 Q52 42.1 52 41 Z"
+      fill="currentColor"
+      :mask="`url(#${maskId})`"
+    />
   </svg>
 </template>
