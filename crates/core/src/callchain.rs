@@ -30,6 +30,23 @@ pub struct CallchainSummary {
     pub duration_ms: u128,
 }
 
+/// 调用图概览（大图模式：全图由后端持有，前端只拿轻量负载 <200KB）
+    #[derive(serde::Serialize)]
+pub struct CallgraphOverview {
+    pub total_nodes: usize,
+    pub total_edges: usize,
+    pub total_entries: usize,
+        /// 入口面板清单（is_entry 节点；零入口库回退公共 API 面 top30）
+    pub entries: Vec<serde_json::Value>,
+        /// 是否公共 API 回退（前端分组标题用）
+    pub entries_are_api: bool,
+        /// 模块列表
+    pub modules: Vec<String>,
+        /// 模块聚合边（模块全景图：u/v/w，按权重 top 截断）
+    pub module_edges: Vec<(String, String, usize)>,
+    }
+
+
 impl AppService {
     /// 为已登记仓库生成函数级调用图（tree-sitter 多语言）。
     /// `on_progress` 回调已解析文件数（引擎每 20 个文件一次 + 收尾一次）。
@@ -109,7 +126,200 @@ impl AppService {
         })
     }
 
+    /// 大图模式下后端持全图、按需取子图 —— 概览不含 26k 节点清单
+    pub fn callgraph_overview(&self, repo_path: &str) -> CoreResult<Option<CallgraphOverview>> {
+        let Some(g) = self.read_callgraph(repo_path)? else {
+            return Ok(None);
+        };
+        let nodes = g["nodes"].as_array().cloned().unwrap_or_default();
+        let edges = g["edges"].as_array().cloned().unwrap_or_default();
+        let mut indeg: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+        let mut mod_edges: std::collections::BTreeMap<(String, String), usize> = std::collections::BTreeMap::new();
+        let node_mod: std::collections::HashMap<String, String> = nodes
+            .iter()
+            .map(|n| {
+                (
+                    n["id"].as_str().unwrap_or("").to_string(),
+                    n["module"].as_str().unwrap_or("").to_string(),
+                )
+            })
+            .collect();
+        for e in &edges {
+            let (s, d) = (
+                e["src"].as_str().unwrap_or("").to_string(),
+                e["dst"].as_str().unwrap_or("").to_string(),
+            );
+            *indeg.entry(d.clone()).or_default() += 1;
+            if let (Some(m1), Some(m2)) = (node_mod.get(&s), node_mod.get(&d.clone())) {
+                if m1 != m2 {
+                    *mod_edges.entry((m1.clone(), m2.clone())).or_default() += 1;
+                }
+            }
+        }
+        let light = |n: &serde_json::Value| {
+            serde_json::json!({
+                "id": n["id"], "module": n["module"], "qualname": n["qualname"],
+                "name": n["name"], "file": n["file"], "routes": n["routes"],
+                "is_exported": n.get("is_exported").unwrap_or(&serde_json::json!(false)),
+                "is_entry": n["is_entry"],
+            })
+        };
+        let mut entries: Vec<serde_json::Value> =
+            nodes.iter().filter(|n| n["is_entry"] == true).map(light).collect();
+        let mut entries_are_api = false;
+        if entries.is_empty() {
+            // 库回退：公共 API（门面文件导出优先）top 30，测试调用量参考
+            entries_are_api = true;
+            let is_facade = |n: &serde_json::Value| {
+                n["file"].as_str().map(|f| {
+                    let base = f.rsplit(['/', '\\']).next().unwrap_or(f);
+                    let stem = base.split('.').next().unwrap_or(base);
+                    matches!(stem, "index" | "mod" | "lib" | "main" | "__init__")
+                }).unwrap_or(false)
+            };
+            let mut pool: Vec<&serde_json::Value> = nodes
+                .iter()
+                .filter(|n| n.get("is_exported").and_then(|v| v.as_bool()).unwrap_or(false))
+                .collect();
+            if pool.is_empty() {
+                pool = nodes.iter().collect();
+            }
+            pool.sort_by_key(|n| {
+                let id = n["id"].as_str().unwrap_or("");
+                (
+                    std::cmp::Reverse(is_facade(n)),
+                    std::cmp::Reverse(indeg.get(id).copied().unwrap_or(0)),
+                )
+            });
+            entries = pool.into_iter().take(30).map(light).collect();
+        }
+        entries.truncate(200);
+        let mut me: Vec<(String, String, usize)> = mod_edges
+            .into_iter()
+            .map(|((a, b), w)| (a, b, w))
+            .collect();
+        me.sort_by_key(|(_, _, w)| std::cmp::Reverse(*w));
+        me.truncate(250);
+        let mut modules: Vec<String> = node_mod.into_values().collect();
+        modules.sort();
+        modules.dedup();
+        // 大图模块可达数千——前端下拉用不了那么多，截断控负载
+        modules.truncate(500);
+        let total_entries = entries_len(&nodes);
+        Ok(Some(CallgraphOverview {
+            total_nodes: nodes.len(),
+            total_edges: edges.len(),
+            total_entries,
+            entries,
+            entries_are_api,
+            modules,
+            module_edges: me,
+        }))
+    }
+
+    /// BFS 子图裁剪：seed 节点 N 跳双向邻域，节点数封顶 cap
+    pub fn callgraph_focus(
+        &self,
+        repo_path: &str,
+        seed: &str,
+        depth: usize,
+        cap: usize,
+    ) -> CoreResult<Option<serde_json::Value>> {
+        let Some(g) = self.read_callgraph(repo_path)? else {
+            return Ok(None);
+        };
+        let nodes = g["nodes"].as_array().cloned().unwrap_or_default();
+        let edges = g["edges"].as_array().cloned().unwrap_or_default();
+        let start_id: String = nodes
+            .iter()
+            .find(|n| n["id"].as_str() == Some(seed))
+            .map(|n| n["id"].as_str().unwrap_or("").to_string())
+            .ok_or_else(|| crate::CoreError::Other(anyhow::anyhow!("节点不存在：{seed}")))?;
+        let mut adj: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+        for e in &edges {
+            let (s, d) = (
+                e["src"].as_str().unwrap_or("").to_string(),
+                e["dst"].as_str().unwrap_or("").to_string(),
+            );
+            adj.entry(s.clone()).or_default().push(d.clone());
+            adj.entry(d).or_default().push(s);
+        }
+        let mut keep: std::collections::HashSet<String> = std::collections::HashSet::new();
+        keep.insert(start_id.clone());
+        let mut frontier: Vec<String> = vec![start_id];
+        let mut truncated = false;
+        'outer: for _ in 0..depth.max(1) {
+            let mut next = Vec::new();
+            for cur in &frontier {
+                if let Some(nbrs) = adj.get(cur) {
+                    for nb in nbrs {
+                        if keep.insert(nb.clone()) {
+                            next.push(nb.clone());
+                            if keep.len() >= cap {
+                                truncated = true;
+                                break 'outer;
+                            }
+                        }
+                    }
+                }
+            }
+            frontier = next;
+        }
+        let sub_nodes: Vec<serde_json::Value> = nodes
+            .iter()
+            .filter(|n| keep.contains(n["id"].as_str().unwrap_or("")))
+            .cloned()
+            .collect();
+        let sub_edges: Vec<serde_json::Value> = edges
+            .iter()
+            .filter(|e| {
+                keep.contains(e["src"].as_str().unwrap_or(""))
+                    && keep.contains(e["dst"].as_str().unwrap_or(""))
+            })
+            .cloned()
+            .collect();
+        Ok(Some(serde_json::json!({
+            "nodes": sub_nodes, "edges": sub_edges, "truncated": truncated, "seed": seed,
+        })))
+    }
+
+    /// 大图搜索：id/file 包含即命中，limit 截断（后端持图，前端不全量拉清单）
+    pub fn callgraph_search(
+        &self,
+        repo_path: &str,
+        pattern: &str,
+        limit: usize,
+    ) -> CoreResult<Vec<serde_json::Value>> {
+        let Some(g) = self.read_callgraph(repo_path)? else {
+            return Ok(vec![]);
+        };
+        let pat = pattern.trim().to_lowercase();
+        if pat.len() < 2 {
+            return Ok(vec![]);
+        }
+        let mut hits: Vec<serde_json::Value> = g["nodes"]
+            .as_array()
+            .map(|a| {
+                a.iter()
+                    .filter(|n| {
+                        n["id"].as_str().unwrap_or("").to_lowercase().contains(&pat)
+                            || n["file"].as_str().unwrap_or("").to_lowercase().contains(&pat)
+                    })
+                    .map(|n| {
+                        serde_json::json!({
+                            "id": n["id"], "qualname": n["qualname"], "file": n["file"],
+                            "module": n["module"], "is_entry": n["is_entry"],
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        hits.truncate(limit.clamp(1, 100));
+        Ok(hits)
+    }
+
     /// 读取既有调用链产物（不存在返回 None；克隆加载 / 桌面端调用链 tab 用）
+
     pub fn read_callgraph(&self, repo_path: &str) -> CoreResult<Option<serde_json::Value>> {
         let p = crate::branch::wiki_root(Path::new(repo_path), &crate::branch::current_branch(Path::new(repo_path)))
             .join(CALLGRAPH_DOC_PATH);
@@ -207,4 +417,8 @@ mod tests {
             assert!(Path::new(&s.out_path).is_file(), "产物未落位");
         }
     }
+}
+
+fn entries_len(nodes: &[serde_json::Value]) -> usize {
+    nodes.iter().filter(|n| n["is_entry"] == true).count()
 }

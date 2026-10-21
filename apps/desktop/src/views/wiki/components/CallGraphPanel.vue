@@ -33,7 +33,8 @@ import {
 } from "@ant-design/icons-vue";
 import { DataSet, Network } from "vis-network/standalone";
 import { api } from "@/api";
-import type { CallgraphData, CallGraphNode, CallgraphEdge } from "@/api/callchain";
+import { callchainApi } from "@/api/callchain";
+import type { CallgraphData, CallGraphNode, CallgraphEdge, CallgraphOverview } from "@/api/callchain";
 import { useThemeStore } from "@/stores/theme";
 import { useAiStore } from "@/stores/ai";
 import type { EditorContextMenuItem } from "@/components/editor/SnippetEditor.vue";
@@ -205,6 +206,16 @@ let freezeTimer: ReturnType<typeof setTimeout> | null = null;
 let searchTimer: ReturnType<typeof setTimeout> | null = null;
 
 const stats = computed(() => {
+  if (bigMode.value && overview.value) {
+    return {
+      nodes: overview.value.total_nodes,
+      edges: overview.value.total_edges,
+      modules: overview.value.modules.length,
+      entries: overview.value.total_entries,
+      // 子图模式画布规模另注（badge 显示全图，当前子图规模在浮动条提示）
+      subNodes: data.value?.nodes.length ?? 0,
+    };
+  }
   const d = data.value;
   if (!d) return null;
   return {
@@ -246,6 +257,21 @@ function parseEntry(n: CallGraphNode): EntryItem {
 
 /** 搜索 + 动词筛选后的入口集合 */
 const filteredEntries = computed<EntryItem[]>(() => {
+  // 大图模式：面板数据来自概览（后端已做入口识别/公共 API 回退与排序）
+  if (bigMode.value && overview.value) {
+    const kw = entrySearch.value.trim().toLowerCase();
+    const vf = verbFilter.value;
+    return overview.value.entries
+      .map(parseEntry)
+      .filter(
+        (it) =>
+          (!vf || it.verb === vf) &&
+          (!kw ||
+            (it.node.qualname + " " + (it.node.routes[0] ?? "") + " " + it.node.module)
+              .toLowerCase()
+              .includes(kw)),
+      );
+  }
   const d = data.value;
   if (!d) return [];
   const kw = entrySearch.value.trim().toLowerCase();
@@ -331,7 +357,9 @@ const entryGroups = computed<{ key: string; label: string; tooltip: string; item
         VERB_ORDER.indexOf(a.verb) - VERB_ORDER.indexOf(b.verb) || a.label.localeCompare(b.label),
     );
     if (libraryMode) {
-      const hasExport = (data.value?.nodes ?? []).some((n) => n.is_exported);
+      const hasExport =
+        (bigMode.value && overview.value?.entries_are_api) ||
+        (!bigMode.value && (data.value?.nodes ?? []).some((n) => n.is_exported));
       return {
         key,
         label: hasExport ? "公共 API（库无进程入口）" : "核心函数（库无进程入口）",
@@ -353,7 +381,15 @@ const entryGroups = computed<{ key: string; label: string; tooltip: string; item
   return groups;
 });
 
-const entryCount = computed(() => (data.value?.nodes ?? []).filter((n) => n.is_entry).length);
+/** 当前选中节点短名（大图子图提示用） */
+const selectedLabel = computed(() => {
+  const n = data.value?.nodes.find((x) => x.id === selectedId.value);
+  return n ? (n.qualname.split(".").pop() || n.qualname) : "—";
+});
+
+const entryCount = computed(() =>
+  bigMode.value ? (overview.value?.total_entries ?? 0) : (data.value?.nodes ?? []).filter((n) => n.is_entry).length,
+);
 
 function verbClass(verb: string): string {
   return verb ? `m-${verb.toLowerCase()}` : "m-none";
@@ -401,10 +437,31 @@ const calleesOf = computed<CallgraphEdge[]>(() =>
 );
 
 // ===== 数据加载与建图 =====
+// ===== 大图模式（ZCode 级：2 万+节点）=====
+// 全图由后端持有；前端只拿概览（<200KB）+ 按需 BFS 子图。
+// 中小图（≤阈值）保留整包路径，交互体验不变。
+const BIG_GRAPH_THRESHOLD = 4000;
+const bigMode = ref(false);
+const overview = ref<CallgraphOverview | null>(null);
+/** 大图搜索结果（浮动条搜索框走后端） */
+const searchHits = ref<{ id: string; qualname: string; file: string; module: string; is_entry: boolean }[]>([]);
+
 async function loadData() {
   loading.value = true;
   missing.value = false;
+  bigMode.value = false;
+  overview.value = null;
   try {
+    const ov = await callchainApi.overview(props.repoPath);
+    if (ov && ov.total_nodes > BIG_GRAPH_THRESHOLD) {
+      bigMode.value = true;
+      overview.value = ov;
+      data.value = null; // 不整包加载
+      // 画布先聚焦第一个入口（或公共 API），立即有内容可看
+      const first = ov.entries[0];
+      if (first) await focusFromEntry(first.id);
+      return;
+    }
     const text = await api.callchainRead(props.repoPath);
     data.value = JSON.parse(text) as CallgraphData;
     await nextTick();
@@ -417,6 +474,16 @@ async function loadData() {
   }
 }
 
+/** 大图模式：seed 的 N 跳子图替换画布数据 */
+async function loadSubgraph(seed: string) {
+  const sub = await callchainApi.focus(props.repoPath, seed, 2, 300);
+  if (!sub) return;
+  data.value = { nodes: sub.nodes, edges: sub.edges, root: "", langs: {}, modules: {} } as CallgraphData;
+  await nextTick();
+  buildGraph();
+  selectedId.value = seed;
+}
+
 function buildGraph() {
   const d = data.value;
   if (!d || !canvasEl.value) return;
@@ -427,8 +494,13 @@ function buildGraph() {
     (outEdges.get(e.src) ?? outEdges.set(e.src, []).get(e.src)!).push(e);
     (inEdges.get(e.dst) ?? inEdges.set(e.dst, []).get(e.dst)!).push(e);
   }
-  modulesList.value = Object.keys(d.modules).sort();
-  modColor.value = new Map(modulesList.value.map((m, i) => [m, PALETTE[i % PALETTE.length]]));
+  // 大图子图没有 d.modules 映射——从节点 module 聚合；模块统计徽标用概览
+  const mods =
+    bigMode.value && overview.value
+      ? Array.from(new Set(d.nodes.map((n) => n.module))).sort()
+      : Object.keys(d.modules).sort();
+  modulesList.value = mods;
+  modColor.value = new Map(mods.map((m, i) => [m, PALETTE[i % PALETTE.length]]));
 
   // 入口分组默认展开前 3 组（按全量入口的模块分组，不受筛选影响；自定义入口垫底）
   const entryMods = new Set<string>();
@@ -546,7 +618,30 @@ function applyFilter() {
 
 function onSearchInput() {
   if (searchTimer) clearTimeout(searchTimer);
+  if (bigMode.value) {
+    // 大图：搜索在后端（本地只有子图）——命中后点结果切换焦点子图
+    searchTimer = setTimeout(async () => {
+      const q = search.value.trim();
+      if (q.length < 2) {
+        searchHits.value = [];
+        return;
+      }
+      try {
+        searchHits.value = await callchainApi.search(props.repoPath, q, 20);
+      } catch {
+        searchHits.value = [];
+      }
+    }, 250);
+    return;
+  }
   searchTimer = setTimeout(applyFilter, 250);
+}
+
+/** 大图搜索结果点击 → 聚焦该节点子图 */
+async function gotoSearchHit(id: string) {
+  searchHits.value = [];
+  search.value = "";
+  await loadSubgraph(id);
 }
 
 /** 可达闭包：入口 → 全部后代 */
@@ -576,7 +671,12 @@ function showOnly(keep: Set<string>, centerId: string, note: string) {
   focusNote.value = note;
 }
 
-function focusFromEntry(id: string, note?: string) {
+async function focusFromEntry(id: string, note?: string) {
+  if (bigMode.value) {
+    // 大图：本地没有全量边——后端 BFS 子图替换画布
+    await loadSubgraph(id);
+    return;
+  }
   const keep = descendantsOf(id);
   showOnly(keep, id, note ?? `已聚焦该入口执行流（${keep.size} 节点）· 重置视图恢复`);
 }
@@ -967,6 +1067,13 @@ let srcDecorations: { clear(): void } | null = null;
           </template>
         </div>
         <div v-if="loading" class="cg-overlay"><EmptyState text="加载调用图…" /></div>
+        <div v-else-if="bigMode && data" class="cg-bigmode-note">
+          大图模式 · 全库 {{ overview?.total_nodes ?? 0 }} 节点 {{
+            overview?.total_edges ?? 0
+          }}
+          边 · 当前展示「{{ selectedLabel }}」子图 {{ data.nodes.length }} 节点 ·
+          从左侧入口或搜索切换焦点
+        </div>
         <div v-else-if="missing" class="cg-overlay cg-empty">
           <NodeIndexOutlined class="ce-icon" />
           <div class="ce-title">尚未生成调用链</div>
@@ -977,16 +1084,30 @@ let srcDecorations: { clear(): void } | null = null;
         </div>
         <!-- 浮动工具条：半透明不遮图，悬停加深 -->
         <div v-if="data && !missing" class="cg-float-bar">
-          <a-input
-            v-model:value="search"
-            placeholder="搜索…"
-            style="width: 148px"
-            size="small"
-            allow-clear
-            @input="onSearchInput"
-          >
-            <template #prefix><SearchOutlined /></template>
-          </a-input>
+          <span class="cg-bigsearch-wrap">
+            <a-input
+              v-model:value="search"
+              placeholder="搜索…"
+              style="width: 148px"
+              size="small"
+              allow-clear
+              @input="onSearchInput"
+            >
+              <template #prefix><SearchOutlined /></template>
+            </a-input>
+            <div v-if="bigMode && searchHits.length" class="cg-bigsearch-drop">
+              <div
+                v-for="h in searchHits"
+                :key="h.id"
+                class="cg-bigsearch-item"
+                :title="h.id"
+                @click="gotoSearchHit(h.id)"
+              >
+                {{ h.qualname.split(".").pop() || h.qualname }}
+                <span class="hit-file">{{ h.file }}</span>
+              </div>
+            </div>
+          </span>
           <a-select
             v-model:value="moduleFilter"
             :options="moduleOptions"
@@ -1788,5 +1909,62 @@ let srcDecorations: { clear(): void } | null = null;
 /* 函数区间高亮（Monaco 装饰类是编辑器内部 DOM，经 :deep 命中） */
 :deep(.cg-src-highlight) {
   background: color-mix(in oklch, var(--color-primary) 13%, transparent);
+}
+
+/* 大图模式：子图提示条 + 搜索结果下拉 */
+.cg-bigmode-note {
+  position: absolute;
+  top: 52px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 5;
+  padding: 4px 14px;
+  border-radius: var(--radius-lg);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-light);
+  color: var(--text-secondary);
+  font-size: 11.5px;
+  pointer-events: none;
+  white-space: nowrap;
+}
+.cg-bigsearch-wrap {
+  position: relative;
+  display: inline-flex;
+}
+.cg-bigsearch-drop {
+  position: absolute;
+  top: 30px;
+  left: 0;
+  width: 320px;
+  max-height: 280px;
+  overflow-y: auto;
+  z-index: 30;
+  background: var(--bg-card);
+  border: 1px solid var(--border-card);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-dropdown, 0 4px 16px rgba(0, 0, 0, 0.18));
+  padding: 4px;
+}
+.cg-bigsearch-item {
+  padding: 5px 10px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--text-primary);
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+.cg-bigsearch-item:hover {
+  background: var(--bg-elevated);
+}
+.cg-bigsearch-item .hit-file {
+  color: var(--text-tertiary);
+  font-size: 10.5px;
+  font-family: "JetBrains Mono", monospace;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 150px;
 }
 </style>

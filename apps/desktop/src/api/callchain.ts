@@ -62,6 +62,18 @@ export interface ChainSource {
   truncated: boolean;
 }
 
+
+/** 大图概览（后端持全图，前端只拿轻量负载） */
+export interface CallgraphOverview {
+  total_nodes: number;
+  total_edges: number;
+  total_entries: number;
+  entries: CallGraphNode[];
+  entries_are_api: boolean;
+  modules: string[];
+  module_edges: [string, string, number][];
+}
+
 /** 调用链规则（config preferences.callchain） */
 export interface CallchainRules {
   /** 不收录进调用图的文件 glob */
@@ -93,6 +105,24 @@ export const callchainApi = {
   /** 订阅生成进度（已解析文件数），返回取消函数 */
   callchainOnProgress: (handler: (n: number) => void): Promise<UnlistenFn> =>
     listen<number>(CALLCHAIN_EVENT, (ev) => handler(ev.payload)),
+
+  /** 大图概览（轻量：统计/入口清单/模块/模块聚合边） */
+  overview: (repoPath: string) =>
+    invoke<CallgraphOverview | null>("callgraph_overview", { path: repoPath }),
+
+  /** BFS 子图（seed 的 N 跳双向邻域） */
+  focus: (repoPath: string, seed: string, depth?: number, cap?: number) =>
+    invoke<{ nodes: CallGraphNode[]; edges: CallgraphEdge[]; truncated: boolean; seed: string } | null>(
+      "callgraph_focus",
+      { path: repoPath, seed, depth, cap },
+    ),
+
+  /** 大图搜索（后端持图） */
+  search: (repoPath: string, pattern: string, limit?: number) =>
+    invoke<{ id: string; qualname: string; file: string; module: string; is_entry: boolean }[]>(
+      "callgraph_search",
+      { path: repoPath, pattern, limit },
+    ),
 
   /** 读取调用链规则 */
   getRules: () => invoke<CallchainRules>("get_callchain_rules"),

@@ -139,3 +139,41 @@ pub fn set_callchain_rules(
     let svc = state.svc();
     svc.set_callchain_rules(rules).map_err(|e| e.to_string())
 }
+
+
+/// 调用图概览（大图模式：轻量负载，不含全量节点清单）
+#[tauri::command]
+pub fn callgraph_overview(
+    state: tauri::State<'_, AppState>,
+    path: String,
+) -> Result<Option<byte_wiki_core::callchain::CallgraphOverview>, String> {
+    let svc = state.svc();
+    svc.callgraph_overview(&path).map_err(|e| e.to_string())
+}
+
+/// BFS 子图裁剪（seed 的 N 跳双向邻域，节点数封顶）
+#[tauri::command]
+pub fn callgraph_focus(
+    state: tauri::State<'_, AppState>,
+    path: String,
+    seed: String,
+    depth: Option<usize>,
+    cap: Option<usize>,
+) -> Result<Option<serde_json::Value>, String> {
+    let svc = state.svc();
+    svc.callgraph_focus(&path, &seed, depth.unwrap_or(2), cap.unwrap_or(300))
+        .map_err(|e| e.to_string())
+}
+
+/// 大图搜索（后端持图，命中 id/qualname/file）
+#[tauri::command]
+pub fn callgraph_search(
+    state: tauri::State<'_, AppState>,
+    path: String,
+    pattern: String,
+    limit: Option<usize>,
+) -> Result<Vec<serde_json::Value>, String> {
+    let svc = state.svc();
+    svc.callgraph_search(&path, &pattern, limit.unwrap_or(30))
+        .map_err(|e| e.to_string())
+}
