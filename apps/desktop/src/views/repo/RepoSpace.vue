@@ -37,6 +37,8 @@ import WikiViewer from "@/views/wiki/components/WikiViewer.vue";
 import ChatPanel from "@/views/wiki/components/ChatPanel.vue";
 import CallGraphPanel from "@/views/wiki/components/CallGraphPanel.vue";
 import FileBrowse from "@/views/wiki/components/FileBrowse.vue";
+import SourceDrawer from "@/views/wiki/components/SourceDrawer.vue";
+import type { SourceTarget } from "@/views/wiki/components/SourceDrawer.vue";
 import LlmLogPanel from "@/views/wiki/components/LlmLogPanel.vue";
 import LlmStreamTerminal from "@/views/wiki/components/LlmStreamTerminal.vue";
 import { useLlmStreamStore } from "@/stores/llmStream";
@@ -502,7 +504,13 @@ function openDocInDocs(docPath: string) {
   }
 }
 
-/** wiki 引用链接（bw-file://）→ 文件浏览页定位 */
+/** wiki 引用链接（bw-file://）→ 源码抽屉就地查看（不跳页、不动文件树） */
+const sourceDrawer = ref<InstanceType<typeof SourceDrawer>>();
+function openCiteDrawer(t: SourceTarget) {
+  sourceDrawer.value?.open(t);
+}
+
+/** wiki 引用链接（bw-file://）→ 文件浏览页定位（抽屉内「在文件页打开」按钮的显式动作） */
 function openFileAt(target: { path: string; startLine?: number; endLine?: number }) {
   wiki.revealFile(target.path, target.startLine, target.endLine);
   router.push(`/repo/${repoId.value}/files`);
@@ -742,7 +750,7 @@ const busy = computed(() => generating.value || updating.value || externalRunnin
               :live-status="liveStatus"
               :view-branch="readonlyBranch ? viewBranch : null"
               @open-doc="openDocInDocs"
-              @open-file="openFileAt"
+              @open-file="openCiteDrawer"
             />
             <!-- 空态：主内容区角色（比侧栏树空态更有分量：大标题+分支行+主行动按钮） -->
             <div v-else class="viewer-empty">
@@ -850,6 +858,7 @@ const busy = computed(() => generating.value || updating.value || externalRunnin
             v-if="currentCard"
             :repo-path="wiki.currentRepo.path"
             :doc-path="currentCard"
+            @open-file="openCiteDrawer"
           />
           <div v-else class="viewer-empty">
             <div class="ve-title">选择左侧知识卡阅读</div>
@@ -864,6 +873,14 @@ const busy = computed(() => generating.value || updating.value || externalRunnin
           <EmptyState text="加载中…" />
         </div>
       </div>
+
+      <!-- 引用源码抽屉（文档页/知识卡页的 bw-file:// 链接就地查看） -->
+      <SourceDrawer
+        v-if="wiki.currentRepo"
+        ref="sourceDrawer"
+        :repo-path="wiki.currentRepo.path"
+        @locate="openFileAt"
+      />
 
       <!-- AI 对话侧栏：内嵌布局右侧（VSCode 式挤压内容区，非浮层）；chat tab 本身即对话页不重复显示 -->
       <aside v-if="ai.dockOpen && tab !== 'chat' && wiki.currentRepo" class="rs-ai-dock">

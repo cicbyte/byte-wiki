@@ -64,24 +64,30 @@ watch(codeEditorEl, async (ed) => {
 // ===== wiki 引用跳转定位（bw-file:// 链接 → 展开祖先 + 打开 + 滚到行）=====
 const pendingReveal = ref<RevealTarget | null>(null);
 
+async function handleReveal() {
+  const t = wiki.revealTarget;
+  if (!t || !wiki.currentRepo) return;
+  // 消费即清：重进文件页不重复定位（seq 递增保证再次点击仍会触发 watch）
+  wiki.clearReveal();
+  pendingReveal.value = t;
+  // 展开祖先目录并加载各层
+  const parts = t.path.split("/");
+  const next = new Set(expanded.value);
+  next.add("");
+  for (let i = 1; i < parts.length; i++) {
+    const dir = parts.slice(0, i).join("/");
+    next.add(dir);
+    await loadDir(dir);
+  }
+  expanded.value = next;
+  await openByPath(t.path);
+  applyReveal();
+}
+
 watch(
   () => wiki.revealTarget?.seq,
-  async () => {
-    const t = wiki.revealTarget;
-    if (!t || !wiki.currentRepo) return;
-    pendingReveal.value = t;
-    // 展开祖先目录并加载各层
-    const parts = t.path.split("/");
-    const next = new Set(expanded.value);
-    next.add("");
-    for (let i = 1; i < parts.length; i++) {
-      const dir = parts.slice(0, i).join("/");
-      next.add(dir);
-      await loadDir(dir);
-    }
-    expanded.value = next;
-    await openByPath(t.path);
-    applyReveal();
+  () => {
+    void handleReveal();
   },
 );
 
@@ -108,7 +114,10 @@ async function openByPath(path: string) {
   }
 }
 
-/** 应用行定位：markdown 切源码模式；编辑器就绪后滚动 + 整行高亮 */
+/** 应用行定位：markdown 切源码模式；等待 Monaco 模型真正载入目标内容后滚动 + 整行高亮。
+ *  编辑器实例就绪 ≠ 内容就绪——openByPath 设 content 后，prop 传播与 SnippetEditor
+ *  内部 watch setValue 都是异步的，对空模型提前 reveal 会滚不动、装饰被随后的
+ *  setValue 清掉（定位只消费一次，提前消费即永久丢失）。 */
 async function applyReveal() {
   const t = pendingReveal.value;
   if (!t || selected.value !== t.path) return;
@@ -116,20 +125,18 @@ async function applyReveal() {
     mdSourceMode.value = true; // 源码视图才能定位行
     await new Promise(r => setTimeout(r, 60));
   }
-  const ed = codeEditorEl.value?.getEditor();
-  if (!ed) {
-    // 编辑器尚在挂载（SnippetEditor 内部有重试初始化），轮询等待
-    for (let i = 0; i < 10; i++) {
-      await new Promise(r => setTimeout(r, 150));
-      const e2 = codeEditorEl.value?.getEditor();
-      if (e2) {
-        doReveal(e2, t);
-        return;
-      }
+  const want = content.value;
+  if (!want) return;
+  for (let i = 0; i < 40; i++) {
+    // 期间用户切了别的文件则放弃
+    if (selected.value !== t.path) return;
+    const ed = codeEditorEl.value?.getEditor();
+    if (ed?.getModel() && ed.getValue() === want) {
+      doReveal(ed, t);
+      return;
     }
-    return;
+    await new Promise(r => setTimeout(r, 100));
   }
-  doReveal(ed, t);
 }
 
 function doReveal(ed: any, t: RevealTarget) {
@@ -260,6 +267,9 @@ watch(query, () => {
 onMounted(async () => {
   await wiki.ensureRepo(Number(route.params.id));
   loadDir("");
+  // 真实时序是「先 revealFile 设 store，路由切换后本组件才挂载」——
+  // 上面的 watch 拿不到挂载前已设置的值，必须在这里兜底消费一次
+  void handleReveal();
 });
 
 const fmtSize = (n: number) => (n >= 1048576 ? `${(n / 1048576).toFixed(1)} MB` : n >= 1024 ? `${(n / 1024).toFixed(1)} KB` : `${n} B`);

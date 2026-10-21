@@ -32,6 +32,11 @@ export const useWikiStore = defineStore("wiki", () => {
     };
   }
 
+  /** 消费定位请求（FileBrowse 处理后调用）：避免重进文件页对旧目标重复展开/滚动 */
+  function clearReveal() {
+    revealTarget.value = null;
+  }
+
   async function refreshRecent(limit = 50) {
     try {
       recentRepos.value = await api.recentRepos(limit);
@@ -81,5 +86,5 @@ export const useWikiStore = defineStore("wiki", () => {
     currentRepo.value = null;
   }
 
-  return { currentRepo, recentRepos, opening, revealTarget, revealFile, openRepo, ensureRepo, closeRepo, refreshRecent };
+  return { currentRepo, recentRepos, opening, revealTarget, revealFile, clearReveal, openRepo, ensureRepo, closeRepo, refreshRecent };
 });

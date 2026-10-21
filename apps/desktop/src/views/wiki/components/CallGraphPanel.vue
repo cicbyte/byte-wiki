@@ -890,11 +890,15 @@ async function openSourceBase(n: CallGraphNode, mode: "file" | "function") {
     } else {
       sourceState.content = text;
     }
-    // 双 nextTick：确保 a-drawer 内容挂载 + SnippetEditor 的 modelValue watch 完成 setValue 后再定位
+    // 先解除 v-show 隐藏再定位：Monaco 在 display:none 容器上是 0×0 布局，
+    // 隐藏态 revealLineInCenter 会被夹成空操作（automaticLayout 的重排发生在
+    // reveal 之后，不会补发滚动）——行号靠下的目标必现滚不到
+    sourceState.loading = false;
     await nextTick();
     await nextTick();
     const ed = editorEl.value?.getEditor();
     if (ed) {
+      ed.layout();
       if (mode === "function") {
         // 行号偏移：切片从 1 起，但显示为真实文件行号
         ed.updateOptions({ lineNumbers: (l: number) => String(n.lineno + l - 1) });
