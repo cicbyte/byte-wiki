@@ -444,7 +444,6 @@ const visibleNodes = computed<VisibleNode[]>(() => {
   color: var(--text-secondary);
   font-size: 13px;
   transition: background var(--transition-fast);
-  overflow: hidden;
 }
 .fb-node:hover {
   background: var(--bg-elevated);
@@ -477,6 +476,7 @@ const visibleNodes = computed<VisibleNode[]>(() => {
 .fb-name {
   flex: 1;
   min-width: 0;
+  line-height: 1.5;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -502,6 +502,7 @@ const visibleNodes = computed<VisibleNode[]>(() => {
 .fb-path {
   font-family: "JetBrains Mono", monospace;
   font-size: 12.5px;
+  line-height: 1.5;
   color: var(--text-primary);
   overflow: hidden;
   text-overflow: ellipsis;

@@ -48,6 +48,9 @@ body {
   background: var(--bg-base);
   color: var(--text-primary);
   font-size: 14px;
+  /* 高 DPI（如 200% 缩放）下分数像素行盒会裁字形下伸部（g/p/下划线）——
+     全局行高兜底；单行省略元素各自显式 1.5 */
+  line-height: 1.5;
 }
 
 /* 细化滚动条（WebView2/Chromium，含表格内部滚动区） */

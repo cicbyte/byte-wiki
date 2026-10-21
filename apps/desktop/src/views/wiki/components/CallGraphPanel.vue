@@ -1455,6 +1455,7 @@ let srcDecorations: { clear(): void } | null = null;
   flex: 1;
   min-width: 0;
   font-size: 13px;
+  line-height: 1.5;
   color: var(--text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1718,7 +1719,7 @@ let srcDecorations: { clear(): void } | null = null;
   border: 1px solid rgba(97, 175, 254, 0.45);
   border-radius: var(--radius-sm);
   padding: 0 5px;
-  line-height: 17px;
+  line-height: 19px;
 }
 /* 元信息：标签-值行（替代资产直搬的 emoji 行） */
 .cg-meta-list {

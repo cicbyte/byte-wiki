@@ -462,6 +462,7 @@ onUnmounted(() => {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  line-height: 1.5;
 }
 .col-model {
   font-family: "JetBrains Mono", monospace;

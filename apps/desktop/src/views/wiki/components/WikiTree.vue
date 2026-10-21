@@ -527,7 +527,7 @@ const doneCount = computed(
   border: 1px solid var(--border-light);
   border-radius: var(--radius-xs);
   padding: 0 4px;
-  line-height: 14px;
+  line-height: 16px;
   flex-shrink: 0;
 }
 
@@ -732,6 +732,7 @@ const doneCount = computed(
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+  line-height: 1.5;
 }
 .imp {
   font-size: 10px;
@@ -740,7 +741,7 @@ const doneCount = computed(
   border-radius: var(--radius-xs);
   padding: 0 4px;
   flex-shrink: 0;
-  line-height: 15px;
+  line-height: 17px;
 }
 
 /* ===== 生成骨架状态 ===== */
