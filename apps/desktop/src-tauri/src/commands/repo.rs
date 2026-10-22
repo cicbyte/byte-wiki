@@ -11,6 +11,14 @@ pub fn open_repo(state: tauri::State<'_, AppState>, path: String) -> Result<Repo
     state.svc().open_repo(&path).map_err(|e| e.to_string())
 }
 
+/// 实时 git 分支（读 .git/HEAD，无副作用）。
+/// 前端缓存的 currentRepo.branch 是打开时的快照——外部 checkout 后会过期，
+/// 只读判定（viewBranch === 当前分支？）必须以实时值为准（与后端读取口径一致）。
+#[tauri::command]
+pub fn current_git_branch(path: String) -> Result<String, String> {
+    Ok(byte_wiki_core::branch::current_branch(std::path::Path::new(&path)))
+}
+
 /// 最近打开的仓库列表（默认 10 条）
 #[tauri::command]
 pub fn recent_repos(

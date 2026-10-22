@@ -35,6 +35,8 @@ const props = defineProps<{
 const emit = defineEmits<{
   (e: "open-doc", path: string): void;
   (e: "open-file", target: { path: string; startLine?: number; endLine?: number }): void;
+  /** 文档读取失败（含错误文本；RepoSpace 据此自愈：重扫登记 + 刷新树） */
+  (e: "read-failed", err: string): void;
 }>();
 
 const themeStore = useThemeStore();
@@ -107,7 +109,9 @@ async function load() {
     viewerBody.value?.scrollTo({ top: 0 });
   } catch (e: any) {
     content.value = "";
-    message.error(typeof e === "string" ? e : "读取文档失败");
+    const err = typeof e === "string" ? e : "读取文档失败";
+    message.error(err);
+    emit("read-failed", err);
   } finally {
     loading.value = false;
   }

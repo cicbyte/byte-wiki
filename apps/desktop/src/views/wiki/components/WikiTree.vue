@@ -9,7 +9,7 @@
  * 依赖图在新版总览页内以 Mermaid 呈现，不进文档树。
  * 旧版模块文档（kind=module）作为兼容分组兜底展示。
  */
-import { computed, onMounted, onUnmounted, ref } from "vue";
+import { computed, ref } from "vue";
 import {
   ApartmentOutlined,
   AppstoreOutlined,
@@ -170,27 +170,6 @@ function toggleDir(path: string) {
 const readonlyView = computed(
   () => !!props.viewBranch && !!props.branch && props.viewBranch !== props.branch,
 );
-/** 头部分支下拉选项（当前分支置顶带标记） */
-const branchItems = computed(() => {
-  const cur = props.branch || "";
-  const opts = props.branchOptions || [];
-  const rest = opts.filter((b) => b !== cur);
-  return [
-    { value: cur, label: cur ? `${cur}（当前）` : "当前分支", current: true },
-    ...rest.map((b) => ({ value: b, label: b, current: false })),
-  ];
-});
-
-const branchMenuOpen = ref(false);
-const switchEl = ref<HTMLElement | null>(null);
-function onDocClick(e: MouseEvent) {
-  if (branchMenuOpen.value && switchEl.value && !switchEl.value.contains(e.target as Node)) {
-    branchMenuOpen.value = false;
-  }
-}
-onMounted(() => document.addEventListener("mousedown", onDocClick));
-onUnmounted(() => document.removeEventListener("mousedown", onDocClick));
-
 /** 空态直达：已生成且非当前的分支（一键只读查看） */
 const switchableBranches = computed(() =>
   (props.branchOptions || []).filter((b) => b !== (props.branch || "")),
@@ -218,34 +197,7 @@ const doneCount = computed(
         >
           <span class="dot"></span>
         </span>
-        <div
-          v-if="branchItems.length > 1 || readonlyView"
-          ref="switchEl"
-          class="branch-switch"
-          :class="{ viewing: readonlyView }"
-          @mousedown.prevent
-        >
-          <button class="branch-switch-btn" @click.stop="branchMenuOpen = !branchMenuOpen">
-            <span class="branch-switch-name">{{ viewBranch || branch }}</span>
-            <CaretRightOutlined class="branch-caret" :class="{ open: branchMenuOpen }" />
-          </button>
-          <div v-if="branchMenuOpen" class="branch-menu">
-            <button
-              v-for="b in branchItems"
-              :key="b.value"
-              class="branch-menu-item"
-              :class="{ active: (viewBranch || branch) === b.value }"
-              @click="branchMenuOpen = false; emit('switchBranch', b.value)"
-            >
-              <CheckCircleOutlined v-if="b.current" class="cur-mark" />
-              <span class="branch-menu-name">{{ b.value }}</span>
-              <span v-if="b.current" class="cur-tag">当前</span>
-            </button>
-          </div>
-        </div>
-        <span v-else-if="branch" class="bar-branch" :title="`当前分支：${branch}（文档按分支独立）`">
-          {{ branch }}
-        </span>
+        <!-- 分支信息与切换统一在右上角全局入口；树头部不再展示分支名 -->
       </div>
       <span v-if="!readonlyView" class="tree-bar-actions">
         <button
@@ -428,109 +380,6 @@ const doneCount = computed(
 .bar-count.live .spin {
   font-size: 9px;
 }
-/* 自绘分支切换（替代 ant-select：紧凑贴合树头部尺度） */
-.branch-switch {
-  position: relative;
-  min-width: 0;
-  flex-shrink: 1;
-}
-.branch-switch-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
-  max-width: 130px;
-  border: 1px solid transparent;
-  background: var(--bg-input);
-  color: var(--text-tertiary);
-  font-size: 10.5px;
-  font-family: "JetBrains Mono", monospace;
-  border-radius: var(--radius-xs);
-  padding: 1px 6px;
-  cursor: pointer;
-  line-height: 17px;
-}
-.branch-switch-btn:hover {
-  color: var(--color-primary);
-}
-/* 只读查看态：主色点标示非当前 */
-.branch-switch.viewing .branch-switch-btn {
-  color: var(--color-primary);
-  background: var(--color-primary-bg);
-}
-.branch-switch-name {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.branch-caret {
-  font-size: 8px;
-  transition: transform var(--transition-fast);
-  flex-shrink: 0;
-}
-.branch-caret.open {
-  transform: rotate(90deg);
-}
-.branch-menu {
-  position: absolute;
-  top: calc(100% + 4px);
-  left: 0;
-  z-index: 30;
-  min-width: 150px;
-  max-width: 220px;
-  background: var(--bg-elevated, var(--bg-card));
-  border: 1px solid var(--border-light);
-  border-radius: var(--radius-sm);
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.16);
-  padding: 4px;
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-}
-.branch-menu-item {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  border: none;
-  background: transparent;
-  color: var(--text-secondary);
-  font-size: 11.5px;
-  font-family: "JetBrains Mono", monospace;
-  padding: 4px 8px;
-  border-radius: var(--radius-xs);
-  cursor: pointer;
-  text-align: left;
-}
-.branch-menu-item:hover {
-  background: var(--bg-input);
-  color: var(--text-primary);
-}
-.branch-menu-item.active {
-  color: var(--color-primary);
-  background: var(--color-primary-bg);
-  font-weight: 600;
-}
-.branch-menu-name {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.cur-mark {
-  font-size: 10px;
-  color: var(--color-success, #52c41a);
-  flex-shrink: 0;
-}
-.cur-tag {
-  font-size: 9.5px;
-  color: var(--text-tertiary);
-  border: 1px solid var(--border-light);
-  border-radius: var(--radius-xs);
-  padding: 0 4px;
-  line-height: 16px;
-  flex-shrink: 0;
-}
-
 /* 只读提示：行内轻量（不再整块橙色） */
 .readonly-hint {
   display: flex;

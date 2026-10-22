@@ -112,6 +112,32 @@ pub fn list_wiki_docs(
     Ok(docs)
 }
 
+/// 强制重扫 .bytewiki/ 重建当前分支登记（自愈：检出切换后树残留他分支条目、
+/// 或磁盘产物已变而登记未同步——点击 404 时前端调用）。返回 (branch, docs)。
+#[tauri::command]
+pub fn resync_wiki_docs(
+    state: tauri::State<'_, AppState>,
+    path: String,
+) -> Result<(String, Vec<(String, String, String)>), String> {
+    let svc = state.svc();
+    let repo_root = byte_wiki_core::canonical_key(std::path::Path::new(&path))
+        .map_err(|e| e.to_string())?;
+    if svc
+        .db
+        .get_repo_by_path(&repo_root)
+        .map_err(|e| e.to_string())?
+        .is_none()
+    {
+        return Ok((String::new(), vec![]));
+    }
+    let mut docs = svc
+        .scan_existing_wiki(std::path::Path::new(&repo_root))
+        .map_err(|e| e.to_string())?;
+    docs.sort();
+    let branch = byte_wiki_core::branch::current_branch(std::path::Path::new(&repo_root));
+    Ok((branch, docs))
+}
+
 /// 读取 .bytewiki/ 下指定文档内容（路径穿越防护：canonicalize 后必须在 wiki 目录内）
 #[tauri::command]
 pub fn read_wiki_doc(repo_path: String, doc_path: String) -> Result<String, String> {

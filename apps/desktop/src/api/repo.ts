@@ -25,6 +25,9 @@ export interface IndexSummary {
 export const repoApi = {
   openRepo: (path: string) => invoke<RepoInfo>("open_repo", { path }),
 
+  /** 实时 git 分支（打开时的缓存会因外部 checkout 过期） */
+  currentGitBranch: (path: string) => invoke<string>("current_git_branch", { path }),
+
   recentRepos: (limit = 10) => invoke<RepoInfo[]>("recent_repos", { limit }),
 
   indexRepo: (path: string) => invoke<IndexSummary>("index_repo", { path }),

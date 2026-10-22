@@ -79,6 +79,8 @@ pub fn run() {
             commands::callchain::callgraph_overview,
             commands::callchain::list_branches,
             commands::export::export_wiki_html,
+            commands::generate::resync_wiki_docs,
+            commands::repo::current_git_branch,
             commands::callchain::callgraph_focus,
             commands::callchain::callgraph_search,
             commands::callchain::callgraph_chain,

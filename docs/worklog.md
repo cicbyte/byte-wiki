@@ -116,3 +116,15 @@
 - 桌面端：`export_wiki_html` 命令（tauri-plugin-dialog 选目录 + spawn_blocking）；仓库页工具栏「导出 HTML」按钮（按当前查看分支导出）；WikiViewer 工具栏打印按钮 + `global.css` 打印样式（隐藏导航/侧栏/工具栏/AI 侧栏，正文铺满）——WebView 打印对话框另存为 PDF。
 
 **验收结果**：core 95 测试全绿（新增导出用例：自包含结构/中文链接编码/高亮/frontmatter 剥离/分支校验）；workspace 编译通过；zoxide 实导出 19 页/4MB，本地 HTTP + 浏览器实测——mermaid 渲染（含子目录页 3/3，修复资产与侧边栏根相对路径 404）、CSS 加载、相对链接、当前页高亮全部通过；vue-tsc 零错误。
+
+## 2026-09-23 文档 404 自愈：检出切换竞态 + 登记重扫（#722）
+
+**根因取证**（bid-eval）：非迁移问题——目标文件登记与落盘一致地只在 features/review-optimize；develop 登记磁盘平衡（47/47）。404 来自检出时序竞态：树在 features/review-optimize 下加载，仓库被外部 checkout 到 develop 后应用无感知（PRD 定案不引常驻 watcher），点击残留条目按当前分支读取即 404。另发现登记腐化：develop/main 死条目 callgraph.json + dependency.mmd 未登记（生成区漂移）。
+
+**变更内容**
+- `resync_wiki_docs` 命令（generate.rs）：强制 `scan_existing_wiki` 重建当前分支 `source='generated'` 登记（human 卡片行按设计不受影响），返回 (实时分支, docs)。
+- WikiViewer 新增 `read-failed` 事件；RepoSpace `onDocReadFailed` 自愈：404 → 重扫登记 + `currentRepo.branch` 对齐实时 HEAD + 刷新文档树；条目已消失则清选中并提示「分支已切换或产物已更新」。
+
+**验收结果**：vue-tsc 零错误；workspace 编译通过。机制依赖既有 scan 单测；用户点击原 404 条目即触发自愈（树刷新、死条目清除）。
+
+**跟进（同日）**：用户反馈点 develop 仍 404、main 正常——根因是只读判定用了打开时缓存的 `currentRepo.branch`（当时为 develop），与后端读取的实时 HEAD 口径不一致：viewBranch 恰等于过期缓存时被误判为"当前分支"，读取落到实时 HEAD 目录。修复：`current_git_branch` 轻量命令（读 .git/HEAD）；`refreshDocs` 开头对齐 `currentRepo.branch` 到实时值，判定/读取/分支标记三口径统一。vue-tsc 与 workspace 编译通过。

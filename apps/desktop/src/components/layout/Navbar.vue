@@ -135,10 +135,9 @@ const breadcrumbItems = computed(() => {
         <button
           class="icon-btn branch-btn"
           :class="{ on: viewingOther }"
-          :title="viewingOther ? `正在查看 ${wiki.viewBranch}（只读）· 点击切回当前分支` : '切换查看分支'"
+          :title="viewingOther ? `正在查看 ${wiki.viewBranch}（只读）· 点击切回当前分支` : `切换查看分支（当前：${branchLabel}）`"
         >
           <BranchesOutlined />
-          <span class="branch-btn-name">{{ branchLabel }}</span>
         </button>
         <template #content>
           <div class="bw-branch-list">
@@ -343,23 +342,10 @@ const breadcrumbItems = computed(() => {
   color: #fff;
 }
 
-/* 分支切换按钮（scoped 部分） */
-.branch-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  max-width: 160px;
-}
-.branch-btn .branch-btn-name {
-  font-size: 12px;
-  max-width: 110px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
+/* 分支切换按钮（纯图标；非当前分支查看态仅变主色，不加底色块） */
 .branch-btn.on {
   color: var(--color-primary);
-  background: var(--color-primary-bg);
+  background: transparent;
 }
 </style>
 

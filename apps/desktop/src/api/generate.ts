@@ -156,6 +156,10 @@ export const generateApi = {
 
   rebuildEmbeddings: (path: string) => invoke<EmbedSummary>("rebuild_embeddings", { path }),
 
+  /** 强制重扫 .bytewiki/ 重建当前分支登记（点击 404 自愈）；返回 (branch, docs) */
+  resyncWikiDocs: (path: string) =>
+    invoke<[string, [string, string, string][]]>("resync_wiki_docs", { path }),
+
   /** 导出 Wiki 为静态 HTML 站（dialog 选目录；取消返回 null） */
   exportWikiHtml: (path: string, branch?: string | null) =>
     invoke<{ out_dir: string; pages: number } | null>("export_wiki_html", {

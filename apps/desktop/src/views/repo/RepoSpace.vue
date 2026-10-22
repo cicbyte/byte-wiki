@@ -331,6 +331,15 @@ async function refreshDocs() {
     wikiDocs.value = [];
     return;
   }
+  // 分支态对齐实时 HEAD：currentRepo.branch 是打开时的快照，外部 checkout 后
+  // 会过期——只读判定（viewBranch === 当前？）与后端读取口径必须一致，
+  // 否则「查看的分支恰好等于过期缓存」时会按错误分支目录读（404）
+  try {
+    const live = await api.currentGitBranch(wiki.currentRepo.path);
+    if (wiki.currentRepo.branch !== live) wiki.currentRepo.branch = live;
+  } catch {
+    /* 对齐失败按缓存值继续 */
+  }
   // 可查看分支选项（当前分支不在目录列表时也补进去；先于只读 early-return）
   try {
     const list = await api.generatedBranches(wiki.currentRepo.path);
@@ -520,6 +529,26 @@ function openDocInDocs(docPath: string) {
   if (wikiDocs.value.some(([p]) => p === docPath)) {
     currentDoc.value = docPath;
     router.push(`/repo/${repoId.value}/docs`);
+  }
+}
+
+/** 文档读取 404 自愈：检出切换后树残留他分支条目 / 登记与磁盘腐化——
+ *  强制重扫 .bytewiki/ 重建当前分支登记，分支态对齐实时 HEAD，树刷新；
+ *  该条目已不存在则清掉选中并提示（一次点击完成恢复，无需手动刷新） */
+async function onDocReadFailed(err: string) {
+  if (!err.includes("文档不存在") || !wiki.currentRepo) return;
+  try {
+    const [liveBranch] = await api.resyncWikiDocs(wiki.currentRepo.path);
+    if (liveBranch && wiki.currentRepo.branch !== liveBranch) {
+      wiki.currentRepo.branch = liveBranch;
+    }
+    await refreshDocs();
+    if (currentDoc.value && !wikiDocs.value.some(([p]) => p === currentDoc.value)) {
+      currentDoc.value = "";
+      message.info("分支已切换或产物已更新，文档树已刷新");
+    }
+  } catch {
+    /* 自愈失败保持原错误提示 */
   }
 }
 
@@ -770,6 +799,7 @@ const busy = computed(() => generating.value || updating.value || externalRunnin
               :view-branch="readonlyBranch ? viewBranch : null"
               @open-doc="openDocInDocs"
               @open-file="openCiteDrawer"
+              @read-failed="onDocReadFailed"
             />
             <!-- 空态：主内容区角色（比侧栏树空态更有分量：大标题+分支行+主行动按钮） -->
             <div v-else class="viewer-empty">
@@ -878,6 +908,7 @@ const busy = computed(() => generating.value || updating.value || externalRunnin
             :repo-path="wiki.currentRepo.path"
             :doc-path="currentCard"
             @open-file="openCiteDrawer"
+            @read-failed="onDocReadFailed"
           />
           <div v-else class="viewer-empty">
             <div class="ve-title">选择左侧知识卡阅读</div>
