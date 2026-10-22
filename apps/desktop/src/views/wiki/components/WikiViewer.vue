@@ -362,10 +362,15 @@ function onBodyClick(ev: MouseEvent) {
 }
 /* mermaid 异步渲染占位：渲染完成前容器里是图源码文本（先当正文显示，几十到几百
    毫秒后换成 SVG 高度突变，把下方内容顶一下——「切文档先显示再抖一下」的主源）。
-   隐藏源码闪现 + 预留最小高度，把 pop-in 落差压到最小 */
+   隐藏源码闪现 + 预留最小高度，把 pop-in 落差压到最小。
+   ⚠ 必须用 opacity 而非 visibility:hidden——md-editor-v3 的 mermaid 渲染管线
+   会跳过不可见容器，visibility:hidden 会让图永远停在源码态（实测复现过） */
+.md-host :deep(.md-editor-mermaid) {
+  transition: opacity 0.25s ease;
+}
 .md-host :deep(.md-editor-mermaid:not(:has(svg))) {
   min-height: 120px;
-  visibility: hidden;
+  opacity: 0;
 }
 /* 深色模式下 md-editor-v3 自带纯黑背景（--md-bk-color:#000）且 preview 内边距为 0，
    会在卡片内形成一个文本贴边的黑框 —— 置透明使其融入卡片背景（与浅色模式一致） */

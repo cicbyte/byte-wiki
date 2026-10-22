@@ -77,3 +77,12 @@
 - 入口树行内加「子图」按钮、视图标题栏加「图」按钮（`byteWiki.showGraph`）。
 
 **验收结果**：zoxide overview 含 25 模块/49 聚合边实测通过；manifest/tsc/esbuild/graph.js 语法全绿；PATH `bw.exe` 已更新为含 module_edges 的构建。
+
+## 2026-09-21 Wiki mermaid 图不渲染修复（#580 跟进）
+
+**根因**：#580 抖动修复的占位 CSS 用了 `visibility: hidden`——md-editor-v3 的 mermaid 渲染管线会跳过不可见容器，图永远停在源码文本态（被占位规则遮成 120px 空白，表象即「mermaid 无法渲染」）。用 Vite 多页对照实验实锤（同接线同数据：无 CSS 容器渲染出 SVG，visibility:hidden 容器 svg=0）。
+
+**变更内容**（`apps/desktop/src/views/wiki/components/WikiViewer.vue`）：占位规则改 `opacity: 0`（不参与容器可见性判定，渲染管线照常工作）；基类补 `transition: opacity .25s` 让渲染完成淡入；注释记录 visibility 陷阱。
+
+**验收结果**：对照实验 opacity 方案下两容器均渲染出 SVG；vue-tsc 无错误（HMR 生效）。
+
