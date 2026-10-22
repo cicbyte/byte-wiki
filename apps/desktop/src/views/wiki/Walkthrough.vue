@@ -226,6 +226,8 @@ function toggleOutline() {
 }
 
 const blockRefs = new Map<string, HTMLElement>();
+/** 代码流滚动容器（大纲跳转只滚它，不牵动外层页面） */
+const streamEl = ref<HTMLElement | null>(null);
 function setBlockRef(id: string, el: unknown) {
   if (el) {
     // WalkBlock 是组件：函数 ref 拿到的是组件实例，DOM 在 $el（根节点 <section>）
@@ -254,7 +256,15 @@ function mainPathOnly() {
 function jumpTo(id: string) {
   if (!expandedIds.value.has(id)) toggleBlock(id);
   activeId.value = id;
-  const scroll = () => blockRefs.get(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
+  // 只滚代码流容器：scrollIntoView({block:"start"}) 会把所有可滚祖先一起对齐，
+  // 外层页面容器被带着滚——「点大纲整页上移」的根因
+  const stream = streamEl.value;
+  const scroll = () => {
+    const el = blockRefs.get(id);
+    if (!el || !stream) return;
+    const delta = el.getBoundingClientRect().top - stream.getBoundingClientRect().top;
+    stream.scrollTo({ top: stream.scrollTop + delta - 10, behavior: "smooth" });
+  };
   requestAnimationFrame(scroll);
   // 点击折叠项时：展开后编辑器懒挂载、块高度异步增长，补一次迟到滚动校准落点
   setTimeout(scroll, 350);
@@ -409,7 +419,7 @@ function backToGraph() {
       </button>
 
       <!-- 代码块流 -->
-      <div class="wk-stream">
+      <div ref="streamEl" class="wk-stream">
         <WalkBlock
           v-for="(e, i) in entries"
           :key="e.id"

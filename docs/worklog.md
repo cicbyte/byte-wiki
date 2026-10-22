@@ -86,3 +86,15 @@
 
 **验收结果**：对照实验 opacity 方案下两容器均渲染出 SVG；vue-tsc 无错误（HMR 生效）。
 
+
+## 2026-09-22 链路走读点大纲致整页上移修复（#713）
+
+**根因**：`jumpTo` 用 `scrollIntoView({ block: "start" })`——按 CSSOM View 规范它会把**所有**可滚动的祖先容器一起滚动对齐，不止目标所在的 `.wk-stream`；外层页面容器被带动滚动即「整页上移」。
+
+**变更内容**（`apps/desktop/src/views/wiki/Walkthrough.vue`）：`.wk-stream` 挂 `streamEl` ref；跳转改为手动计算 delta 后仅 `stream.scrollTo` 自身（顶部留 10px）；展开折叠块的 350ms 二次校准滚动同路。
+
+**验收结果**：vue-tsc 无错误（HMR 生效）。
+
+## 2026-09-22 bcode 服务指向修复（环境）
+
+平台 dx4600.link:18026 曾临时宕机，期间排查发现 bcode 实际配置在 `~/.cicbyte/apps/byte-code-cli/config.toml`（非 `~/.bc/`），且 `[profiles.default] server` 是假地址 `127.0.0.1:9/api`（create/start 走此绑定必挂）。已改为正确地址；期间另确认 18020 端口是 WeKeep（微信文章管理器），与 bcode 无关。恢复后补建 #713 并交付。
