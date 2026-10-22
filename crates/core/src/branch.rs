@@ -19,6 +19,75 @@ pub fn current_branch(root: &Path) -> String {
         .unwrap_or_default()
 }
 
+/// 解析当前 HEAD commit（full sha；无 git / 解析失败返回 ""）。
+/// 滞后检测用：产物 meta 记录生成时的 head_commit，读取时与实时值比对。
+pub fn head_commit(root: &Path) -> String {
+    let git = root.join(".git");
+    let head = std::fs::read_to_string(git.join("HEAD")).unwrap_or_default();
+    let head = head.trim();
+    if head.is_empty() {
+        return String::new();
+    }
+    // detached：HEAD 即 sha
+    if !head.starts_with("ref: ") {
+        return head.to_string();
+    }
+    let r = head.strip_prefix("ref: ").unwrap_or(head);
+    // 松散 ref 优先，缺失则查 packed-refs
+    if let Ok(sha) = std::fs::read_to_string(git.join(r)) {
+        return sha.trim().to_string();
+    }
+    if let Ok(packed) = std::fs::read_to_string(git.join("packed-refs")) {
+        for line in packed.lines() {
+            let line = line.trim();
+            if line.starts_with('#') || line.starts_with('^') {
+                continue;
+            }
+            let mut it = line.splitn(2, ' ');
+            if let (Some(sha), Some(name)) = (it.next(), it.next()) {
+                if name.trim() == r {
+                    return sha.trim().to_string();
+                }
+            }
+        }
+    }
+    String::new()
+}
+
+/// 本地分支名列表（refs/heads 松散 + packed-refs；字典序）。
+/// 不 spawn git——与 current_branch 同口径的纯文件读取。
+pub fn git_branches(root: &Path) -> Vec<String> {
+    let git = root.join(".git");
+    let mut out = std::collections::BTreeSet::new();
+    let heads = git.join("refs").join("heads");
+    for entry in walkdir::WalkDir::new(&heads).into_iter().flatten() {
+        if !entry.file_type().is_file() {
+            continue;
+        }
+        if let Ok(rel) = entry.path().strip_prefix(&heads) {
+            let name = rel.to_string_lossy().replace('\\', "/");
+            if !name.is_empty() {
+                out.insert(name);
+            }
+        }
+    }
+    if let Ok(packed) = std::fs::read_to_string(git.join("packed-refs")) {
+        for line in packed.lines() {
+            let line = line.trim();
+            if line.starts_with('#') || line.starts_with('^') {
+                continue;
+            }
+            if let Some((_, name)) = line.split_once(' ') {
+                let name = name.trim();
+                if let Some(b) = name.strip_prefix("refs/heads/") {
+                    out.insert(b.to_string());
+                }
+            }
+        }
+    }
+    out.into_iter().collect()
+}
+
 /// 分支的目录安全名（"" → default；路径分隔符等替换为 -）
 pub fn branch_dir(branch: &str) -> String {
     let name: String = branch
@@ -130,6 +199,33 @@ mod tests {
         // detached
         std::fs::write(dir.path().join(".git/HEAD"), "6789abc\n").unwrap();
         assert_eq!(current_branch(dir.path()), "");
+        assert_eq!(head_commit(dir.path()), "6789abc");
+    }
+
+    #[test]
+    fn head_commit_and_branch_list() {
+        let dir = tempfile::tempdir().unwrap();
+        let git = dir.path().join(".git");
+        std::fs::create_dir_all(git.join("refs/heads/feature")).unwrap();
+        // 松散 ref：HEAD → main → refs/heads/main
+        std::fs::write(git.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+        std::fs::write(git.join("refs/heads/main"), "aa11bb22cc33\n").unwrap();
+        std::fs::write(git.join("refs/heads/feature/x"), "dd44ee55\n").unwrap();
+        // packed-refs：develop 只在 packed 里
+        std::fs::write(git.join("packed-refs"), "# pack-refs\nff99aa00 refs/heads/develop\n^ffffffff\n");
+        assert_eq!(head_commit(dir.path()), "aa11bb22cc33");
+        // packed 命中：HEAD 指向 packed-only 分支
+        std::fs::write(git.join("HEAD"), "ref: refs/heads/develop\n").unwrap();
+        std::fs::remove_file(git.join("refs/heads/main")).unwrap();
+        std::fs::write(git.join("refs/heads/main"), "aa11bb22cc33\n").unwrap();
+        assert_eq!(head_commit(dir.path()), "ff99aa00");
+        let mut b = git_branches(dir.path());
+        b.sort();
+        assert_eq!(b, vec!["develop".to_string(), "feature/x".to_string(), "main".to_string()]);
+        // 无 git：空
+        let empty = tempfile::tempdir().unwrap();
+        assert_eq!(head_commit(empty.path()), "");
+        assert!(git_branches(empty.path()).is_empty());
     }
 
     #[test]

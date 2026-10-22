@@ -160,6 +160,7 @@ pub async fn repo_chat(
     history: Vec<(String, String)>,
     request_id: Option<String>,
     provider_id: Option<String>,
+    branch: Option<String>,
 ) -> Result<byte_wiki_core::rag::ChatAnswer, String> {
     let svc = Arc::clone(&state.svc);
     let app_delta = app.clone();
@@ -180,6 +181,7 @@ pub async fn repo_chat(
             &question,
             &history,
             provider_id.as_deref(),
+            branch.as_deref(),
             &move |delta: &str| {
                 let _ = app_delta.emit(CHAT_DELTA_EVENT, delta);
             },

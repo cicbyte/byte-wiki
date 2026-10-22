@@ -32,7 +32,11 @@ import type { LlmProvider } from "@/api/llm";
 import AiSparkIcon from "@/components/icons/AiSparkIcon.vue";
 import MdStreamPreview from "@/components/editor/MdStreamPreview.vue";
 
-const props = defineProps<{ repoPath: string }>();
+const props = defineProps<{
+  repoPath: string;
+  /** 查看分支（null=当前 git 分支；问答检索按该分支的向量索引只读进行） */
+  branch?: string | null;
+}>();
 const emit = defineEmits<{ (e: "open-doc", docPath: string): void }>();
 
 const themeStore = useThemeStore();
@@ -135,6 +139,7 @@ async function ask() {
       history,
       requestId: requestId.value,
       providerId: modelPick.value ?? undefined,
+      branch: props.branch ?? null,
     });
     ai.sources = answer.sources ?? [];
     if (!ai.text && answer.text) ai.text = answer.text;

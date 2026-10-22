@@ -1001,7 +1001,7 @@ impl AppService {
         if self.db.count_chunks(repo.id, &crate::branch::current_branch(Path::new(repo_path))).unwrap_or(0) == 0 {
             return String::new(); // 首次生成无向量索引，跳过
         }
-        match self.search_similar(repo_path, query, 6).await {
+        match self.search_similar(repo_path, None, query, 6).await {
             Ok(hits) if !hits.is_empty() => {
                 let mut s = String::new();
                 for h in &hits {

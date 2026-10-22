@@ -160,7 +160,7 @@ async function load() {
       return;
     }
     // 服务端 DFS 链（大图 27MB 不再整包过 IPC；语义与原前端 buildChain 一致）
-    const chain = await callchainApi.chain(info.path, qn, 400);
+    const chain = await callchainApi.chain(info.path, qn, 400, wiki.viewBranch);
     if (!chain || !chain.entries.length) {
       loadError.value = "节点不存在";
       return;

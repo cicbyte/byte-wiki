@@ -151,8 +151,8 @@ export const generateApi = {
   readWikiDocFor: (repoPath: string, docPath: string, viewBranch: string) =>
     invoke<string>("read_wiki_doc_for", { repoPath, docPath, viewBranch }),
 
-  repoChat: (path: string, question: string, history: [string, string][]) =>
-    invoke<ChatAnswer>("repo_chat", { path, question, history }),
+  repoChat: (path: string, question: string, history: [string, string][], branch?: string | null) =>
+    invoke<ChatAnswer>("repo_chat", { path, question, history, branch: branch ?? null }),
 
   rebuildEmbeddings: (path: string) => invoke<EmbedSummary>("rebuild_embeddings", { path }),
 

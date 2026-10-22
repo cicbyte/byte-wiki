@@ -141,14 +141,65 @@ pub fn set_callchain_rules(
 }
 
 
-/// 调用图概览（大图模式：轻量负载，不含全量节点清单）
+/// 分支概览（全局分支切换器的数据源：git 分支 + 各分支产物有无）
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct BranchInfo {
+    pub name: String,
+    /// 当前 git 分支
+    pub current: bool,
+    /// detached HEAD / 无 git 时的展示名（"当前分支"）
+    pub is_default_bucket: bool,
+    pub has_wiki: bool,
+    pub has_callgraph: bool,
+}
+
+/// 分支列表（git refs + 产物目录标记；当前分支置顶）
+#[tauri::command]
+pub fn list_branches(path: String) -> Result<Vec<BranchInfo>, String> {
+    let root = std::path::Path::new(&path);
+    let cur = byte_wiki_core::branch::current_branch(root);
+    let mut names = byte_wiki_core::branch::git_branches(root);
+    // 无 git / detached：以当前桶展示（产物可能落在 default 桶）
+    let has_default_products = {
+        let d = byte_wiki_core::branch::wiki_root(root, "");
+        d.join("outline.json").is_file() || d.join("pages").is_dir()
+    };
+    if cur.is_empty() && has_default_products {
+        names.push(String::new());
+    }
+    let mut out: Vec<BranchInfo> = names
+        .into_iter()
+        .map(|name| {
+            let dir = byte_wiki_core::branch::wiki_root(root, &name);
+            BranchInfo {
+                current: name == cur,
+                is_default_bucket: name.is_empty(),
+                has_wiki: dir.join("outline.json").is_file() || dir.join("pages").is_dir(),
+                has_callgraph: dir.join("graphs").join("callchain").join("callgraph.db").is_file()
+                    || dir.join("graphs").join("callchain").join("callgraph.json").is_file(),
+                name,
+            }
+        })
+        .collect();
+    // 当前分支置顶，其余字典序
+    out.sort_by(|a, b| match (a.current, b.current) {
+        (true, false) => std::cmp::Ordering::Less,
+        (false, true) => std::cmp::Ordering::Greater,
+        _ => a.name.cmp(&b.name),
+    });
+    Ok(out)
+}
+
+/// 调用图概览（大图模式：轻量负载，不含全量节点清单）。
+/// branch=None → 当前分支（含滞后检测）；Some → 只读查看指定分支
 #[tauri::command]
 pub fn callgraph_overview(
     state: tauri::State<'_, AppState>,
     path: String,
+    branch: Option<String>,
 ) -> Result<Option<byte_wiki_core::callchain::CallgraphOverview>, String> {
     let svc = state.svc();
-    svc.callgraph_overview(&path).map_err(|e| e.to_string())
+    svc.callgraph_overview(&path, branch.as_deref()).map_err(|e| e.to_string())
 }
 
 /// BFS 子图裁剪（seed 的 N 跳双向邻域，节点数封顶）
@@ -156,12 +207,13 @@ pub fn callgraph_overview(
 pub fn callgraph_focus(
     state: tauri::State<'_, AppState>,
     path: String,
+    branch: Option<String>,
     seed: String,
     depth: Option<usize>,
     cap: Option<usize>,
 ) -> Result<Option<serde_json::Value>, String> {
     let svc = state.svc();
-    svc.callgraph_focus(&path, &seed, depth.unwrap_or(2), cap.unwrap_or(300))
+    svc.callgraph_focus(&path, branch.as_deref(), &seed, depth.unwrap_or(2), cap.unwrap_or(300))
         .map_err(|e| e.to_string())
 }
 
@@ -170,11 +222,12 @@ pub fn callgraph_focus(
 pub fn callgraph_search(
     state: tauri::State<'_, AppState>,
     path: String,
+    branch: Option<String>,
     pattern: String,
     limit: Option<usize>,
 ) -> Result<Vec<serde_json::Value>, String> {
     let svc = state.svc();
-    svc.callgraph_search(&path, &pattern, limit.unwrap_or(30))
+    svc.callgraph_search(&path, branch.as_deref(), &pattern, limit.unwrap_or(30))
         .map_err(|e| e.to_string())
 }
 
@@ -184,10 +237,11 @@ pub fn callgraph_search(
 pub fn callgraph_chain(
     state: tauri::State<'_, AppState>,
     path: String,
+    branch: Option<String>,
     root: String,
     cap: Option<usize>,
 ) -> Result<Option<byte_wiki_core::callchain::CallgraphChain>, String> {
     let svc = state.svc();
-    svc.callgraph_chain(&path, &root, cap.unwrap_or(400))
+    svc.callgraph_chain(&path, branch.as_deref(), &root, cap.unwrap_or(400))
         .map_err(|e| e.to_string())
 }

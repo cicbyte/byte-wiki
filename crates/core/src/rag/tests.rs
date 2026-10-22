@@ -100,7 +100,7 @@ async fn rebuild_and_search_ranks_by_similarity() {
     assert_eq!(summary.embedded, summary.chunked);
 
     // 查询 "alpha"：命中应主要来自含 alpha 的块
-    let hits = svc.search_similar(repo.to_str().unwrap(), "alpha 是什么", 3).await.unwrap();
+    let hits = svc.search_similar(repo.to_str().unwrap(), None, "alpha 是什么", 3).await.unwrap();
     assert!(!hits.is_empty());
     assert!(hits[0].score > 0.9, "首命中率异常：{:?}", hits[0].score);
     assert!(
@@ -110,7 +110,7 @@ async fn rebuild_and_search_ranks_by_similarity() {
     );
 
     // 查询 "beta"：首命中应来自 beta 段
-    let hits = svc.search_similar(repo.to_str().unwrap(), "beta 是什么", 1).await.unwrap();
+    let hits = svc.search_similar(repo.to_str().unwrap(), None, "beta 是什么", 1).await.unwrap();
     assert!(hits[0].content.contains("beta"));
 }
 
@@ -127,7 +127,7 @@ async fn replace_semantics_and_empty_repo() {
     // 空仓库（无 wiki 无源码）：0 块，不报错
     let summary = svc.rebuild_embeddings(repo.to_str().unwrap(), &|_| {}).await.unwrap();
     assert_eq!(summary.chunked, 0);
-    let hits = svc.search_similar(repo.to_str().unwrap(), "x", 3).await.unwrap();
+    let hits = svc.search_similar(repo.to_str().unwrap(), None, "x", 3).await.unwrap();
     assert!(hits.is_empty());
 }
 

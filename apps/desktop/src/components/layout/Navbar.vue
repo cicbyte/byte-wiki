@@ -6,7 +6,7 @@
  * 中：全局搜索框（保留布局位，Wiki 搜索在后续版本接入）
  * 右：AI 问答（项目空间）+ 明暗切换 + 设置 + 窗口控制
  */
-import { computed } from "vue";
+import { computed, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import {
   MinusOutlined,
@@ -15,6 +15,7 @@ import {
   SettingOutlined,
   MenuFoldOutlined,
   MenuUnfoldOutlined,
+  BranchesOutlined,
 } from "@ant-design/icons-vue";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useThemeStore } from "@/stores/theme";
@@ -22,6 +23,7 @@ import { useLayoutStore } from "@/stores/layout";
 import { useAiStore } from "@/stores/ai";
 import AiSparkIcon from "@/components/icons/AiSparkIcon.vue";
 import { useWikiStore } from "@/stores/wiki";
+import { callchainApi } from "@/api/callchain";
 
 const route = useRoute();
 const router = useRouter();
@@ -33,6 +35,36 @@ const ai = useAiStore();
 const inProjectSpace = computed(() => route.path.startsWith("/repo/"));
 const wiki = useWikiStore();
 const appWindow = getCurrentWindow();
+
+// ===== 全局分支切换（右上角）：wiki/调用链/问答统一按查看分支工作 =====
+interface BranchItem {
+  name: string;
+  current: boolean;
+  is_default_bucket: boolean;
+  has_wiki: boolean;
+  has_callgraph: boolean;
+}
+const branchMenuOpen = ref(false);
+const branches = ref<BranchItem[]>([]);
+
+async function loadBranches() {
+  if (!wiki.currentRepo) return;
+  try {
+    branches.value = await callchainApi.listBranches(wiki.currentRepo.path);
+  } catch {
+    branches.value = [];
+  }
+}
+watch(() => wiki.currentRepo?.path, loadBranches, { immediate: true });
+
+/** 选中的是当前分支 → 回正常模式（null）；其他分支 → 只读查看 */
+function pickBranch(b: BranchItem) {
+  branchMenuOpen.value = false;
+  wiki.setViewBranch(b.current ? null : b.name);
+  // 分支视图变了，当前页数据自会按 store 重取（各面板 watch viewBranch）
+}
+const branchLabel = computed(() => wiki.viewBranch ?? branches.value.find((b) => b.current)?.name ?? "当前");
+const viewingOther = computed(() => !!wiki.viewBranch && !branches.value.find((b) => b.name === wiki.viewBranch)?.current);
 
 /**
  * 面包屑（可点层级）：
@@ -92,6 +124,43 @@ const breadcrumbItems = computed(() => {
     <div class="navbar-center" data-tauri-drag-region></div>
 
     <div class="navbar-right" data-tauri-drag-region>
+      <!-- 全局分支切换（项目空间）：wiki/调用链/问答统一按所选分支工作 -->
+      <a-popover
+        v-if="inProjectSpace"
+        v-model:open="branchMenuOpen"
+        trigger="click"
+        placement="bottomRight"
+        overlay-class-name="bw-branch-pop"
+      >
+        <button
+          class="icon-btn branch-btn"
+          :class="{ on: viewingOther }"
+          :title="viewingOther ? `正在查看 ${wiki.viewBranch}（只读）· 点击切回当前分支` : '切换查看分支'"
+        >
+          <BranchesOutlined />
+          <span class="branch-btn-name">{{ branchLabel }}</span>
+        </button>
+        <template #content>
+          <div class="bw-branch-list">
+            <div class="bw-branch-head">按分支工作（非当前分支为只读查看）</div>
+            <button
+              v-for="b in branches"
+              :key="b.name"
+              class="bw-branch-item"
+              :class="{ cur: b.current, sel: b.current ? !wiki.viewBranch : wiki.viewBranch === b.name }"
+              @click="pickBranch(b)"
+            >
+              <span class="bw-branch-name">{{ b.is_default_bucket ? "（detached/默认桶）" : b.name }}</span>
+              <span v-if="b.current" class="bw-branch-tag">当前</span>
+              <span class="bw-branch-dots">
+                <em v-if="b.has_wiki" title="有 Wiki 产物">W</em>
+                <em v-if="b.has_callgraph" title="有调用链产物">C</em>
+              </span>
+            </button>
+            <div v-if="!branches.length" class="bw-branch-empty">未解析到分支</div>
+          </div>
+        </template>
+      </a-popover>
       <button
         v-if="inProjectSpace && typeof route.meta.tab === 'string' && route.meta.tab !== 'chat'"
         class="icon-btn ai-toggle"
@@ -273,4 +342,90 @@ const breadcrumbItems = computed(() => {
   background: var(--color-danger);
   color: #fff;
 }
+
+/* 分支切换按钮（scoped 部分） */
+.branch-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 160px;
+}
+.branch-btn .branch-btn-name {
+  font-size: 12px;
+  max-width: 110px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.branch-btn.on {
+  color: var(--color-primary);
+  background: var(--color-primary-bg);
+}
 </style>
+
+<style>
+/* 分支下拉（a-popover 传送层，非 scoped） */
+.bw-branch-pop .bw-branch-list {
+  min-width: 240px;
+  max-height: 320px;
+  overflow-y: auto;
+}
+.bw-branch-pop .bw-branch-head {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  padding: 2px 4px 8px;
+  border-bottom: 1px solid var(--border-light);
+  margin-bottom: 4px;
+}
+.bw-branch-pop .bw-branch-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 8px;
+  border: none;
+  background: none;
+  border-radius: 6px;
+  cursor: pointer;
+  color: var(--text-primary);
+  font-size: 12.5px;
+  text-align: left;
+}
+.bw-branch-pop .bw-branch-item:hover {
+  background: var(--bg-surface);
+}
+.bw-branch-pop .bw-branch-item.sel {
+  color: var(--color-primary);
+  font-weight: 600;
+}
+.bw-branch-pop .bw-branch-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono, monospace);
+}
+.bw-branch-pop .bw-branch-tag {
+  font-size: 10px;
+  color: var(--color-primary);
+  background: var(--color-primary-bg);
+  border-radius: 4px;
+  padding: 0 5px;
+}
+.bw-branch-pop .bw-branch-dots {
+  display: inline-flex;
+  gap: 3px;
+}
+.bw-branch-pop .bw-branch-dots em {
+  font-style: normal;
+  font-size: 10px;
+  color: var(--text-tertiary);
+  border: 1px solid var(--border-light);
+  border-radius: 4px;
+  padding: 0 4px;
+}
+.bw-branch-pop .bw-branch-empty {
+  padding: 10px 4px;
+  font-size: 12px;
+  color: var(--text-tertiary);
+}

@@ -42,7 +42,11 @@ import { monaco } from "@/monaco/setup";
 import EmptyState from "@/components/common/EmptyState.vue";
 import SnippetEditor from "@/components/editor/SnippetEditor.vue";
 
-const props = defineProps<{ repoPath: string }>();
+const props = defineProps<{
+  repoPath: string;
+  /** 查看分支（null=当前 git 分支；非当前分支为只读查看，生成入口隐藏） */
+  branch?: string | null;
+}>();
 
 const themeStore = useThemeStore();
 const ai = useAiStore();
@@ -415,6 +419,21 @@ watch(
   },
 );
 
+/** 全局查看分支切换 → 整面板按新分支视角重载 */
+watch(
+  () => props.branch,
+  () => {
+    selectedId.value = "";
+    void loadData();
+  },
+);
+
+/** 滞后徽标文案（生成时 commit 短 sha） */
+const lagSha = computed(() => overview.value?.generated_commit?.slice(0, 8) ?? "?");
+const lagTitle = computed(
+  () => `图生成于 ${lagSha.value}，HEAD 已前进（快照可能过期）——重新生成可对齐`,
+);
+
 /** 选中入口节点时自动展开其所在分组 */
 watch(selectedId, (id) => {
   if (!id) return;
@@ -452,7 +471,7 @@ async function loadData() {
   bigMode.value = false;
   overview.value = null;
   try {
-    const ov = await callchainApi.overview(props.repoPath);
+    const ov = await callchainApi.overview(props.repoPath, props.branch ?? null);
     if (ov && ov.total_nodes > BIG_GRAPH_THRESHOLD) {
       bigMode.value = true;
       overview.value = ov;
@@ -476,7 +495,7 @@ async function loadData() {
 
 /** 大图模式：seed 的 N 跳子图替换画布数据 */
 async function loadSubgraph(seed: string) {
-  const sub = await callchainApi.focus(props.repoPath, seed, 2, 300);
+  const sub = await callchainApi.focus(props.repoPath, seed, 2, 300, props.branch ?? null);
   if (!sub) return;
   data.value = { nodes: sub.nodes, edges: sub.edges, root: "", langs: {}, modules: {} } as CallgraphData;
   await nextTick();
@@ -627,7 +646,7 @@ function onSearchInput() {
         return;
       }
       try {
-        searchHits.value = await callchainApi.search(props.repoPath, q, 20);
+        searchHits.value = await callchainApi.search(props.repoPath, q, 20, props.branch ?? null);
       } catch {
         searchHits.value = [];
       }
@@ -1078,11 +1097,23 @@ let srcDecorations: { clear(): void } | null = null;
           边 · 当前展示「{{ selectedLabel }}」子图 {{ data.nodes.length }} 节点 ·
           从左侧入口或搜索切换焦点
         </div>
+        <!-- 分支视角/滞后徽标：全局分支切换与快照滞后一眼可见 -->
+        <div v-if="!loading && !missing && (branch || overview?.lagging)" class="cg-branch-note">
+          <span v-if="branch" class="cg-branch-chip">查看 {{ branch }}（只读）</span>
+          <span
+            v-if="overview?.lagging"
+            class="cg-branch-chip lag"
+            :title="lagTitle"
+          >滞后于 {{ lagSha }}</span>
+        </div>
         <div v-else-if="missing" class="cg-overlay cg-empty">
           <NodeIndexOutlined class="ce-icon" />
           <div class="ce-title">尚未生成调用链</div>
-          <div class="ce-sub">函数级调用图 · tree-sitter 多语言提取 · 按分支独立</div>
-          <button class="btn primary" :disabled="generating" @click="generate">
+          <div class="ce-sub">
+            <template v-if="branch">分支「{{ branch }}」无产物（只读查看模式）· 切回当前分支可生成</template>
+            <template v-else>函数级调用图 · tree-sitter 多语言提取 · 按分支独立</template>
+          </div>
+          <button v-if="!branch" class="btn primary" :disabled="generating" @click="generate">
             <ReloadOutlined :spin="generating" /> {{ generating ? "生成中…" : "生成调用链" }}
           </button>
         </div>
@@ -1144,8 +1175,14 @@ let srcDecorations: { clear(): void } | null = null;
           <span v-else class="pill-text">
             函数 {{ stats?.nodes ?? 0 }} · 边 {{ stats?.edges ?? 0 }} · 模块 {{ stats?.modules ?? 0 }} · 入口 {{ stats?.entries ?? 0 }}
           </span>
-          <button class="fb-btn" title="重新生成调用链" :disabled="generating" @click="generate">
-            <ReloadOutlined :spin="generating" />
+          <button
+            v-if="!branch"
+            class="fb-btn"
+            :title="overview?.lagging ? `图已滞后（生成于 ${overview?.generated_commit?.slice(0, 8) ?? '?'}）——点击重新生成对齐 HEAD` : '重新生成调用链'"
+            :disabled="generating"
+            @click="generate"
+          >
+            <ReloadOutlined :spin="generating" :style="overview?.lagging ? 'color: var(--color-warning, #d29922)' : undefined" />
           </button>
         </div>
 
@@ -1916,6 +1953,29 @@ let srcDecorations: { clear(): void } | null = null;
 }
 
 /* 大图模式：子图提示条 + 搜索结果下拉 */
+/* 分支视角/滞后徽标条（画布左上，不遮浮动条） */
+.cg-branch-note {
+  position: absolute;
+  top: 52px;
+  left: 10px;
+  z-index: 5;
+  display: flex;
+  gap: 6px;
+}
+.cg-branch-chip {
+  font-size: 11px;
+  padding: 2px 10px;
+  border-radius: 999px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-light);
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+.cg-branch-chip.lag {
+  color: var(--color-warning, #d29922);
+  border-color: color-mix(in srgb, var(--color-warning, #d29922) 40%, transparent);
+  cursor: help;
+}
 .cg-bigmode-note {
   position: absolute;
   top: 52px;

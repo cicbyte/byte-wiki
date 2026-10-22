@@ -21,6 +21,13 @@ export const useWikiStore = defineStore("wiki", () => {
   const recentRepos = ref<RepoInfo[]>([]);
   const opening = ref(false);
   const revealTarget = ref<RevealTarget | null>(null);
+  /** 全局查看分支（null=当前 git 分支；Navbar 分支切换器写入，
+   *  wiki/调用链/问答全部按它工作——非当前分支即只读模式） */
+  const viewBranch = ref<string | null>(null);
+
+  function setViewBranch(b: string | null) {
+    viewBranch.value = b || null;
+  }
 
   /** 请求在文件浏览页定位到某文件（可选行区间）；seq 保证同目标可重复触发 */
   function revealFile(path: string, startLine?: number, endLine?: number) {
@@ -84,7 +91,8 @@ export const useWikiStore = defineStore("wiki", () => {
 
   function closeRepo() {
     currentRepo.value = null;
+    viewBranch.value = null;
   }
 
-  return { currentRepo, recentRepos, opening, revealTarget, revealFile, clearReveal, openRepo, ensureRepo, closeRepo, refreshRecent };
+  return { currentRepo, recentRepos, opening, revealTarget, viewBranch, revealFile, clearReveal, setViewBranch, openRepo, ensureRepo, closeRepo, refreshRecent };
 });

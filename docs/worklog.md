@@ -98,3 +98,12 @@
 ## 2026-09-22 bcode 服务指向修复（环境）
 
 平台 dx4600.link:18026 曾临时宕机，期间排查发现 bcode 实际配置在 `~/.cicbyte/apps/byte-code-cli/config.toml`（非 `~/.bc/`），且 `[profiles.default] server` 是假地址 `127.0.0.1:9/api`（create/start 走此绑定必挂）。已改为正确地址；期间另确认 18020 端口是 WeKeep（微信文章管理器），与 bcode 无关。恢复后补建 #713 并交付。
+
+## 2026-09-22 调用链分支体系：滞后感知 + 同 commit 免重算 + 全局分支切换（#715）
+
+**变更内容**
+- 滞后感知：`branch.rs` 新增 `head_commit`/`git_branches`（纯文件解析，含 packed-refs）；`callgraph.db` meta 记录生成时 HEAD；`callgraph_overview` 返回 `generated_commit`/`lagging`（实时比对）；调用链画布徽标「滞后于 <sha>」+ 重新生成按钮警示色；CLI overview ⚠️ 提示。
+- 同 commit 免重算：`generate_callchain` 前扫描兄弟分支产物 db 的 `head_commit`，与当前 HEAD 一致则复制 db+json（快照语义，跳过 tree-sitter 提取）。
+- 全局分支切换：Navbar 右上角分支下拉（git 分支列表 + W/C 产物标记 + 当前置顶）；wiki store 全局 `viewBranch`（RepoSpace 本地态改 store 代理）；调用链四查询 / chat RAG（repo_chat→search_similar）/ 走读链全部贯通 `branch` 参数（None=当前分支）；非当前分支只读（调用链隐藏生成入口、徽标提示，问答按该分支索引检索）；CLI `callchain-query --branch`。
+
+**验收结果**：core 94 测试全绿（新增 head_commit/git_branches 解析、滞后翻转、同 commit 复制快照语义、指定分支只读查询四类用例）；vue-tsc 零错误；workspace 编译通过；`bw --branch` 实测（koa master 正常、不存在分支回落「尚未生成」）。

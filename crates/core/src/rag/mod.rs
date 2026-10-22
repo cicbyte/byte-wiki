@@ -124,8 +124,15 @@ impl AppService {
         Ok(EmbedSummary { chunked, embedded })
     }
 
-    /// 相似检索：query 向量化后与该仓库全部块算余弦，取 top-k
-    pub async fn search_similar(&self, repo_path: &str, query: &str, top_k: usize) -> CoreResult<Vec<SearchHit>> {
+    /// 相似检索：query 向量化后与该仓库全部块算余弦，取 top-k。
+    /// branch=None → 当前 git 分支（全局分支切换的问答走 Some 只读检索）
+    pub async fn search_similar(
+        &self,
+        repo_path: &str,
+        branch: Option<&str>,
+        query: &str,
+        top_k: usize,
+    ) -> CoreResult<Vec<SearchHit>> {
         let root = Path::new(repo_path);
         let canon = crate::canonical_key(root)?;
         let Some(repo) = self.db.get_repo_by_path(&canon)? else {
@@ -143,9 +150,12 @@ impl AppService {
             return Ok(vec![]);
         }
 
+        let branch = branch
+            .map(str::to_string)
+            .unwrap_or_else(|| crate::branch::current_branch(Path::new(repo_path)));
         let mut hits: Vec<SearchHit> = self
             .db
-            .list_chunks(repo.id, &crate::branch::current_branch(Path::new(repo_path)))?
+            .list_chunks(repo.id, &branch)?
             .into_iter()
             .filter_map(|(doc_path, content, blob, dim)| {
                 let vec = blob_to_vec(&blob, dim)?;
@@ -166,12 +176,13 @@ impl AppService {
         history: &[(String, String)], // (role, content)，多轮上下文
         on_delta: &(dyn Fn(&str) + Send + Sync),
     ) -> CoreResult<ChatAnswer> {
-        self.chat_with_repo_ext(repo_path, question, history, None, on_delta, &|_| {}, &|| false)
+        self.chat_with_repo_ext(repo_path, question, history, None, None, on_delta, &|_| {}, &|| false)
             .await
     }
 
     /// 仓库问答（扩展）：思考过程通道 + 取消（取消经 __CHAT_CANCELLED__ 哨兵向上传播）；
-    /// provider_id 为 AI 对话栏的模型选择覆盖（None = 全局默认供应商）
+    /// provider_id 为 AI 对话栏的模型选择覆盖（None = 全局默认供应商）；
+    /// branch 为检索分支覆盖（None = 当前 git 分支——全局分支切换的只读问答）
     #[allow(clippy::too_many_arguments)]
     pub async fn chat_with_repo_ext(
         &self,
@@ -179,11 +190,15 @@ impl AppService {
         question: &str,
         history: &[(String, String)],
         provider_id: Option<&str>,
+        branch: Option<&str>,
         on_delta: &(dyn Fn(&str) + Send + Sync),
         on_thinking: &(dyn Fn(&str) + Send + Sync),
         is_cancelled: &(dyn Fn() -> bool + Send + Sync),
     ) -> CoreResult<ChatAnswer> {
-        let hits = self.search_similar(repo_path, question, DEFAULT_TOP_K).await?;
+        let effective_branch = branch
+            .map(str::to_string)
+            .unwrap_or_else(|| crate::branch::current_branch(Path::new(repo_path)));
+        let hits = self.search_similar(repo_path, Some(&effective_branch), question, DEFAULT_TOP_K).await?;
         let canon = crate::canonical_key(Path::new(repo_path))?;
         let Some(repo) = self.db.get_repo_by_path(&canon)? else {
             return Err(CoreError::Other(anyhow::anyhow!("仓库未登记：{repo_path}")));
@@ -234,7 +249,7 @@ impl AppService {
                 repo_id: repo.id,
                 repo_name: repo.name.clone(),
                 // 对话读的是工作区（检索走当前分支索引），归属 = 提问时 git HEAD
-                branch: crate::branch::current_branch(Path::new(repo_path)),
+                branch: effective_branch.clone(),
                 stage: "chat".into(),
                 provider: client.provider_desc(),
                 model: client.model_name().to_string(),

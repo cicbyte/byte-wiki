@@ -75,6 +75,8 @@ pub struct GraphData {
     /// module -> (代表 file, 函数数)；同 module 多文件后者覆盖（与引擎 json Map 语义一致）
     pub modules: BTreeMap<String, (String, usize)>,
     pub langs: BTreeMap<String, usize>,
+    /// 生成时的 HEAD commit（滞后检测：与实时 head_commit 比对；无 git 为空）
+    pub head_commit: String,
 }
 
 impl GraphData {
@@ -212,6 +214,7 @@ pub fn graph_from_doc_json(doc: &serde_json::Value) -> GraphData {
         edges,
         modules,
         langs,
+        head_commit: String::new(), // json 产物无 meta（db 才有滞后检测）
     };
     g.finalize();
     g
@@ -253,8 +256,9 @@ CREATE TABLE IF NOT EXISTS meta (
 ) WITHOUT ROWID;
 ";
 
-/// 把引擎 json 产物写入 callgraph.db（整图事务替换；INSERT OR REPLACE 容忍重复 (src,dst)）
-pub fn write_callgraph_db(db_path: &Path, doc: &serde_json::Value) -> CoreResult<()> {
+/// 把引擎 json 产物写入 callgraph.db（整图事务替换；INSERT OR REPLACE 容忍重复 (src,dst)）。
+/// head_commit：生成时的 git HEAD（滞后检测用，无 git 传空）
+pub fn write_callgraph_db(db_path: &Path, doc: &serde_json::Value, head_commit: &str) -> CoreResult<()> {
     if let Some(parent) = db_path.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -332,6 +336,7 @@ pub fn write_callgraph_db(db_path: &Path, doc: &serde_json::Value) -> CoreResult
             Ok(())
         };
         put("root", doc["root"].as_str().unwrap_or_default().to_string())?;
+        put("head_commit", head_commit.to_string())?;
         put("langs", serde_json::to_string(&doc["langs"])?)?;
         put("modules", serde_json::to_string(&doc["modules"])?)?;
         put("generated_at", crate::db::now_iso())?;
@@ -345,6 +350,18 @@ pub fn write_callgraph_db(db_path: &Path, doc: &serde_json::Value) -> CoreResult
 }
 
 // ============ 读库 ============
+
+/// 只读某 db 的 meta head_commit（同 commit 免重算的探测用；无值返回 None）
+pub fn db_head_commit(db_path: &Path) -> Option<String> {
+    let conn = rusqlite::Connection::open(db_path).ok()?;
+    conn.query_row(
+        "SELECT value FROM meta WHERE key = 'head_commit'",
+        [],
+        |r| r.get::<_, String>(0),
+    )
+    .ok()
+    .filter(|s| !s.is_empty())
+}
 
 /// 从 callgraph.db 加载全图（26k 节点 + 60k 边量级约数百 ms 一次性加载，缓存摊销）
 pub fn load_callgraph_db(db_path: &Path) -> CoreResult<GraphData> {
@@ -427,6 +444,7 @@ pub fn load_callgraph_db(db_path: &Path) -> CoreResult<GraphData> {
         edges,
         modules,
         langs,
+        head_commit: meta.get("head_commit").cloned().unwrap_or_default(),
     };
     g.finalize();
     Ok(g)
@@ -468,7 +486,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let db = dir.path().join(CALLGRAPH_DB_FILE);
         let doc = sample_doc();
-        write_callgraph_db(&db, &doc).unwrap();
+        write_callgraph_db(&db, &doc, "").unwrap();
 
         let from_db = load_callgraph_db(&db).unwrap();
         let from_json = graph_from_doc_json(&doc);
@@ -504,11 +522,15 @@ mod tests {
         doc["nodes"].as_array_mut().unwrap().push(twin);
         let dir = tempfile::tempdir().unwrap();
         let db = dir.path().join(CALLGRAPH_DB_FILE);
-        write_callgraph_db(&db, &doc).unwrap(); // 不再 PRIMARY KEY 冲突
+        write_callgraph_db(&db, &doc, "aa11").unwrap(); // 不再 PRIMARY KEY 冲突
 
         let from_db = load_callgraph_db(&db).unwrap();
+        assert_eq!(from_db.head_commit, "aa11", "meta head_commit 落库可回读");
         let from_json = graph_from_doc_json(&doc);
-        assert_eq!(from_db, from_json);
+        assert_eq!(from_db.nodes, from_json.nodes);
+        assert_eq!(from_db.edges, from_json.edges);
+        assert_eq!(from_db.modules, from_json.modules);
+        assert_eq!(from_db.langs, from_json.langs);
         assert_eq!(from_db.nodes.len(), 3, "重复 id 去重");
         let main = from_db.nodes.iter().find(|n| n.id == "app::main").unwrap();
         assert_eq!(main.file, "app/main.py", "保首个（js 在前 ts 在后被丢）");
@@ -518,7 +540,7 @@ mod tests {
     fn rewrite_replaces_whole_graph() {
         let dir = tempfile::tempdir().unwrap();
         let db = dir.path().join(CALLGRAPH_DB_FILE);
-        write_callgraph_db(&db, &sample_doc()).unwrap();
+        write_callgraph_db(&db, &sample_doc(), "aa11").unwrap();
         // 第二次生成只含 1 节点——旧节点/边/meta 必须清干净
         let smaller = serde_json::json!({
             "root": "C:/tmp/repo2",
@@ -529,7 +551,7 @@ mod tests {
             "modules": {"x": {"file": "x.py", "funcs": 1}},
             "langs": {"python": 1}
         });
-        write_callgraph_db(&db, &smaller).unwrap();
+        write_callgraph_db(&db, &smaller, "bb22").unwrap();
         let g = load_callgraph_db(&db).unwrap();
         assert_eq!(g.nodes.len(), 1);
         assert_eq!(g.edges.len(), 0);
@@ -540,7 +562,7 @@ mod tests {
     fn wal_sidecar_truncated_after_write() {
         let dir = tempfile::tempdir().unwrap();
         let db = dir.path().join(CALLGRAPH_DB_FILE);
-        write_callgraph_db(&db, &sample_doc()).unwrap();
+        write_callgraph_db(&db, &sample_doc(), "aa11").unwrap();
         let wal = dir.path().join(format!("{CALLGRAPH_DB_FILE}-wal"));
         if wal.is_file() {
             let sz = wal.metadata().unwrap().len();

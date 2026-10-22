@@ -88,6 +88,10 @@ pub struct CallgraphOverview {
     pub modules: Vec<String>,
     /// 模块聚合边（模块全景图：u/v/w，按权重 top 截断）
     pub module_edges: Vec<(String, String, usize)>,
+    /// 生成时的 HEAD commit（无 git / json 老产物为 None）
+    pub generated_commit: Option<String>,
+    /// 滞后：生成后 HEAD 已前进（图为快照，走读/子图可能过期）
+    pub lagging: bool,
 }
 
 // ============ 进程内图缓存 ============
@@ -127,6 +131,12 @@ impl GraphCache {
 }
 
 impl AppService {
+    /// 生成收尾：wiki_docs 登记 + change_log（真生成与同 commit 复制共用）
+    fn finish_generate(&self, repo_id: i64, branch: &str, nodes: usize, edges: usize) -> CoreResult<()> {
+        self.db.upsert_generated_doc(repo_id, branch, "graph", CALLGRAPH_DOC_PATH, "调用链图谱")?;
+        self.db.log_change(repo_id, branch, "callchain", &format!("nodes={nodes} edges={edges}"))
+    }
+
     /// 为已登记仓库生成函数级调用图（tree-sitter 多语言）。
     /// `on_progress` 回调已解析文件数（引擎每 20 个文件一次 + 收尾一次）。
     pub fn generate_callchain(
@@ -166,28 +176,55 @@ impl AppService {
             entry_exclude_globs: rules.entry_exclude_globs,
         };
 
-        let graph = byte_wiki_callchain::extract(root, &opts, on_progress)
-            .map_err(|e| CoreError::Other(anyhow::anyhow!("调用链提取失败：{e}")))?;
-
+        let branch = crate::branch::current_branch(root);
         // 产物写入仓库内（随仓库共享，FR-08）
-        let out_dir = crate::branch::wiki_root(root, &crate::branch::current_branch(root))
+        let out_dir = crate::branch::wiki_root(root, &branch)
             .join("graphs")
             .join("callchain");
         std::fs::create_dir_all(&out_dir)?;
+
+        // #3 同 commit 免重算：某兄弟分支产物记录的 HEAD 与当前一致
+        // （刚从 main 拉 feature 这类场景），直接复制 db+json（秒级），跳过提取
+        let head = crate::branch::head_commit(root);
+        let target_db = out_dir.join(CALLGRAPH_DB_FILE);
+        if !head.is_empty()
+            && crate::callchain_db::db_head_commit(&target_db).as_deref() != Some(head.as_str())
+        {
+            if let Some(src_dir) = find_same_commit_callgraph(root, &crate::branch::branch_dir(&branch), &head) {
+                tracing::info!("调用链：分支 {} 与当前 HEAD 同 commit，复制产物免重算", src_dir.file_name().and_then(|n| n.to_str()).unwrap_or("?"));
+                std::fs::copy(src_dir.join(CALLGRAPH_DB_FILE), &target_db)?;
+                if let Some(json_src) = src_dir.join("callgraph.json").is_file().then(|| src_dir.join("callgraph.json")) {
+                    std::fs::copy(json_src, out_dir.join("callgraph.json"))?;
+                }
+                // 计数从复制的 db 取（meta + 全量加载），后续登记/summary 与真生成同构
+                let g = load_callgraph_db(&target_db)?;
+                let summary = CallchainSummary {
+                    out_path: out_dir.join("callgraph.json").to_string_lossy().into_owned(),
+                    nodes: g.nodes.len(),
+                    edges: g.edges.len(),
+                    entries: g.nodes.iter().filter(|n| n.is_entry).count(),
+                    modules: g.modules.len(),
+                    langs: g.langs.clone().into_iter().collect(),
+                    duration_ms: t0.elapsed().as_millis(),
+                };
+                self.finish_generate(repo.id, &branch, summary.nodes, summary.edges)?;
+                return Ok(summary);
+            }
+        }
+
+        let graph = byte_wiki_callchain::extract(root, &opts, on_progress)
+            .map_err(|e| CoreError::Other(anyhow::anyhow!("调用链提取失败：{e}")))?;
+
         let out_path = out_dir.join("callgraph.json");
         std::fs::write(&out_path, serde_json::to_string_pretty(&graph)?)?;
-        // #573：SQLite 主存储（查询毫秒级 + 增量更新地基）
-        write_callgraph_db(&out_dir.join(CALLGRAPH_DB_FILE), &graph)?;
+        // #573：SQLite 主存储（查询毫秒级 + 增量更新地基）；
+        // meta 记录生成时 HEAD——读取侧与实时值比对做滞后检测
+        write_callgraph_db(&target_db, &graph, &head)?;
 
         // 登记 wiki_docs（kind=graph；upsert——wiki 重新生成的整体替换后由 assemble 重新补登）
-        self.db
-            .upsert_generated_doc(repo.id, &crate::branch::current_branch(std::path::Path::new(&repo_path)), "graph", CALLGRAPH_DOC_PATH, "调用链图谱")?;
-        self.db.log_change(
-            repo.id,
-            &crate::branch::current_branch(std::path::Path::new(&repo_path)),
-            "callchain",
-            &format!("nodes={} edges={}", graph["nodes"].as_array().map(|a| a.len()).unwrap_or(0), graph["edges"].as_array().map(|a| a.len()).unwrap_or(0)),
-        )?;
+        self.finish_generate(repo.id, &branch,
+            graph["nodes"].as_array().map(|a| a.len()).unwrap_or(0),
+            graph["edges"].as_array().map(|a| a.len()).unwrap_or(0))?;
 
         let langs: BTreeMap<String, usize> = graph["langs"]
             .as_object()
@@ -209,9 +246,13 @@ impl AppService {
 
     /// 取图（缓存优先）：db 存在用 db，否则回落 json（老仓库）；
     /// (路径, mtime, len) 任一变化即重新加载。无产物返回 None。
-    fn cached_graph(&self, repo_path: &str) -> CoreResult<Option<Arc<PreparedGraph>>> {
+    /// branch=None → 当前 git 分支；Some → 指定分支（全局分支切换的只读查看）
+    fn cached_graph(&self, repo_path: &str, branch: Option<&str>) -> CoreResult<Option<Arc<PreparedGraph>>> {
         let root = Path::new(repo_path);
-        let dir = crate::branch::wiki_root(root, &crate::branch::current_branch(root))
+        let branch = branch
+            .map(str::to_string)
+            .unwrap_or_else(|| crate::branch::current_branch(root));
+        let dir = crate::branch::wiki_root(root, &branch)
             .join("graphs")
             .join("callchain");
         let db_p = dir.join(CALLGRAPH_DB_FILE);
@@ -250,23 +291,35 @@ impl AppService {
         Ok(Some(prepared))
     }
 
-    /// 大图模式下后端持全图、按需取子图 —— 概览不含 26k 节点清单
-    pub fn callgraph_overview(&self, repo_path: &str) -> CoreResult<Option<CallgraphOverview>> {
-        let Some(p) = self.cached_graph(repo_path)? else {
+    /// 大图模式下后端持全图、按需取子图 —— 概览不含 26k 节点清单。
+    /// 滞后检测：meta 的生成时 HEAD 与实时 HEAD 不一致 → lagging=true
+    pub fn callgraph_overview(
+        &self,
+        repo_path: &str,
+        branch: Option<&str>,
+    ) -> CoreResult<Option<CallgraphOverview>> {
+        let Some(p) = self.cached_graph(repo_path, branch)? else {
             return Ok(None);
         };
-        Ok(Some(p.overview.get_or_init(|| overview_of(&p.data)).clone()))
+        let mut ov = p.overview.get_or_init(|| overview_of(&p.data)).clone();
+        let live = crate::branch::head_commit(Path::new(repo_path));
+        ov.lagging = !p.data.head_commit.is_empty()
+            && !live.is_empty()
+            && p.data.head_commit != live;
+        ov.generated_commit = (!p.data.head_commit.is_empty()).then(|| p.data.head_commit.clone());
+        Ok(Some(ov))
     }
 
     /// BFS 子图裁剪：seed 节点 N 跳双向邻域，节点数封顶 cap
     pub fn callgraph_focus(
         &self,
         repo_path: &str,
+        branch: Option<&str>,
         seed: &str,
         depth: usize,
         cap: usize,
     ) -> CoreResult<Option<serde_json::Value>> {
-        let Some(p) = self.cached_graph(repo_path)? else {
+        let Some(p) = self.cached_graph(repo_path, branch)? else {
             return Ok(None);
         };
         let g = p.data.clone();
@@ -325,10 +378,11 @@ impl AppService {
     pub fn callgraph_search(
         &self,
         repo_path: &str,
+        branch: Option<&str>,
         pattern: &str,
         limit: usize,
     ) -> CoreResult<Vec<serde_json::Value>> {
-        let Some(p) = self.cached_graph(repo_path)? else {
+        let Some(p) = self.cached_graph(repo_path, branch)? else {
             return Ok(vec![]);
         };
         let g = p.data.clone();
@@ -356,10 +410,11 @@ impl AppService {
     pub fn callgraph_chain(
         &self,
         repo_path: &str,
+        branch: Option<&str>,
         root: &str,
         cap: usize,
     ) -> CoreResult<Option<CallgraphChain>> {
-        let Some(p) = self.cached_graph(repo_path)? else {
+        let Some(p) = self.cached_graph(repo_path, branch)? else {
             return Ok(None);
         };
         let g = p.data.clone();
@@ -368,8 +423,8 @@ impl AppService {
 
     /// 读取既有调用链产物（不存在返回 None；CLI query / 测试用）。
     /// #573 后走缓存索引并还原为引擎 json 文档形状（db 优先、json 回落）。
-    pub fn read_callgraph(&self, repo_path: &str) -> CoreResult<Option<serde_json::Value>> {
-        Ok(self.cached_graph(repo_path)?.map(|p| p.data.to_doc_json()))
+    pub fn read_callgraph(&self, repo_path: &str, branch: Option<&str>) -> CoreResult<Option<serde_json::Value>> {
+        Ok(self.cached_graph(repo_path, branch)?.map(|p| p.data.to_doc_json()))
     }
 }
 
@@ -467,6 +522,9 @@ fn overview_of(g: &GraphData) -> CallgraphOverview {
         entries_are_api,
         modules,
         module_edges: me,
+        // 滞后状态由调用方按实时 HEAD 盖章（OnceLock 缓存的是无状态部分）
+        generated_commit: None,
+        lagging: false,
     }
 }
 
@@ -656,7 +714,7 @@ mod tests {
         assert!(docs.iter().any(|(p, k, _)| p == CALLGRAPH_DOC_PATH && k == "graph"));
 
         // app 管线产物不内嵌 source（v2 决策）
-        let g = svc.read_callgraph(repo.to_str().unwrap()).unwrap().unwrap();
+        let g = svc.read_callgraph(repo.to_str().unwrap(), None).unwrap().unwrap();
         assert!(g["nodes"][0].get("source").is_none());
 
         // 重新生成幂等（upsert 不报错、文件覆盖）
@@ -695,13 +753,13 @@ mod tests {
         svc.generate_callchain(repo.to_str().unwrap(), &|_| {}).unwrap();
         let repo_str = repo.to_str().unwrap();
 
-        let overview_db = serde_json::to_string(&svc.callgraph_overview(repo_str).unwrap().unwrap()).unwrap();
+        let overview_db = serde_json::to_string(&svc.callgraph_overview(repo_str, None).unwrap().unwrap()).unwrap();
         let focus_db = serde_json::to_string(
-            &svc.callgraph_focus(repo_str, "app::hi", 2, 50).unwrap().unwrap(),
+            &svc.callgraph_focus(repo_str, None, "app::hi", 2, 50).unwrap().unwrap(),
         )
         .unwrap();
-        let search_db = serde_json::to_string(&svc.callgraph_search(repo_str, "hel", 20).unwrap()).unwrap();
-        let chain_db = serde_json::to_string(&svc.callgraph_chain(repo_str, "app::hi", 50).unwrap().unwrap()).unwrap();
+        let search_db = serde_json::to_string(&svc.callgraph_search(repo_str, None, "hel", 20).unwrap()).unwrap();
+        let chain_db = serde_json::to_string(&svc.callgraph_chain(repo_str, None, "app::hi", 50).unwrap().unwrap()).unwrap();
         // 走读链节点必带 routes（标题徽标/存卡/全链导出消费；#571 起曾漏发致前端崩）
         let ch: serde_json::Value = serde_json::from_str(&chain_db).unwrap();
         assert!(
@@ -711,13 +769,13 @@ mod tests {
 
         // 删 db 走 json 回落（缓存键不同，强制重载）
         std::fs::remove_file(artifacts_dir(&repo).join(CALLGRAPH_DB_FILE)).unwrap();
-        let overview_json = serde_json::to_string(&svc.callgraph_overview(repo_str).unwrap().unwrap()).unwrap();
+        let overview_json = serde_json::to_string(&svc.callgraph_overview(repo_str, None).unwrap().unwrap()).unwrap();
         let focus_json = serde_json::to_string(
-            &svc.callgraph_focus(repo_str, "app::hi", 2, 50).unwrap().unwrap(),
+            &svc.callgraph_focus(repo_str, None, "app::hi", 2, 50).unwrap().unwrap(),
         )
         .unwrap();
-        let search_json = serde_json::to_string(&svc.callgraph_search(repo_str, "hel", 20).unwrap()).unwrap();
-        let chain_json = serde_json::to_string(&svc.callgraph_chain(repo_str, "app::hi", 50).unwrap().unwrap()).unwrap();
+        let search_json = serde_json::to_string(&svc.callgraph_search(repo_str, None, "hel", 20).unwrap()).unwrap();
+        let chain_json = serde_json::to_string(&svc.callgraph_chain(repo_str, None, "app::hi", 50).unwrap().unwrap()).unwrap();
 
         assert_eq!(overview_db, overview_json, "overview 双后端不一致");
         assert_eq!(focus_db, focus_json, "focus 双后端不一致");
@@ -733,7 +791,7 @@ mod tests {
         let svc = AppService::open_at(dir.path().join("app"), dir.path().join("data")).unwrap();
         svc.generate_callchain(repo.to_str().unwrap(), &|_| {}).unwrap();
         let repo_str = repo.to_str().unwrap();
-        let before = svc.callgraph_overview(repo_str).unwrap().unwrap();
+        let before = svc.callgraph_overview(repo_str, None).unwrap().unwrap();
         assert!(before.total_nodes >= 2);
 
         // 直接覆写 db 为一张更小的图（内容长度明显不同 → 缓存键失效）
@@ -746,9 +804,64 @@ mod tests {
             "modules": {"z": {"file": "z.py", "funcs": 1}},
             "langs": {"python": 1}
         });
-        write_callgraph_db(&artifacts_dir(&repo).join(CALLGRAPH_DB_FILE), &smaller).unwrap();
-        let after = svc.callgraph_overview(repo_str).unwrap().unwrap();
+        write_callgraph_db(&artifacts_dir(&repo).join(CALLGRAPH_DB_FILE), &smaller, "zz").unwrap();
+        let after = svc.callgraph_overview(repo_str, None).unwrap().unwrap();
         assert_eq!(after.total_nodes, 1, "重写产物后缓存未失效");
+    }
+
+    /// #1 滞后检测：生成时 HEAD 与实时 HEAD 不一致 → overview.lagging
+    #[test]
+    fn overview_reports_lagging_after_head_moves() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = setup_repo(dir.path());
+        // 补齐 ref 文件让 head_commit 可解析
+        std::fs::create_dir_all(repo.join(".git/refs/heads")).unwrap();
+        std::fs::write(repo.join(".git/refs/heads/main"), "aa11bb22\n").unwrap();
+        let svc = AppService::open_at(dir.path().join("app"), dir.path().join("data")).unwrap();
+        let repo_str = repo.to_str().unwrap();
+        svc.generate_callchain(repo_str, &|_| {}).unwrap();
+
+        let fresh = svc.callgraph_overview(repo_str, None).unwrap().unwrap();
+        assert!(!fresh.lagging, "生成后即刻不滞后");
+        assert_eq!(fresh.generated_commit.as_deref(), Some("aa11bb22"));
+
+        // HEAD 前进（提交了一个新 sha）：图未重生成 → 滞后
+        std::fs::write(repo.join(".git/refs/heads/main"), "cc33dd44\n").unwrap();
+        let stale = svc.callgraph_overview(repo_str, None).unwrap().unwrap();
+        assert!(stale.lagging, "HEAD 前进后必须报滞后");
+        assert_eq!(stale.generated_commit.as_deref(), Some("aa11bb22"));
+    }
+
+    /// #3 同 commit 免重算：feature 指向 main 生成时的同一 HEAD，
+    /// 生成走复制路径（快照语义：新加的未提交文件不进图——证明没重提取）
+    #[test]
+    fn same_commit_generation_copies_from_sibling_branch() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = setup_repo(dir.path());
+        std::fs::create_dir_all(repo.join(".git/refs/heads")).unwrap();
+        std::fs::write(repo.join(".git/refs/heads/main"), "aa11bb22\n").unwrap();
+        let svc = AppService::open_at(dir.path().join("app"), dir.path().join("data")).unwrap();
+        let repo_str = repo.to_str().unwrap();
+        let main_sum = svc.generate_callchain(repo_str, &|_| {}).unwrap();
+
+        // 切 feature（同 sha），并新增一个未提交源文件——若走提取会多出节点
+        std::fs::write(repo.join(".git/HEAD"), "ref: refs/heads/feature\n").unwrap();
+        std::fs::write(repo.join(".git/refs/heads/feature"), "aa11bb22\n").unwrap();
+        std::fs::write(repo.join("extra.py"), "def extra_fn(x):\n    return x\n").unwrap();
+        let feat_sum = svc.generate_callchain(repo_str, &|_| {}).unwrap();
+
+        assert_eq!(feat_sum.nodes, main_sum.nodes, "同 commit 复制：计数与来源分支一致（未提交新文件不进图）");
+        let feat_db = crate::branch::wiki_root(&repo, "feature").join("graphs").join("callchain").join(CALLGRAPH_DB_FILE);
+        assert!(feat_db.is_file());
+        assert_eq!(
+            crate::callchain_db::db_head_commit(&feat_db).as_deref(),
+            Some("aa11bb22"),
+            "复制产物保留来源的生成时 HEAD"
+        );
+        // 指定分支只读查询：feature 分支视角可查，main 视角也可查
+        let ov = svc.callgraph_overview(repo_str, Some("main")).unwrap().unwrap();
+        assert_eq!(ov.total_nodes, main_sum.nodes);
+        assert!(!ov.lagging, "指定分支查看时按该分支视角（main 无落后）");
     }
 
     /// 真实仓库端到端验收（dev-docs 验收标准 2）：git 根走服务层路径。
@@ -795,7 +908,7 @@ mod tests {
         svc.open_repo(path).unwrap();
 
         let t0 = std::time::Instant::now();
-        let ov = svc.callgraph_overview(path).unwrap().unwrap();
+        let ov = svc.callgraph_overview(path, None).unwrap().unwrap();
         println!("overview(首次含加载) {}ms", t0.elapsed().as_millis());
         assert!(ov.total_nodes > 10_000, "ZCode 应为万级节点");
 
@@ -804,20 +917,20 @@ mod tests {
         let mut best = (u128::MAX, u128::MAX, u128::MAX, u128::MAX);
         for _ in 0..reps {
             let t = std::time::Instant::now();
-            let _ = svc.callgraph_overview(path).unwrap();
+            let _ = svc.callgraph_overview(path, None).unwrap();
             best.0 = best.0.min(t.elapsed().as_millis());
 
             let t = std::time::Instant::now();
-            let hits = svc.callgraph_search(path, "handler", 50).unwrap();
+            let hits = svc.callgraph_search(path, None, "handler", 50).unwrap();
             let _ = hits.len();
             best.1 = best.1.min(t.elapsed().as_millis());
 
             let t = std::time::Instant::now();
-            let _ = svc.callgraph_focus(path, &seed, 2, 300).unwrap();
+            let _ = svc.callgraph_focus(path, None, &seed, 2, 300).unwrap();
             best.2 = best.2.min(t.elapsed().as_millis());
 
             let t = std::time::Instant::now();
-            let chain = svc.callgraph_chain(path, &seed, 400).unwrap().unwrap();
+            let chain = svc.callgraph_chain(path, None, &seed, 400).unwrap().unwrap();
             let _ = chain.entries.len();
             best.3 = best.3.min(t.elapsed().as_millis());
         }
@@ -829,4 +942,22 @@ mod tests {
         assert!(best.2 < 50, "focus 超预算");
         assert!(best.3 < 50, "chain 超预算");
     }
+}
+
+/// 在 `.bytewiki/branches/*/graphs/callchain/` 里找记录了同一 HEAD 的产物目录
+/// （排除目标分支自身；仅 db 产物可比对——json 无 meta）
+fn find_same_commit_callgraph(root: &Path, exclude_dir: &str, head: &str) -> Option<std::path::PathBuf> {
+    let branches = root.join(".bytewiki").join("branches");
+    let rd = std::fs::read_dir(&branches).ok()?;
+    for e in rd.flatten() {
+        let name = e.file_name().to_string_lossy().into_owned();
+        if name == exclude_dir {
+            continue;
+        }
+        let db = e.path().join("graphs").join("callchain").join(CALLGRAPH_DB_FILE);
+        if db.is_file() && crate::callchain_db::db_head_commit(&db).as_deref() == Some(head) {
+            return Some(e.path().join("graphs").join("callchain"));
+        }
+    }
+    None
 }

@@ -81,6 +81,10 @@ export interface CallgraphOverview {
   entries_are_api: boolean;
   modules: string[];
   module_edges: [string, string, number][];
+  /** 生成时的 HEAD commit（无 git / json 老产物为 null） */
+  generated_commit: string | null;
+  /** 滞后：生成后 HEAD 已前进 */
+  lagging: boolean;
 }
 
 /** 调用链规则（config preferences.callchain） */
@@ -115,27 +119,33 @@ export const callchainApi = {
   callchainOnProgress: (handler: (n: number) => void): Promise<UnlistenFn> =>
     listen<number>(CALLCHAIN_EVENT, (ev) => handler(ev.payload)),
 
-  /** 大图概览（轻量：统计/入口清单/模块/模块聚合边） */
-  overview: (repoPath: string) =>
-    invoke<CallgraphOverview | null>("callgraph_overview", { path: repoPath }),
+  /** 大图概览（轻量：统计/入口清单/模块/模块聚合边；branch=null 当前分支） */
+  overview: (repoPath: string, branch?: string | null) =>
+    invoke<CallgraphOverview | null>("callgraph_overview", { path: repoPath, branch: branch ?? null }),
 
   /** BFS 子图（seed 的 N 跳双向邻域） */
-  focus: (repoPath: string, seed: string, depth?: number, cap?: number) =>
+  focus: (repoPath: string, seed: string, depth?: number, cap?: number, branch?: string | null) =>
     invoke<{ nodes: CallGraphNode[]; edges: CallgraphEdge[]; truncated: boolean; seed: string } | null>(
       "callgraph_focus",
-      { path: repoPath, seed, depth, cap },
+      { path: repoPath, branch: branch ?? null, seed, depth, cap },
     ),
 
   /** 大图搜索（后端持图） */
-  search: (repoPath: string, pattern: string, limit?: number) =>
+  search: (repoPath: string, pattern: string, limit?: number, branch?: string | null) =>
     invoke<{ id: string; qualname: string; file: string; module: string; is_entry: boolean }[]>(
       "callgraph_search",
-      { path: repoPath, pattern, limit },
+      { path: repoPath, branch: branch ?? null, pattern, limit },
     ),
 
   /** 走读链（服务端 DFS：先序 + 主路径 + 引用去重；大图不整包读） */
-  chain: (repoPath: string, root: string, cap?: number) =>
-    invoke<CallgraphChain | null>("callgraph_chain", { path: repoPath, root, cap }),
+  chain: (repoPath: string, root: string, cap?: number, branch?: string | null) =>
+    invoke<CallgraphChain | null>("callgraph_chain", { path: repoPath, branch: branch ?? null, root, cap }),
+
+  /** 分支列表（全局分支切换器数据源：git 分支 + 产物标记，当前置顶） */
+  listBranches: (repoPath: string) =>
+    invoke<
+      { name: string; current: boolean; is_default_bucket: boolean; has_wiki: boolean; has_callgraph: boolean }[]
+    >("list_branches", { path: repoPath }),
 
   /** 读取调用链规则 */
   getRules: () => invoke<CallchainRules>("get_callchain_rules"),

@@ -51,6 +51,10 @@ pub struct CallchainQueryArgs {
     /// 仓库路径
     pub repo: String,
 
+    /// 指定分支（缺省 = 当前 git 分支；只读查看其他分支产物）
+    #[arg(long)]
+    pub branch: Option<String>,
+
     /// 模糊匹配模式：qualname/name/file 包含即命中（如 "Query"、"cmd/query.rs"）
     #[arg(short, long)]
     pub grep: Option<String>,
@@ -93,7 +97,7 @@ pub async fn run_callchain_query(args: CallchainQueryArgs, json: bool) -> anyhow
 
     // 图概览（#570 大图模式的入口面板数据；#573 后毫秒级）
     if args.overview {
-        let Some(ov) = svc.callgraph_overview(&args.repo)? else {
+        let Some(ov) = svc.callgraph_overview(&args.repo, args.branch.as_deref())? else {
             anyhow::bail!("该仓库尚未生成调用链（先运行：bw callchain <repo>）");
         };
         if json {
@@ -110,6 +114,12 @@ pub async fn run_callchain_query(args: CallchainQueryArgs, json: bool) -> anyhow
                 if ov.entries_are_api { "（公共 API 回退）" } else { "" },
                 ov.modules.len()
             );
+            if ov.lagging {
+                println!(
+                    "⚠️ 图已滞后：生成于 {}，HEAD 已前进——重新生成可对齐",
+                    ov.generated_commit.as_deref().unwrap_or("?").get(..8).unwrap_or("?")
+                );
+            }
             for e in ov.entries.iter().take(args.limit) {
                 println!("  {} [{}]", e["id"].as_str().unwrap_or(""), e["file"].as_str().unwrap_or(""));
             }
@@ -119,7 +129,7 @@ pub async fn run_callchain_query(args: CallchainQueryArgs, json: bool) -> anyhow
 
     // BFS 双向子图（seed 的 N 跳邻域，节点数封顶）
     if let Some(seed) = &args.focus {
-        let Some(sub) = svc.callgraph_focus(&args.repo, seed, args.depth.max(1), args.cap.max(1))? else {
+        let Some(sub) = svc.callgraph_focus(&args.repo, args.branch.as_deref(), seed, args.depth.max(1), args.cap.max(1))? else {
             anyhow::bail!("该仓库尚未生成调用链（先运行：bw callchain <repo>）");
         };
         if json {
@@ -134,7 +144,7 @@ pub async fn run_callchain_query(args: CallchainQueryArgs, json: bool) -> anyhow
 
     // 走读链（服务端 DFS：先序、主路径贪心最深；块数封顶 --limit）
     if let Some(root) = &args.chain {
-        let Some(ch) = svc.callgraph_chain(&args.repo, root, args.limit.clamp(1, 400))? else {
+        let Some(ch) = svc.callgraph_chain(&args.repo, args.branch.as_deref(), root, args.limit.clamp(1, 400))? else {
             anyhow::bail!("该仓库尚未生成调用链（先运行：bw callchain <repo>）");
         };
         if json {
@@ -153,7 +163,7 @@ pub async fn run_callchain_query(args: CallchainQueryArgs, json: bool) -> anyhow
         return Ok(());
     }
 
-    let Some(g) = svc.read_callgraph(&args.repo)? else {
+    let Some(g) = svc.read_callgraph(&args.repo, args.branch.as_deref())? else {
         anyhow::bail!("该仓库尚未生成调用链（先运行：bw callchain <repo>）");
     };
     let nodes = g["nodes"].as_array().cloned().unwrap_or_default();

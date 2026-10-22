@@ -57,8 +57,11 @@ const tab = computed(() => (route.meta.tab as string) || "overview");
 const wikiDocs = ref<WikiDocEntry[]>([]);
 /** 大纲既定顺序的页面路径（磁盘树按大纲序渲染；骨架树内部自取 genPages 序） */
 const outlineOrder = ref<string[]>([]);
-/** 只读查看分支（null=当前分支，真实操作仅当前分支参与） */
-const viewBranch = ref<string | null>(null);
+/** 只读查看分支（全局：Navbar 分支切换器写入 store，本地 computed 代理保持既有引用） */
+const viewBranch = computed({
+  get: () => wiki.viewBranch,
+  set: (v: string | null) => wiki.setViewBranch(v),
+});
 /** 已生成且非当前的分支（空态直达） */
 const switchableBranches = computed(() =>
   generatedBranchList.value.filter((b) => b !== (wiki.currentRepo?.branch || "")),
@@ -802,7 +805,7 @@ const busy = computed(() => generating.value || updating.value || externalRunnin
 
       <!-- ============ 调用链 ============ -->
       <div v-else-if="tab === 'callgraph'" class="callgraph-pane">
-        <CallGraphPanel :repo-path="wiki.currentRepo.path" />
+        <CallGraphPanel :repo-path="wiki.currentRepo.path" :branch="viewBranch" />
       </div>
 
       <!-- ============ 对话 ============ -->
@@ -819,7 +822,7 @@ const busy = computed(() => generating.value || updating.value || externalRunnin
           </div>
         </div>
         <div class="chat-tab">
-          <ChatPanel :repo-path="wiki.currentRepo.path" @open-doc="openDocInDocs" />
+          <ChatPanel :repo-path="wiki.currentRepo.path" :branch="viewBranch" @open-doc="openDocInDocs" />
         </div>
       </div>
 
@@ -890,7 +893,7 @@ const busy = computed(() => generating.value || updating.value || externalRunnin
             <CloseOutlined />
           </button>
         </div>
-        <ChatPanel :repo-path="wiki.currentRepo.path" @open-doc="openDocInDocs" />
+        <ChatPanel :repo-path="wiki.currentRepo.path" :branch="viewBranch" @open-doc="openDocInDocs" />
       </aside>
     </div>
 
