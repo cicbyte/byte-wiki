@@ -112,3 +112,20 @@ body {
 .chain-item .call { cursor: pointer; }
 .chain-item .call:hover { color: var(--vscode-textLink-foreground); text-decoration: underline; }
 .chain-item .call .cnum { font-family: var(--vscode-editor-font-family, monospace); }
+
+/* ============ 调用链图 ============ */
+.graph-body { padding: 0; display: flex; flex-direction: column; }
+.graph-body #mode {
+  padding: 6px 14px;
+  font-size: 0.85em;
+  color: var(--vscode-descriptionForeground);
+  border-bottom: 1px solid var(--vscode-panel-border);
+  flex-shrink: 0;
+}
+.graph-body #net {
+  flex: 1;
+  min-height: 0;
+}
+.graph-body div.vis-network {
+  background: var(--vscode-editor-background) !important;
+}

@@ -101,6 +101,7 @@ pub async fn run_callchain_query(args: CallchainQueryArgs, json: bool) -> anyhow
                 "total_nodes": ov.total_nodes, "total_edges": ov.total_edges,
                 "total_entries": ov.total_entries, "entries_are_api": ov.entries_are_api,
                 "entries": ov.entries, "modules": ov.modules,
+                "module_edges": ov.module_edges,
             }));
         } else {
             println!(

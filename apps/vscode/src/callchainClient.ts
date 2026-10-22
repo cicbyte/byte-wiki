@@ -33,6 +33,8 @@ export interface Overview {
   entries_are_api: boolean;
   entries: OverviewEntry[];
   modules: string[];
+  /** 模块聚合边 [[u, v, 权重]]（模块全景图数据） */
+  module_edges?: [string, string, number][];
 }
 
 export interface ChainCallLink {

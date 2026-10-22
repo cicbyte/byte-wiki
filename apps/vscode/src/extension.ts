@@ -23,6 +23,7 @@ import { openWikiPage } from "./wikiPreview";
 import { openChainView } from "./chainView";
 import { openSourceAt } from "./sourceLocator";
 import { callchainGenerate, callchainSearch, type OverviewEntry } from "./callchainClient";
+import { openGraphView } from "./graphView";
 import * as fs from "fs";
 import * as path from "path";
 
@@ -43,6 +44,11 @@ export function activate(context: vscode.ExtensionContext): void {
     }),
     vscode.commands.registerCommand("byteWiki.refreshPages", () => pagesProvider.refresh()),
     vscode.commands.registerCommand("byteWiki.refreshCallchain", () => callchainProvider.refresh()),
+
+    // 调用链图：树条目 → 该节点 N 跳子图；裸调（视图标题栏/命令面板）→ 模块全景
+    vscode.commands.registerCommand("byteWiki.showGraph", (e?: OverviewEntry) => {
+      void openGraphView(context, e ? "focus" : "modules", e?.id);
+    }),
 
     // 设置 bw CLI 路径：本仓库构建产物快捷项 / 浏览文件 / 打开设置项
     vscode.commands.registerCommand("byteWiki.setBsPath", async () => {

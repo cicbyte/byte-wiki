@@ -67,3 +67,13 @@
 - `apps/vscode/`：`byteWiki.cliPath` 默认值与全部文案/注释/README 改为 bw；`setBsPath` 快捷项指向 `target/release/bw.exe`。
 
 **验收结果**：`bw --version` = `bw 0.1.0`；`bw callchain-query --overview/--chain/--grep` zoxide 实测通过；node spawnSync 探测 PATH `bw` 正常；扩展 tsc/esbuild 通过。已复制 `bw.exe` 到用户 PATH 目录 `C:\dev\bin\`（与旧 bs 并存，可删）。
+
+## 2026-09-21 VSCode 扩展补调用链图（#581 跟进）
+
+用户反馈扩展缺「图」。补 vis-network 画布（桌面端同款，standalone UMD 本地 vendor 离线）：
+
+- `apps/cli/src/cmd/callchain.rs`：`--overview` JSON 补 `module_edges`（模块聚合边，全景图数据）。
+- `apps/vscode/src/graphView.ts` + `media/graph.js`：调用链图 webview——模块全景（边宽=聚合调用量）与节点子图（`--focus` N 跳双向邻域，中心高亮描边）两形态；节点单击跳源码、双击换中心（模块双击自动解析为该模块下入口节点）。
+- 入口树行内加「子图」按钮、视图标题栏加「图」按钮（`byteWiki.showGraph`）。
+
+**验收结果**：zoxide overview 含 25 模块/49 聚合边实测通过；manifest/tsc/esbuild/graph.js 语法全绿；PATH `bw.exe` 已更新为含 module_edges 的构建。
