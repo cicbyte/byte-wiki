@@ -14,7 +14,7 @@ import { applyMermaidTheme, setupMermaid } from "@/composables/mermaidSetup";
 // 没访问过 MCP 页时本组件渲染裸奔（代码块工具栏/语言标签/复制按钮全无样式）
 import "md-editor-v3/lib/style.css";
 import { message } from "ant-design-vue";
-import { ZoomInOutlined, ZoomOutOutlined, ReloadOutlined, LoadingOutlined } from "@ant-design/icons-vue";
+import { ZoomInOutlined, ZoomOutOutlined, ReloadOutlined, LoadingOutlined, PrinterOutlined } from "@ant-design/icons-vue";
 import { api } from "@/api";
 import { useThemeStore } from "@/stores/theme";
 import DiagramLightbox from "./DiagramLightbox.vue";
@@ -125,6 +125,10 @@ onUnmounted(() => {
   if (figMarkTimer) clearTimeout(figMarkTimer);
 });
 
+function printPage() {
+  window.print();
+}
+
 function zoomBy(delta: number) {
   zoom.value = Math.min(3, Math.max(0.3, Math.round((zoom.value + delta) * 10) / 10));
 }
@@ -198,6 +202,9 @@ function onBodyClick(ev: MouseEvent) {
         实时生成中
       </span>
       <span v-if="loading" class="loading-hint">加载中…</span>
+      <button class="zoom-btn" title="打印 / 另存为 PDF（打印样式自动隐藏侧栏与工具栏）" @click="printPage">
+        <PrinterOutlined />
+      </button>
       <template v-if="isGraph">
         <button class="zoom-btn" title="放大" @click="zoomBy(0.1)"><ZoomInOutlined /></button>
         <button class="zoom-btn" title="缩小" @click="zoomBy(-0.1)"><ZoomOutOutlined /></button>

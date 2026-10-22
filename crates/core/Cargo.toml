@@ -44,6 +44,9 @@ tokio = { workspace = true }
 tokio-util = { version = "0.7", optional = true }
 rig-core = "0.42.0"
 
+pulldown-cmark.workspace = true
+syntect.workspace = true
+percent-encoding.workspace = true
 [dev-dependencies]
 tokio = { workspace = true }
 axum = { version = "0.8", features = ["macros"] }

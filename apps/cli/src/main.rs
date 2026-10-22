@@ -36,6 +36,8 @@ enum Commands {
     /// 列出最近登记的仓库
     Repos(cmd::ReposArgs),
     Callchain(cmd::CallchainArgs),
+    /// 导出 Wiki 为静态 HTML 站（VitePress 形态，离线自包含）
+    Export(cmd::ExportArgs),
     /// 查询既有调用链产物（节点/上下游/入口；测试用）
     CallchainQuery(cmd::CallchainQueryArgs),
     /// 运行 MCP 服务器（供 Claude Desktop / Cursor 等 AI 工具检索）
@@ -66,6 +68,7 @@ fn main() -> anyhow::Result<()> {
             Commands::Open(a) => cmd::run_open(a, cli.json).await,
             Commands::Repos(a) => cmd::run_repos(a, cli.json).await,
             Commands::Callchain(a) => cmd::run_callchain(a, cli.json).await,
+            Commands::Export(a) => cmd::run_export(a, cli.json).await,
             Commands::CallchainQuery(a) => cmd::run_callchain_query(a, cli.json).await,
             Commands::Mcp(a) => cmd::run_mcp(a).await,
             Commands::Api(a) => {

@@ -335,3 +335,42 @@ body.asset-preview-open .app-layout {
   background: var(--danger-bg) !important;
   color: var(--color-danger) !important;
 }
+
+/* ===== 打印 / 导出 PDF（#716）：只留文档正文 =====
+   WebView 打印对话框「另存为 PDF」时隐藏应用外壳（侧栏/导航/工具栏/AI 侧栏），
+   正文铺满页面宽度；文档页（docs tab）与知识卡页适用。 */
+@media print {
+  .navbar,
+  .sidebar,
+  .rs-ai-dock,
+  .viewer-toolbar,
+  .wiki-tree,
+  .cards-aside,
+  .rs-toolbar,
+  .gen-inline,
+  .viewer-empty-actions,
+  .zoom-btn {
+    display: none !important;
+  }
+  .repo-space,
+  .rs-body,
+  .rs-main,
+  .viewer-pane,
+  .wiki-viewer,
+  .viewer-body,
+  .md-host {
+    display: block !important;
+    width: 100% !important;
+    max-width: none !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    overflow: visible !important;
+    height: auto !important;
+    background: #fff !important;
+  }
+  .md-host pre,
+  .md-host table {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+}

@@ -156,6 +156,13 @@ export const generateApi = {
 
   rebuildEmbeddings: (path: string) => invoke<EmbedSummary>("rebuild_embeddings", { path }),
 
+  /** 导出 Wiki 为静态 HTML 站（dialog 选目录；取消返回 null） */
+  exportWikiHtml: (path: string, branch?: string | null) =>
+    invoke<{ out_dir: string; pages: number } | null>("export_wiki_html", {
+      path,
+      branch: branch ?? null,
+    }),
+
   /** 订阅生成进度事件，返回取消函数 */
   onGenerateEvent: (handler: (e: GenerateEvent) => void): Promise<UnlistenFn> =>
     listen<GenerateEvent>(GENERATE_EVENT, (ev) => handler(ev.payload)),

@@ -78,6 +78,7 @@ pub fn run() {
             commands::callchain::set_callchain_rules,
             commands::callchain::callgraph_overview,
             commands::callchain::list_branches,
+            commands::export::export_wiki_html,
             commands::callchain::callgraph_focus,
             commands::callchain::callgraph_search,
             commands::callchain::callgraph_chain,

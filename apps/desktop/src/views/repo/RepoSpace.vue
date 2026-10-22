@@ -22,6 +22,7 @@ import {
   BookOutlined,
   ArrowLeftOutlined,
   CloseOutlined,
+  ExportOutlined,
 } from "@ant-design/icons-vue";
 import { useLayoutStore } from "@/stores/layout";
 import { useAiStore } from "@/stores/ai";
@@ -398,6 +399,21 @@ async function refreshRepoInfo() {
 }
 
 // ===== 生成 / 更新 / 索引 =====
+/** 导出 Wiki 为自包含静态 HTML 站（VitePress 形态；dialog 选目录） */
+const exporting = ref(false);
+async function exportHtml() {
+  if (!wiki.currentRepo || exporting.value) return;
+  exporting.value = true;
+  try {
+    const sum = await api.exportWikiHtml(wiki.currentRepo.path, viewBranch.value);
+    if (sum) message.success(`已导出 ${sum.pages} 个页面 → ${sum.out_dir}（打开 index.html 离线浏览）`);
+  } catch (e) {
+    message.error(typeof e === "string" ? e : "导出失败");
+  } finally {
+    exporting.value = false;
+  }
+}
+
 async function runGenerate() {
   if (!wiki.currentRepo) return;
   generating.value = true;

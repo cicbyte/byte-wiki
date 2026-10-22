@@ -25,6 +25,7 @@ pub mod service;
 pub mod shortid;
 pub mod tasks;
 pub mod watch;
+pub mod wiki_export;
 
 #[cfg(feature = "mcp")]
 pub mod mcp;

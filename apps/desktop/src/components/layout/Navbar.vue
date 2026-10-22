@@ -429,3 +429,4 @@ const breadcrumbItems = computed(() => {
   font-size: 12px;
   color: var(--text-tertiary);
 }
+</style>

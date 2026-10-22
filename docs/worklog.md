@@ -107,3 +107,12 @@
 - 全局分支切换：Navbar 右上角分支下拉（git 分支列表 + W/C 产物标记 + 当前置顶）；wiki store 全局 `viewBranch`（RepoSpace 本地态改 store 代理）；调用链四查询 / chat RAG（repo_chat→search_similar）/ 走读链全部贯通 `branch` 参数（None=当前分支）；非当前分支只读（调用链隐藏生成入口、徽标提示，问答按该分支索引检索）；CLI `callchain-query --branch`。
 
 **验收结果**：core 94 测试全绿（新增 head_commit/git_branches 解析、滞后翻转、同 commit 复制快照语义、指定分支只读查询四类用例）；vue-tsc 零错误；workspace 编译通过；`bw --branch` 实测（koa master 正常、不存在分支回落「尚未生成」）。
+
+## 2026-09-23 Wiki 导出 HTML/PDF（#721）
+
+**变更内容**
+- `crates/core/src/wiki_export.rs`（新）：VitePress 形态静态站导出器——pulldown-cmark 渲染 + syntect 内联高亮（InspiredGitHub）+ mermaid.min.js `include_bytes!` 内嵌（自包含离线）；侧边栏按 pages/ 目录分组（根级 总览/架构 → 章节字典序 → 知识卡 → 图谱，当前页高亮）；`.md` 互链重写为相对 `.html`（中文路径百分号编码），`bw-file://` 引用中性化（文本保留出处）；`@media print` 内置（隐侧栏/防图跨页断切）。依赖：pulldown-cmark/syntect/percent-encoding（workspace + core）。
+- CLI：`bw export <repo> [--out][--branch]`（默认导出到 `<repo>/.bytewiki/export/html`）。
+- 桌面端：`export_wiki_html` 命令（tauri-plugin-dialog 选目录 + spawn_blocking）；仓库页工具栏「导出 HTML」按钮（按当前查看分支导出）；WikiViewer 工具栏打印按钮 + `global.css` 打印样式（隐藏导航/侧栏/工具栏/AI 侧栏，正文铺满）——WebView 打印对话框另存为 PDF。
+
+**验收结果**：core 95 测试全绿（新增导出用例：自包含结构/中文链接编码/高亮/frontmatter 剥离/分支校验）；workspace 编译通过；zoxide 实导出 19 页/4MB，本地 HTTP + 浏览器实测——mermaid 渲染（含子目录页 3/3，修复资产与侧边栏根相对路径 404）、CSS 加载、相对链接、当前页高亮全部通过；vue-tsc 零错误。
