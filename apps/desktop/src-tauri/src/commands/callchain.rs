@@ -104,15 +104,25 @@ pub fn get_chain_sources(
         let entry = match file_cache.get(&rel) {
             Some(lines) => lines,
             None => {
-                let full = root.join(&rel).canonicalize().map_err(|_| format!("文件不存在：{rel}"))?;
-                if !full.starts_with(&root) || full.starts_with(root.join(".git")) {
-                    return Err(format!("非法路径：{rel}"));
-                }
-                let len = std::fs::metadata(&full).map(|m| m.len()).map_err(|e| e.to_string())?;
-                if len > 4 * 1024 * 1024 {
-                    return Err(format!("文件过大：{rel}"));
-                }
-                let text = std::fs::read_to_string(&full).map_err(|e| e.to_string())?;
+                // 查看分支模式：读分支 git 快照（行号与该分支的图一致）；
+                // 当前分支读工作区实时文件（与详情面板/走读语义一致）
+                let text = match &branch {
+                    Some(b) if !b.is_empty() => byte_wiki_core::git_read::show_branch_file(
+                        &root, b, &rel,
+                    )
+                    .map_err(|e| e.to_string())?,
+                    _ => {
+                        let full = root.join(&rel).canonicalize().map_err(|_| format!("文件不存在：{rel}"))?;
+                        if !full.starts_with(&root) || full.starts_with(root.join(".git")) {
+                            return Err(format!("非法路径：{rel}"));
+                        }
+                        let len = std::fs::metadata(&full).map(|m| m.len()).map_err(|e| e.to_string())?;
+                        if len > 4 * 1024 * 1024 {
+                            return Err(format!("文件过大：{rel}"));
+                        }
+                        std::fs::read_to_string(&full).map_err(|e| e.to_string())?
+                    }
+                };
                 file_cache.entry(rel.clone()).or_insert(text.split('\n').map(|s| s.to_string()).collect())
             }
         };
