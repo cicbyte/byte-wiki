@@ -81,6 +81,7 @@ pub fn run() {
             commands::export::export_wiki_html,
             commands::generate::resync_wiki_docs,
             commands::repo::current_git_branch,
+            commands::callchain::read_repo_file_for,
             commands::callchain::callgraph_focus,
             commands::callchain::callgraph_search,
             commands::callchain::callgraph_chain,

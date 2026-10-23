@@ -894,14 +894,17 @@ async function openSourceBase(n: CallGraphNode, mode: "file" | "function") {
   sourceState.loading = true;
   sourceState.mode = mode;
   sourceState.qualname = n.qualname;
-  sourceState.file = `${n.file}:${n.lineno}-${n.end_lineno}`;
+  sourceState.file = `${n.file}:${n.lineno}-${n.end_lineno}` + (props.branch ? `  @${props.branch} 快照` : "");
   sourceState.lang = EXT_LANG[n.file.split(".").pop() ?? ""] ?? "plaintext";
   sourceState.line = n.lineno;
   sourceState.endLine = n.end_lineno;
   sourceState.startLine = mode === "function" ? n.lineno : 1;
   sourceState.content = "";
   try {
-    const text = await api.readRepoFile(props.repoPath, n.file);
+    // 只读查看其他分支：读分支快照（行号与该分支图一致）
+    const text = props.branch
+      ? await api.readRepoFileFor(props.repoPath, n.file, props.branch)
+      : await api.readRepoFile(props.repoPath, n.file);
     if (mode === "function") {
       // 仅函数体切片（end_lineno 含端）
       const lines = text.split("\n");

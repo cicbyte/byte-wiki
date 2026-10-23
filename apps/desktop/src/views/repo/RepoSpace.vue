@@ -929,6 +929,7 @@ const busy = computed(() => generating.value || updating.value || externalRunnin
         v-if="wiki.currentRepo"
         ref="sourceDrawer"
         :repo-path="wiki.currentRepo.path"
+        :branch="readonlyBranch ? viewBranch : null"
         @locate="openFileAt"
       />
 

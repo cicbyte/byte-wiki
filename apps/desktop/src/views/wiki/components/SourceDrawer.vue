@@ -16,7 +16,11 @@ export interface SourceTarget {
   endLine?: number;
 }
 
-const props = defineProps<{ repoPath: string }>();
+const props = defineProps<{
+  repoPath: string;
+  /** 查看分支（空/ null = 当前分支 → 读工作区实时文件；非空 → 读该分支 git 快照，行号与文档一致） */
+  branch?: string | null;
+}>();
 const emit = defineEmits<{ (e: "locate", t: SourceTarget): void }>();
 
 const EXT_LANG: Record<string, string> = {
@@ -53,7 +57,10 @@ async function open(t: SourceTarget) {
   state.endLine = t.endLine ?? t.startLine ?? 0;
   state.content = "";
   try {
-    const text = await api.readRepoFile(props.repoPath, t.path);
+    // 只读查看其他分支：读分支快照（工作区在其他分支上，行号会漂移）
+    const text = props.branch
+      ? await api.readRepoFileFor(props.repoPath, t.path, props.branch)
+      : await api.readRepoFile(props.repoPath, t.path);
     state.content = text;
     // 先解除 v-show 隐藏再定位：Monaco 在 display:none 容器上是 0×0 布局，
     // 隐藏态 revealLineInCenter 会被夹成空操作（automaticLayout 的重排发生在
@@ -122,6 +129,9 @@ defineExpose({ open });
         :readonly="true"
         :auto-detect="false"
       />
+      <div v-if="props.branch" class="cite-drawer-snap" title="源码取自该分支的 git 快照，行号与文档一致">
+        @{{ props.branch }} 快照
+      </div>
       <div class="cite-drawer-foot">
         <button class="btn sm" @click="locateInTree">
           <FolderOpenOutlined /> 在文件页打开（展开路径）
@@ -141,6 +151,19 @@ defineExpose({ open });
 .cite-drawer-loading {
   padding: 24px;
   color: var(--text-tertiary, #888);
+}
+.cite-drawer-snap {
+  position: absolute;
+  top: 9px;
+  right: 46px;
+  z-index: 2;
+  font-size: 10.5px;
+  font-family: var(--font-mono, monospace);
+  color: var(--color-primary);
+  background: var(--color-primary-bg, rgba(99, 102, 241, 0.1));
+  border-radius: 4px;
+  padding: 1px 7px;
+  pointer-events: none;
 }
 .cite-drawer-foot {
   display: flex;

@@ -195,7 +195,7 @@ async function load() {
       e.node.end_lineno,
     ] as [string, string, number, number]);
     try {
-      const sources = await api.getChainSources(info.path, items);
+      const sources = await api.getChainSources(info.path, items, wiki.viewBranch);
       const m = new Map(sources.map((s) => [s.id, { code: s.code, truncated: s.truncated }]));
       codeMap.value = m;
     } catch (e) {

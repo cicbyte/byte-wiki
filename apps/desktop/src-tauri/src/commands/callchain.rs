@@ -56,6 +56,18 @@ pub fn read_repo_file(repo_path: String, rel_path: String) -> Result<String, Str
     Ok(content)
 }
 
+/// 按分支读源码文件（只读查看其他分支时的章节来源/函数源码：读分支快照而非
+/// 工作区，行号与文档一致——工作区在其他分支上会严重漂移）。branch 为空 = 当前分支
+/// → 与 read_repo_file 同行为（读实时工作区）。
+#[tauri::command]
+pub fn read_repo_file_for(repo_path: String, rel_path: String, branch: String) -> Result<String, String> {
+    if branch.is_empty() {
+        return read_repo_file(repo_path, rel_path);
+    }
+    let root = std::path::Path::new(&repo_path);
+    byte_wiki_core::git_read::show_branch_file(root, &branch, &rel_path).map_err(|e| e.to_string())
+}
+
 /// 走读页单个函数源码切片
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct ChainSource {
@@ -72,6 +84,7 @@ pub struct ChainSource {
 pub fn get_chain_sources(
     repo_path: String,
     items: Vec<(String, String, usize, usize)>,
+    branch: Option<String>,
 ) -> Result<Vec<ChainSource>, String> {
     const MAX_FN_LINES: usize = 1200;
     const MAX_ITEMS: usize = 400;

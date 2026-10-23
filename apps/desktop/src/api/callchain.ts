@@ -109,11 +109,16 @@ export const callchainApi = {
   readRepoFile: (repoPath: string, relPath: string) =>
     invoke<string>("read_repo_file", { repoPath, relPath }),
 
+  /** 按分支读源码快照（只读查看其他分支：行号与该分支文档一致；branch 空 = 当前分支实时文件） */
+  readRepoFileFor: (repoPath: string, relPath: string, branch: string) =>
+    invoke<string>("read_repo_file_for", { repoPath, relPath, branch }),
+
   /** 走读页批量源码切片：(节点id, 相对路径, 起行, 止行)[]（文件去重 + 服务端切片） */
   getChainSources: (
     repoPath: string,
     items: [string, string, number, number][],
-  ) => invoke<ChainSource[]>("get_chain_sources", { repoPath, items }),
+    branch?: string | null,
+  ) => invoke<ChainSource[]>("get_chain_sources", { repoPath, items, branch: branch ?? null }),
 
   /** 订阅生成进度（已解析文件数），返回取消函数 */
   callchainOnProgress: (handler: (n: number) => void): Promise<UnlistenFn> =>

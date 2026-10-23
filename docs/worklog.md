@@ -128,3 +128,14 @@
 **验收结果**：vue-tsc 零错误；workspace 编译通过。机制依赖既有 scan 单测；用户点击原 404 条目即触发自愈（树刷新、死条目清除）。
 
 **跟进（同日）**：用户反馈点 develop 仍 404、main 正常——根因是只读判定用了打开时缓存的 `currentRepo.branch`（当时为 develop），与后端读取的实时 HEAD 口径不一致：viewBranch 恰等于过期缓存时被误判为"当前分支"，读取落到实时 HEAD 目录。修复：`current_git_branch` 轻量命令（读 .git/HEAD）；`refreshDocs` 开头对齐 `currentRepo.branch` 到实时值，判定/读取/分支标记三口径统一。vue-tsc 与 workspace 编译通过。
+
+## 2026-09-24 章节来源按查看分支读 git 快照（#723）
+
+**决策**：只读查看其他分支的 Wiki/调用链时，代码引用必须与文档同分支（不同分支进度差异致工作区行号漂移严重）。当前分支语义不变（实时工作区）。
+
+**变更内容**
+- `crates/core/src/git_read.rs`（新）：`show_branch_file`（spawn `git show <branch>:<path>` 读分支 tip 快照；分支名白名单防选项注入、路径拒 `..`/绝对、4MB 上限、二进制检测——与 read_repo_file 同口径）。
+- 命令：`read_repo_file_for`（branch 空 = 回落实时文件）；`get_chain_sources` 加 branch 参数（查看分支模式逐文件 git show，文件去重）。
+- 前端：SourceDrawer（章节来源）与 CallGraphPanel 源码抽屉按 `:branch` 读快照并显示「@<分支> 快照」标记；走读页源码批量取带 `wiki.viewBranch`。
+
+**验收结果**：core 96 测试全绿（新增 git_read 用例：快照≠工作区、跨分支内容隔离、非法分支名/路径逃逸拒绝）；vue-tsc 零错误；workspace 编译通过。
