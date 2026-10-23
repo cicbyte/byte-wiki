@@ -21,6 +21,7 @@ import {
   HistoryOutlined,
   CaretRightOutlined,
   DeleteOutlined,
+  EditOutlined,
   BulbOutlined,
   DownOutlined,
   RightOutlined,
@@ -79,9 +80,16 @@ function scrollToBottom() {
 
 let unDelta: (() => void) | null = null;
 let unThink: (() => void) | null = null;
+let ctxOutsideCloser: ((e: MouseEvent) => void) | null = null;
 
 onMounted(async () => {
   restoreChat();
+  document.addEventListener("click", closeCtxMenu);
+  ctxOutsideCloser = (e: MouseEvent) => {
+    // 菜单外右键：关菜单（列表项自身的 contextmenu 由 openCtxMenu 处理并开新菜单）
+    if (!(e.target as HTMLElement).closest(".sess-item, .bw-sess-item")) closeCtxMenu();
+  };
+  document.addEventListener("contextmenu", ctxOutsideCloser);
   // 模型选择数据源（启用且配置了对话模型的供应商）
   try {
     const c = await api.getLlmConfig();
@@ -109,6 +117,8 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   unDelta?.();
   unThink?.();
+  if (ctxOutsideCloser) document.removeEventListener("contextmenu", ctxOutsideCloser);
+  document.removeEventListener("click", closeCtxMenu);
 });
 
 async function ask() {
@@ -296,6 +306,41 @@ function switchChat(id: string) {
   scrollToBottom();
 }
 
+// ===== 会话右键菜单（重命名 / 删除；两个形态共用）=====
+const ctxMenu = ref<{ x: number; y: number; id: string; title: string } | null>(null);
+function openCtxMenu(e: MouseEvent, s: StoredSession) {
+  e.preventDefault();
+  ctxMenu.value = { x: e.clientX, y: e.clientY, id: s.id, title: s.title };
+}
+function closeCtxMenu() {
+  ctxMenu.value = null;
+}
+
+/** 重命名：行内编辑（Enter/失焦提交，Esc 取消） */
+const renamingId = ref<string | null>(null);
+const renameBuf = ref("");
+function startRename(id: string, title: string) {
+  closeCtxMenu();
+  renamingId.value = id;
+  renameBuf.value = title;
+}
+function commitRename() {
+  const id = renamingId.value;
+  const name = renameBuf.value.trim();
+  renamingId.value = null;
+  if (!id || !name) return;
+  const store = loadChats();
+  const hit = store.sessions.find((s) => s.id === id);
+  if (hit && hit.title !== name) {
+    hit.title = name.slice(0, 60);
+    saveChats(store);
+    chatSessions.value = store.sessions;
+  }
+}
+function cancelRename() {
+  renamingId.value = null;
+}
+
 function removeChat(id: string) {
   if (asking.value) return;
   const store = loadChats();
@@ -447,12 +492,26 @@ function fmtSource(p: string) {
           class="sess-item"
           :class="{ active: s.id === activeChatId }"
           @click="switchChat(s.id)"
+          @contextmenu.prevent="openCtxMenu($event, s)"
+          @dblclick="startRename(s.id, s.title)"
         >
-          <span class="si-title">{{ s.title }}</span>
-          <span class="si-time">{{ fmtSessionTime(s.ts) }}</span>
-          <button class="si-del" title="删除此对话" @click.stop="removeChat(s.id)">
-            <DeleteOutlined />
-          </button>
+          <input
+            v-if="renamingId === s.id"
+            class="si-rename"
+            v-model="renameBuf"
+            autofocus
+            @keydown.enter.prevent="commitRename"
+            @keydown.esc.prevent="cancelRename"
+            @blur="commitRename"
+            @click.stop
+          />
+          <template v-else>
+            <span class="si-title">{{ s.title }}</span>
+            <span class="si-time">{{ fmtSessionTime(s.ts) }}</span>
+            <button class="si-del" title="删除此对话" @click.stop="removeChat(s.id)">
+              <DeleteOutlined />
+            </button>
+          </template>
         </div>
         <div v-if="!sortedSessions.length" class="sess-empty">暂无历史对话<br />提问后自动保存</div>
       </div>
@@ -478,12 +537,26 @@ function fmtSource(p: string) {
                 class="bw-sess-item"
                 :class="{ active: s.id === activeChatId }"
                 @click="switchChat(s.id)"
+                @contextmenu.prevent="openCtxMenu($event, s)"
+                @dblclick="startRename(s.id, s.title)"
               >
-                <span class="bs-title">{{ s.title }}</span>
-                <span class="bs-time">{{ fmtSessionTime(s.ts) }}</span>
-                <button class="bs-del" title="删除此对话" @click.stop="removeChat(s.id)">
-                  <DeleteOutlined />
-                </button>
+                <input
+                  v-if="renamingId === s.id"
+                  class="si-rename"
+                  v-model="renameBuf"
+                  autofocus
+                  @keydown.enter.prevent="commitRename"
+                  @keydown.esc.prevent="cancelRename"
+                  @blur="commitRename"
+                  @click.stop
+                />
+                <template v-else>
+                  <span class="bs-title">{{ s.title }}</span>
+                  <span class="bs-time">{{ fmtSessionTime(s.ts) }}</span>
+                  <button class="bs-del" title="删除此对话" @click.stop="removeChat(s.id)">
+                    <DeleteOutlined />
+                  </button>
+                </template>
               </div>
               <div v-if="!sortedSessions.length" class="bw-sess-empty">暂无历史对话</div>
             </div>
@@ -603,6 +676,22 @@ function fmtSource(p: string) {
         </div>
       </div>
     </div><!-- /chat-main -->
+
+    <!-- 会话右键菜单（fixed 定位；两形态共用） -->
+    <div
+      v-if="ctxMenu"
+      class="sess-ctx-menu"
+      :style="{ left: ctxMenu.x + 'px', top: ctxMenu.y + 'px' }"
+      @click.stop
+      @contextmenu.prevent
+    >
+      <button class="scx-item" @click="startRename(ctxMenu.id, ctxMenu.title)">
+        <EditOutlined /> 重命名
+      </button>
+      <button class="scx-item danger" @click="closeCtxMenu(); removeChat(ctxMenu.id)">
+        <DeleteOutlined /> 删除对话
+      </button>
+    </div>
 
     <!-- 出处抽屉：点击出处芯片就地渲染对应 Wiki 文档（与源码抽屉同交互） -->
     <a-drawer
@@ -733,6 +822,53 @@ function fmtSource(p: string) {
   font-size: 11.5px;
   color: var(--text-tertiary);
   line-height: 1.8;
+}
+
+/* 会话右键菜单 + 行内重命名（两形态共用） */
+.si-rename {
+  width: 100%;
+  font-size: 12.5px;
+  padding: 2px 6px;
+  border: 1px solid var(--color-primary-border);
+  border-radius: var(--radius-xs);
+  background: var(--bg-input);
+  color: var(--text-primary);
+  outline: none;
+}
+.sess-ctx-menu {
+  position: fixed;
+  z-index: 1200;
+  min-width: 132px;
+  background: var(--bg-elevated, var(--bg-card));
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.16);
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.scx-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: none;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 12.5px;
+  padding: 6px 10px;
+  border-radius: var(--radius-xs);
+  cursor: pointer;
+  text-align: left;
+}
+.scx-item:hover {
+  background: var(--bg-surface);
+}
+.scx-item.danger {
+  color: var(--color-danger, #e5484d);
+}
+.scx-item.danger:hover {
+  background: color-mix(in srgb, var(--color-danger, #e5484d) 8%, transparent);
 }
 
 /* ===== compact（AI 侧栏）：当前会话标题行 ===== */
