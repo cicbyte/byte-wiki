@@ -318,6 +318,15 @@ fn chunk_wiki_dir(wiki: &Path, out: &mut Vec<(String, String)>) {
             Ok(r) => r.to_string_lossy().replace('\\', "/"),
             Err(_) => continue,
         };
+        // 机器产物不进检索：graphs/（调用链 json/db、依赖图）与根级清单
+        // （outline/index/.gen-meta）——曾把 callgraph.json 切块入库，
+        // 对话出处芯片出现「callgraph.json」即此来源
+        let name = rel.rsplit('/').next().unwrap_or(&rel);
+        if rel.starts_with("graphs/")
+            || matches!(name, "index.json" | "outline.json" | ".gen-meta.json")
+        {
+            continue;
+        }
         let rel = format!(".bytewiki/{rel}");
         let Ok(content) = std::fs::read_to_string(entry.path()) else { continue };
         if ext == "mmd" {

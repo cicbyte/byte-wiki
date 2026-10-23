@@ -871,14 +871,9 @@ const busy = computed(() => generating.value || updating.value || externalRunnin
             {{ wiki.currentRepo.name }}
             <em v-if="wiki.currentRepo.branch">@{{ wiki.currentRepo.branch }}</em>
           </span>
-          <div class="browse-actions">
-            <button class="btn" @click="router.push(`/repo/${repoId}/docs`)">
-              <FileTextOutlined /> 文档
-            </button>
-          </div>
         </div>
         <div class="chat-tab">
-          <ChatPanel :repo-path="wiki.currentRepo.path" :branch="viewBranch" @open-doc="openDocInDocs" />
+          <ChatPanel :repo-path="wiki.currentRepo.path" :branch="viewBranch" />
         </div>
       </div>
 
@@ -951,7 +946,7 @@ const busy = computed(() => generating.value || updating.value || externalRunnin
             <CloseOutlined />
           </button>
         </div>
-        <ChatPanel :repo-path="wiki.currentRepo.path" :branch="viewBranch" @open-doc="openDocInDocs" />
+        <ChatPanel :repo-path="wiki.currentRepo.path" :branch="viewBranch" compact />
       </aside>
     </div>
 

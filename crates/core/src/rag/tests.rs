@@ -433,3 +433,25 @@ async fn real_incremental_smoke() {
     let u2 = svc.update_wiki(repo.to_str().unwrap(), &|_| {}).await.unwrap();
     assert!(u2.unchanged);
 }
+
+/// 机器产物不进检索：graphs/（调用链 json/db）与根级清单（outline/index/gen-meta）
+/// 不产块——出处芯片曾出现「callgraph.json」即此源头污染。
+#[test]
+fn chunk_wiki_dir_skips_machine_artifacts() {
+    let dir = tempfile::tempdir().unwrap();
+    let wiki = dir.path().join("branches/main");
+    std::fs::create_dir_all(wiki.join("graphs/callchain")).unwrap();
+    std::fs::create_dir_all(wiki.join("pages")).unwrap();
+    std::fs::write(wiki.join("graphs/callchain/callgraph.json"), "{\"nodes\":[1,2,3]}").unwrap();
+    std::fs::write(wiki.join("outline.json"), "{\"pages\":[]}").unwrap();
+    std::fs::write(wiki.join(".gen-meta.json"), "{}").unwrap();
+    std::fs::write(wiki.join("pages/a.md"), "# A\n\n## 概览\n\n内容\n").unwrap();
+
+    let mut chunks: Vec<(String, String)> = Vec::new();
+    chunk_wiki_dir(&wiki, &mut chunks);
+    assert!(!chunks.is_empty(), "正常页面仍入库");
+    assert!(
+        chunks.iter().all(|(p, _)| p.ends_with("pages/a.md")),
+        "仅文档页产块，实际：{chunks:?}"
+    );
+}

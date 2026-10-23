@@ -141,3 +141,29 @@
 **验收结果**：core 96 测试全绿（新增 git_read 用例：快照≠工作区、跨分支内容隔离、非法分支名/路径逃逸拒绝）；vue-tsc 零错误；workspace 编译通过。
 
 **跟进（09-24）**：用户反馈右上角切换分支后文档树不刷新——Navbar 全局切换器只写 store，RepoSpace 无 watch（原 switchViewBranch 调用方已随 WikiTree 下拉移除消失）。修复：`watch(wiki.viewBranch)` 统一响应（清 currentDoc + refreshDocs + refreshStaleness），switchViewBranch/backToCurrentBranch 收敛为只设值；Navbar 与 WikiTree 两入口共享同一条刷新路径。vue-tsc 零错误。
+
+## 2026-09-24 AI 对话：记录持久化 + 出处抽屉（#730）
+
+**变更内容**（`ChatPanel.vue` 为主）
+- 会话持久化：localStorage 按仓库键 `bw:chat:<repoPath>`——问答收尾/清空时写精简时间线（文本+sources，thinking 不入库，上限 400 条），挂载与仓库切换恢复；「清空」同步删存储。
+- 出处可点：芯片点击改右侧抽屉就地渲染对应 Wiki 文档（`readWikiDocFor` 按查看分支读，MdStreamPreview 渲染；cards 走共享根），失败抽屉内提示；删除原 open-doc 跳页链路（ChatPanel emit + RepoSpace 绑定）。
+
+**验收结果**：vue-tsc 零错误（HMR 生效）。
+
+## 2026-09-24 RAG 索引排除机器产物（#731）
+
+**根因**：对话出处出现「callgraph.json」——`chunk_wiki_dir` 无差别吃分支目录下全部文本文件，调用链 json 与 outline/index 等机器清单被切块入向量库。
+
+**变更内容**
+- `crates/core/src/rag/mod.rs`：分块前过滤 `graphs/`（调用链/依赖图）与根级 `index.json`/`outline.json`/`.gen-meta.json`；新增回归测试（rag/tests.rs：三类产物仅文档页产块）。
+- `ChatPanel.vue`：非 md 出处提示改为「机器产物出处（重建向量索引后将不再出现）」。
+
+**验收结果**：core 97 测试全绿（含新增用例）；vue-tsc 零错误。既有污染需在仓库页点「重建向量索引」（替换式重建）清掉。
+
+## 2026-09-24 AI 对话多会话（#730 跟进）
+
+**变更内容**（`ChatPanel.vue`）：存储升级 v2（`{sessions:[{id,title,ts,items}], activeId}`，v1 单会话数组自动迁移）；顶部工具行——「新对话」（当前自动存历史）、「历史（N）」下拉（标题=首问截断+时间，激活态高亮，hover 显删除）、「清空」改删当前会话；会话上限 30/每会话 400 条（localStorage 配额保护）；空会话不落盘；切换/新建先 persist 当前。
+
+**验收结果**：vue-tsc 零错误（HMR 生效）。
+
+**再跟进（同日）**：会话管理重设计（去按钮化）——chat 页为左侧会话栏（新建按钮 + 会话列表：标题/时间/激活高亮/hover 删除/空态提示），对话主区右侧；AI 侧栏（窄容器）compact 形态：顶部当前会话标题，点击弹会话列表弹层（含新建/删除）；删除顶部「新对话/历史/清空」按钮行。重构中模板闭合错位两轮（python 大块替换残留），最终整体重写 template 区块并经 compiler-sfc 解析验证。
