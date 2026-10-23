@@ -375,19 +375,29 @@ async function refreshDocs() {
   }
 }
 
-/** 切换查看分支（只读；不切换 git，仅文档视图） */
-async function switchViewBranch(b: string) {
+/** 切换查看分支（只读；不切换 git，仅文档视图）。
+ *  只设值——刷新统一由下方 watch(viewBranch) 响应（Navbar 全局切换器也走 store，
+ *  两条入口共享同一条刷新路径，避免各自为政漏刷） */
+function switchViewBranch(b: string) {
   viewBranch.value = b || null;
-  currentDoc.value = "";
-  await refreshDocs();
 }
 
 /** 回到当前分支（退出只读查看） */
-async function backToCurrentBranch() {
+function backToCurrentBranch() {
   viewBranch.value = null;
-  currentDoc.value = "";
-  await refreshDocs();
 }
+
+/** 全局查看分支变化（Navbar 图标 / WikiTree 入口）→ 文档树、选中态、
+ *  滞后报告全部按新分支视角重载；树残留旧分支条目是「文档不存在」的直接来源 */
+watch(
+  () => wiki.viewBranch,
+  async () => {
+    currentDoc.value = "";
+    staleReport.value = null;
+    await refreshDocs();
+    void refreshStaleness();
+  },
+);
 
 async function refreshStaleness() {
   if (!wiki.currentRepo) {

@@ -139,3 +139,5 @@
 - 前端：SourceDrawer（章节来源）与 CallGraphPanel 源码抽屉按 `:branch` 读快照并显示「@<分支> 快照」标记；走读页源码批量取带 `wiki.viewBranch`。
 
 **验收结果**：core 96 测试全绿（新增 git_read 用例：快照≠工作区、跨分支内容隔离、非法分支名/路径逃逸拒绝）；vue-tsc 零错误；workspace 编译通过。
+
+**跟进（09-24）**：用户反馈右上角切换分支后文档树不刷新——Navbar 全局切换器只写 store，RepoSpace 无 watch（原 switchViewBranch 调用方已随 WikiTree 下拉移除消失）。修复：`watch(wiki.viewBranch)` 统一响应（清 currentDoc + refreshDocs + refreshStaleness），switchViewBranch/backToCurrentBranch 收敛为只设值；Navbar 与 WikiTree 两入口共享同一条刷新路径。vue-tsc 零错误。
