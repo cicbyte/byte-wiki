@@ -22,6 +22,7 @@ import {
   DoubleRightOutlined,
   CaretRightOutlined,
   ExpandOutlined,
+  FilterOutlined,
   NodeIndexOutlined,
   ShrinkOutlined,
   CopyOutlined,
@@ -52,6 +53,9 @@ const props = defineProps<{
 
 /** 规则管理弹层（按项目：规则是仓库级语义决策，随仓库走） */
 const rulesOpen = ref(false);
+/** 筛选面板（模块/视图收进 popover——浮动条只留搜索与筛选胶囊） */
+const filterPopOpen = ref(false);
+const filterCount = computed(() => (moduleFilter.value ? 1 : 0) + (viewFilter.value ? 1 : 0));
 
 const themeStore = useThemeStore();
 const ai = useAiStore();
@@ -594,6 +598,8 @@ function buildGraph() {
   network?.destroy();
   network = new Network(canvasEl.value, { nodes: vnodes, edges: vedges }, buildOptions(true));
   attachEvents(network);
+  // 建图后恢复筛选态（切子图/重建后淡出不丢；opacity 更新不触发层级重排）
+  if (filterCount.value) applyFilter();
 
   // 第二段（坐标固化）：初次布局完成后取坐标种入 DataSet，
   // 销毁并以 hierarchical:false 重建——出生即固化。不再用「运行时 setOptions 关
@@ -622,10 +628,13 @@ function buildGraph() {
 
 // ===== 筛选 / 聚焦 =====
 function applyFilter() {
-  if (!vnodes || !data.value) return;
+  if (!vnodes || !vedges || !data.value) return;
   const q = search.value.trim().toLowerCase();
   const mv = moduleFilter.value;
   const ev = viewFilter.value;
+  // 筛选可感知：被过滤的节点/边淡出保结构感（而不是消失）——一眼看出
+  // 当前被什么筛着，清除后图恢复
+  const match = new Map<string, boolean>();
   const updates = data.value.nodes.map((n) => {
     let show = true;
     if (mv && n.module !== mv) show = false;
@@ -635,9 +644,22 @@ function applyFilter() {
       const hay = (n.qualname + " " + n.module + " " + n.routes.join(" ")).toLowerCase();
       if (!hay.includes(q)) show = false;
     }
-    return { id: n.id, hidden: !show };
+    match.set(n.id, show);
+    return { id: n.id, opacity: show ? 1 : 0.08 };
   });
   vnodes.update(updates);
+  // 边：两端都命中才亮，否则淡出（原色统一，color 对象整体替换即可）
+  vedges.update(
+    data.value.edges.map((e, i) => ({
+      id: `e${i}`,
+      color: {
+        color: canvasColors.value.edge,
+        highlight: "#e8a33d",
+        hover: "#5aa2ff",
+        opacity: (match.get(e.src) ?? true) && (match.get(e.dst) ?? true) ? 1 : 0.06,
+      },
+    })),
+  );
 }
 
 function onSearchInput() {
@@ -1125,13 +1147,13 @@ let srcDecorations: { clear(): void } | null = null;
             <ReloadOutlined :spin="generating" /> {{ generating ? "生成中…" : "生成调用链" }}
           </button>
         </div>
-        <!-- 浮动工具条：半透明不遮图，悬停加深 -->
+        <!-- 浮动工具条：只留搜索 + 筛选胶囊（操作收右下，统计降左下） -->
         <div v-if="data && !missing" class="cg-float-bar">
           <span class="cg-bigsearch-wrap">
             <a-input
               v-model:value="search"
               placeholder="搜索…"
-              style="width: 148px"
+              style="width: 180px"
               size="small"
               allow-clear
               @input="onSearchInput"
@@ -1151,38 +1173,67 @@ let srcDecorations: { clear(): void } | null = null;
               </div>
             </div>
           </span>
-          <a-select
-            v-model:value="moduleFilter"
-            :options="moduleOptions"
-            placeholder="模块"
-            style="width: 116px"
-            size="small"
-            allow-clear
-            @change="applyFilter"
-          />
-          <a-select
-            v-model:value="viewFilter"
-            :options="[
-              { label: '全部', value: '' },
-              { label: '仅入口', value: 'entry' },
-              { label: '仅 Hub', value: 'hub' },
-            ]"
-            style="width: 92px"
-            size="small"
-            @change="applyFilter"
-          />
+          <a-popover
+            v-model:open="filterPopOpen"
+            trigger="click"
+            placement="bottom"
+            overlay-class-name="bw-filter-pop"
+          >
+            <button class="fb-chip" :class="{ on: filterCount > 0 }" title="筛选（模块 / 视图）">
+              <FilterOutlined /> 筛选
+              <span v-if="filterCount" class="fb-chip-count">{{ filterCount }}</span>
+            </button>
+            <template #content>
+              <div class="bw-filter-list">
+                <div class="bw-filter-row">
+                  <span class="bw-filter-label">模块</span>
+                  <a-select
+                    v-model:value="moduleFilter"
+                    :options="moduleOptions"
+                    size="small"
+                    style="width: 220px"
+                    allow-clear
+                    :popup-match-select-width="false"
+                    :dropdown-style="{ maxWidth: '520px' }"
+                    @change="applyFilter"
+                  />
+                </div>
+                <div class="bw-filter-row">
+                  <span class="bw-filter-label">视图</span>
+                  <a-select
+                    v-model:value="viewFilter"
+                    :options="[
+                      { label: '全部', value: '' },
+                      { label: '仅入口', value: 'entry' },
+                      { label: '仅 Hub', value: 'hub' },
+                    ]"
+                    size="small"
+                    style="width: 220px"
+                    @change="applyFilter"
+                  />
+                </div>
+                <button v-if="filterCount" class="bw-filter-clear" @click="moduleFilter = ''; viewFilter = ''; applyFilter()">
+                  清除筛选
+                </button>
+              </div>
+            </template>
+          </a-popover>
+        </div>
+
+        <!-- 统计（只读信息：左下角淡字，不占操作位；生成中显示进度） -->
+        <div v-if="data && !missing" class="cg-stats-quiet">
+          <span v-if="generating" class="live">{{ progressText || "生成中…" }}</span>
+          <template v-else>
+            函数 {{ stats?.nodes ?? 0 }} · 边 {{ stats?.edges ?? 0 }} · 模块 {{ stats?.modules ?? 0 }} · 入口 {{ stats?.entries ?? 0 }}
+          </template>
+        </div>
+
+        <!-- 右下垂直工具条（图谱查看器经典位：视图操作 + 管理操作） -->
+        <div v-if="data && !missing" class="cg-tools-rail">
           <button class="fb-btn" title="重置视图" @click="resetView"><ClearOutlined /></button>
           <button class="fb-btn" title="画布全屏（Esc 退出）" @click="toggleCanvasFullscreen">
             <ExpandOutlined />
           </button>
-        </div>
-
-        <!-- 统计/重生成徽标（右下；生成中显示进度） -->
-        <div v-if="data && !missing" class="cg-stats-pill">
-          <span v-if="generating" class="pill-text live">{{ progressText || "生成中…" }}</span>
-          <span v-else class="pill-text">
-            函数 {{ stats?.nodes ?? 0 }} · 边 {{ stats?.edges ?? 0 }} · 模块 {{ stats?.modules ?? 0 }} · 入口 {{ stats?.entries ?? 0 }}
-          </span>
           <button class="fb-btn" title="本项目调用链规则（文件排除/入口排除/自定义入口）" @click="rulesOpen = true">
             <SettingOutlined />
           </button>
@@ -1379,29 +1430,73 @@ let srcDecorations: { clear(): void } | null = null;
   opacity: 0.4;
   cursor: not-allowed;
 }
-/* 统计/重生成徽标（右下） */
-.cg-stats-pill {
+/* 统计（左下角淡字：只读信息，不占操作位） */
+.cg-stats-quiet {
   position: absolute;
-  right: 10px;
+  left: 10px;
   bottom: 8px;
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 3px 6px 3px 10px;
-  background: color-mix(in srgb, var(--bg-card) 78%, transparent);
-  backdrop-filter: blur(6px);
-  border: 1px solid var(--border-light);
-  border-radius: 999px;
-  z-index: 5;
-}
-.pill-text {
   font-size: 11px;
   color: var(--text-tertiary);
   font-family: "JetBrains Mono", monospace;
   white-space: nowrap;
+  z-index: 5;
+  pointer-events: none;
 }
-.pill-text.live {
+.cg-stats-quiet .live {
   color: var(--color-primary);
+}
+
+/* 筛选胶囊（浮动条；激活染色 + 计数角标） */
+.fb-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  padding: 0 10px;
+  border: 1px solid var(--border-light);
+  background: color-mix(in srgb, var(--bg-card) 78%, transparent);
+  backdrop-filter: blur(6px);
+  border-radius: 999px;
+  color: var(--text-secondary);
+  font-size: 11.5px;
+  cursor: pointer;
+  transition: color var(--transition-fast), border-color var(--transition-fast), background var(--transition-fast);
+}
+.fb-chip:hover {
+  color: var(--text-primary);
+  border-color: var(--color-primary-border);
+}
+.fb-chip.on {
+  color: var(--color-primary);
+  border-color: var(--color-primary-border);
+  background: var(--color-primary-bg);
+}
+.fb-chip-count {
+  min-width: 15px;
+  height: 15px;
+  line-height: 15px;
+  text-align: center;
+  font-size: 10px;
+  background: var(--color-primary);
+  color: #fff;
+  border-radius: 999px;
+  padding: 0 4px;
+}
+
+/* 右下垂直工具条（视图操作 + 管理操作） */
+.cg-tools-rail {
+  position: absolute;
+  right: 10px;
+  bottom: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 4px;
+  background: color-mix(in srgb, var(--bg-card) 78%, transparent);
+  backdrop-filter: blur(6px);
+  border: 1px solid var(--border-light);
+  border-radius: 10px;
+  z-index: 5;
 }
 .cg-focus-note {
   font-size: 12px;
@@ -2052,5 +2147,37 @@ let srcDecorations: { clear(): void } | null = null;
   text-overflow: ellipsis;
   white-space: nowrap;
   max-width: 150px;
+}
+</style>
+
+<style>
+/* 筛选 popover（a-popover 传送层挂 body，scoped 不命中） */
+.bw-filter-pop .bw-filter-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.bw-filter-pop .bw-filter-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.bw-filter-pop .bw-filter-label {
+  width: 34px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.bw-filter-pop .bw-filter-clear {
+  align-self: flex-end;
+  border: none;
+  background: transparent;
+  color: var(--color-primary);
+  font-size: 12px;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+.bw-filter-pop .bw-filter-clear:hover {
+  background: var(--color-primary-bg);
 }
 </style>
