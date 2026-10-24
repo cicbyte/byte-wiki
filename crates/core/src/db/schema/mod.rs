@@ -35,6 +35,10 @@ pub fn run_migrations(conn: &Connection) -> CoreResult<()> {
         v5_repo_origin_url(conn)?;
         version = 5;
     }
+    if version < 6 {
+        v6_repo_callchain_rules(conn)?;
+        version = 6;
+    }
     let _ = version;
     Ok(())
 }
@@ -250,6 +254,15 @@ fn v4_repo_exclude_patterns(conn: &Connection) -> CoreResult<()> {
     Ok(())
 }
 
+/// v6：repos 加 callchain_rules（JSON 对象，可空）——调用链规则按项目管理
+/// （文件排除/入口排除/入口正则是对具体仓库的语义决策，全局共享必然串台）。
+/// NULL = 未自定义，读取时回落全局 preferences.callchain（平滑兼容旧配置）
+fn v6_repo_callchain_rules(conn: &Connection) -> CoreResult<()> {
+    conn.execute_batch("ALTER TABLE repos ADD COLUMN callchain_rules TEXT;")?;
+    conn.pragma_update(None, "user_version", 6)?;
+    Ok(())
+}
+
 /// v5：repos 加 origin_url——远程克隆的来源地址（本地打开为空）
 fn v5_repo_origin_url(conn: &Connection) -> CoreResult<()> {
     conn.execute_batch(
@@ -269,7 +282,7 @@ mod tests {
         run_migrations(&conn).unwrap();
         run_migrations(&conn).unwrap();
         let v: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
-        assert_eq!(v, 5);
+        assert_eq!(v, 6); // 随最新迁移版本更新（当前 v6：repos.callchain_rules）
     }
 
     #[test]

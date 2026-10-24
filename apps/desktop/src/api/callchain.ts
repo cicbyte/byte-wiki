@@ -152,9 +152,10 @@ export const callchainApi = {
       { name: string; current: boolean; is_default_bucket: boolean; has_wiki: boolean; has_callgraph: boolean }[]
     >("list_branches", { path: repoPath }),
 
-  /** 读取调用链规则 */
-  getRules: () => invoke<CallchainRules>("get_callchain_rules"),
+  /** 读取调用链规则（按仓库；未自定义时后端回落全局/默认） */
+  getRules: (repoPath: string) => invoke<CallchainRules>("get_callchain_rules", { repoPath }),
 
-  /** 保存调用链规则（重新生成调用链后生效） */
-  setRules: (rules: CallchainRules) => invoke<void>("set_callchain_rules", { rules }),
+  /** 保存调用链规则（**按仓库持久化**；重新生成调用链后生效） */
+  setRules: (repoPath: string, rules: CallchainRules) =>
+    invoke<void>("set_callchain_rules", { repoPath, rules }),
 };

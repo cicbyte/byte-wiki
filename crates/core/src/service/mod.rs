@@ -129,11 +129,30 @@ impl AppService {
         self.db.set_repo_exclude_patterns(&canon, patterns)
     }
 
-    /// 保存调用链规则（config preferences.callchain）
-    pub fn set_callchain_rules(&self, rules: crate::model::CallchainRules) -> CoreResult<()> {
-        let mut cfg = self.config()?;
-        cfg.preferences.callchain = rules;
-        write_config(&self.data_root, &cfg)
+    /// 保存调用链规则（**按仓库持久化**——规则是具体仓库的语义决策，
+    /// 全局共享会串台；存 repos.callchain_rules JSON）
+    pub fn set_callchain_rules(
+        &self,
+        repo_path: &str,
+        rules: crate::model::CallchainRules,
+    ) -> CoreResult<()> {
+        let canon = crate::canonical_key(Path::new(repo_path))?;
+        let json = serde_json::to_string(&rules)?;
+        self.db.set_repo_callchain_rules(&canon, &json)
+    }
+
+    /// 读调用链规则：仓库自定义 → 全局 config（旧全局配置平滑兼容）→ 默认值
+    pub fn get_callchain_rules(&self, repo_path: &str) -> CoreResult<crate::model::CallchainRules> {
+        let canon = crate::canonical_key(Path::new(repo_path))?;
+        if let Some(json) = self.db.get_repo_callchain_rules(&canon)? {
+            if let Ok(r) = serde_json::from_str(&json) {
+                return Ok(r);
+            }
+        }
+        Ok(self
+            .config()
+            .map(|c| c.preferences.callchain)
+            .unwrap_or_default())
     }
 
     /// 大纲 agent 开关（默认开；测试关闭走单发）

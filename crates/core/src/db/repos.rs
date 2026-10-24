@@ -111,6 +111,30 @@ impl Database {
         )?;
         Ok(())
     }
+
+    /// 读仓库的调用链规则（JSON 原文；None = 未自定义，调用方回落全局配置）
+    pub fn get_repo_callchain_rules(&self, path: &str) -> CoreResult<Option<String>> {
+        let conn = self.lock()?;
+        let v: Option<String> = conn
+            .query_row(
+                "SELECT callchain_rules FROM repos WHERE path = ?1",
+                params![path],
+                |r| r.get(0),
+            )
+            .optional()?
+            .flatten();
+        Ok(v)
+    }
+
+    /// 写仓库的调用链规则（JSON 序列化后按仓库持久化；null_json = 清除自定义回落默认）
+    pub fn set_repo_callchain_rules(&self, path: &str, json: &str) -> CoreResult<()> {
+        let conn = self.lock()?;
+        conn.execute(
+            "UPDATE repos SET callchain_rules = ?1 WHERE path = ?2",
+            params![json, path],
+        )?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]

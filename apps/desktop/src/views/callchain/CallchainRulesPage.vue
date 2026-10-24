@@ -9,6 +9,9 @@
  * 保存后对新生成的调用链生效（既有产物需重新生成）。
  */
 import { onMounted, ref } from "vue";
+
+/** 归属仓库（规则按项目管理——各仓库语义决策互不相干） */
+const props = defineProps<{ repoPath: string }>();
 import { message } from "ant-design-vue";
 import { callchainApi } from "@/api/callchain";
 import type { CallchainRules } from "@/api/callchain";
@@ -22,7 +25,7 @@ const entryRegex = ref("");
 async function load() {
   loading.value = true;
   try {
-    const r = await callchainApi.getRules();
+    const r = await callchainApi.getRules(props.repoPath);
     excludeText.value = r.exclude_globs.join("\n");
     entryExcludeText.value = r.entry_exclude_globs.join("\n");
     entryRegex.value = r.entry_regex ?? "";
@@ -44,7 +47,7 @@ async function save() {
       entry_exclude_globs: split(entryExcludeText.value),
       entry_regex: entryRegex.value.trim() || null,
     };
-    await callchainApi.setRules(rules);
+    await callchainApi.setRules(props.repoPath, rules);
     message.success("规则已保存，重新生成调用链后生效");
   } catch (e: any) {
     message.error(typeof e === "string" ? e : "保存失败");

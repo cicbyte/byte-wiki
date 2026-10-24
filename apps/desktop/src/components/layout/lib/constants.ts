@@ -66,7 +66,7 @@ export const menuGroups: MenuGroup[] = [
     label: "系统",
     icon: SettingOutlined,
     children: [
-      { key: "/callchain-rules", icon: NodeIndexOutlined, label: "调用链规则" },
+      // 调用链规则已按项目管理（跟随仓库），入口在调用链画布浮动条 ⚙
       { key: "/settings", icon: SettingOutlined, label: "设置" },
     ],
   },

@@ -61,13 +61,7 @@ const routes = [
     component: () => import("@/views/repo/RepoSpace.vue"),
     meta: { title: "模型日志", tab: "llm-logs", fullsize: true },
   },
-      {
-      path: "/callchain-rules",
-      name: "callchain-rules",
-      meta: { title: "调用链规则" },
-      component: () => import("@/views/callchain/CallchainRulesPage.vue"),
-    },
-{
+  {
     path: "/tasks",
     name: "gen-tasks",
     component: () => import("@/views/tasks/TasksPage.vue"),

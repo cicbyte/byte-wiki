@@ -167,3 +167,15 @@
 **验收结果**：vue-tsc 零错误（HMR 生效）。
 
 **再跟进（同日）**：会话管理重设计（去按钮化）——chat 页为左侧会话栏（新建按钮 + 会话列表：标题/时间/激活高亮/hover 删除/空态提示），对话主区右侧；AI 侧栏（窄容器）compact 形态：顶部当前会话标题，点击弹会话列表弹层（含新建/删除）；删除顶部「新对话/历史/清空」按钮行。重构中模板闭合错位两轮（python 大块替换残留），最终整体重写 template 区块并经 compiler-sfc 解析验证。
+
+## 2026-09-24 调用链规则按项目管理（#730 后续）
+
+用户指出规则不应全局共享——规则是具体仓库的语义决策（build.rs 噪声、tests/** 等），全局必然串台。
+
+**变更内容**
+- db：v6 迁移 `repos` 加 `callchain_rules`（JSON 可空；NULL=未自定义）；`get/set_repo_callchain_rules` 读写。
+- core：`AppService::get_callchain_rules(repo_path)`（仓自定义 → 全局 config 兼容回落 → 默认）/ `set_callchain_rules(repo_path, rules)` 按仓持久化；`generate_callchain` 读仓规则。
+- 桌面端：get/set 命令与 api 加 `repo_path`；CallchainRulesPage 改接收 `repoPath` 的项目内嵌组件；CallGraphPanel 浮动条加「规则」按钮弹模态；删除全局 `/callchain-rules` 路由（规则跟随项目走）。
+- 测试：仓库间规则隔离（A 自定义 B 读默认）+ 生成端消费仓规则（exclude_globs 挡文件→零节点）；schema 幂等断言随版本更新到 v6。
+
+**验收结果**：core 98 测试全绿；workspace 编译通过；vue-tsc 零错误。

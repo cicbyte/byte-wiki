@@ -30,6 +30,7 @@ import {
   FunctionOutlined,
   FileOutlined,
   ReadOutlined,
+  SettingOutlined,
 } from "@ant-design/icons-vue";
 import { DataSet, Network } from "vis-network/standalone";
 import { api } from "@/api";
@@ -41,12 +42,16 @@ import type { EditorContextMenuItem } from "@/components/editor/SnippetEditor.vu
 import { monaco } from "@/monaco/setup";
 import EmptyState from "@/components/common/EmptyState.vue";
 import SnippetEditor from "@/components/editor/SnippetEditor.vue";
+import CallchainRulesPage from "@/views/callchain/CallchainRulesPage.vue";
 
 const props = defineProps<{
   repoPath: string;
   /** 查看分支（null=当前 git 分支；非当前分支为只读查看，生成入口隐藏） */
   branch?: string | null;
 }>();
+
+/** 规则管理弹层（按项目：规则是仓库级语义决策，随仓库走） */
+const rulesOpen = ref(false);
 
 const themeStore = useThemeStore();
 const ai = useAiStore();
@@ -1178,6 +1183,9 @@ let srcDecorations: { clear(): void } | null = null;
           <span v-else class="pill-text">
             函数 {{ stats?.nodes ?? 0 }} · 边 {{ stats?.edges ?? 0 }} · 模块 {{ stats?.modules ?? 0 }} · 入口 {{ stats?.entries ?? 0 }}
           </span>
+          <button class="fb-btn" title="本项目调用链规则（文件排除/入口排除/自定义入口）" @click="rulesOpen = true">
+            <SettingOutlined />
+          </button>
           <button
             v-if="!branch"
             class="fb-btn"
@@ -1282,6 +1290,17 @@ let srcDecorations: { clear(): void } | null = null;
         </div>
       </aside>
     </div>
+
+    <!-- 规则管理（按项目；抽屉形态与全应用一致） -->
+    <a-drawer
+      v-model:open="rulesOpen"
+      title="本项目调用链规则"
+      width="52%"
+      placement="right"
+      :body-style="{ padding: '4px 24px 24px' }"
+    >
+      <CallchainRulesPage v-if="rulesOpen" :repo-path="repoPath" />
+    </a-drawer>
 
     <!-- 源码抽屉（Monaco 读实时文件 + 定位行） -->
     <a-drawer

@@ -159,11 +159,9 @@ impl AppService {
         if let Ok(cfg) = self.config() {
             excludes.extend(cfg.preferences.exclude_dirs);
         }
-        // 规则管理：文件排除 / 入口排除 / 自定义入口正则（config preferences.callchain）
-        let rules = self
-            .config()
-            .map(|c| c.preferences.callchain)
-            .unwrap_or_default();
+        // 规则管理：文件排除 / 入口排除 / 自定义入口正则（**按仓库**读取：
+        // repos.callchain_rules → 全局 config 回落 → 默认）
+        let rules = self.get_callchain_rules(repo_path).unwrap_or_default();
         let entry_re = rules
             .entry_regex
             .as_deref()
@@ -807,6 +805,44 @@ mod tests {
         write_callgraph_db(&artifacts_dir(&repo).join(CALLGRAPH_DB_FILE), &smaller, "zz").unwrap();
         let after = svc.callgraph_overview(repo_str, None).unwrap().unwrap();
         assert_eq!(after.total_nodes, 1, "重写产物后缓存未失效");
+    }
+
+    /// #调用链规则按项目管理：仓库间互不串台；未自定义回落默认
+    #[test]
+    fn callchain_rules_persisted_per_repo() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo_a = setup_repo(dir.path());
+        // 第二个仓（同一 app 服务内登记）
+        let repo_b = dir.path().join("repo2");
+        std::fs::create_dir_all(repo_b.join(".git")).unwrap();
+        std::fs::write(repo_b.join(".git/HEAD"), "ref: refs/heads/main
+").unwrap();
+        std::fs::write(repo_b.join("app.py"), "def hi():
+    return 1
+").unwrap();
+        let svc = AppService::open_at(dir.path().join("app"), dir.path().join("data")).unwrap();
+        svc.open_repo(repo_b.to_str().unwrap()).unwrap();
+
+        // A 自定义规则
+        let rules = crate::model::CallchainRules {
+            exclude_globs: vec!["*.py".into()],
+            entry_exclude_globs: vec![],
+            entry_regex: Some("^my_".into()),
+        };
+        svc.set_callchain_rules(repo_a.to_str().unwrap(), rules).unwrap();
+
+        // 隔离：A 读回自定义；B 未设置读默认（默认 entry_exclude 有 build.rs 等）
+        let ra = svc.get_callchain_rules(repo_a.to_str().unwrap()).unwrap();
+        assert_eq!(ra.exclude_globs, vec!["*.py".to_string()]);
+        assert_eq!(ra.entry_regex.as_deref(), Some("^my_"));
+        let rb = svc.get_callchain_rules(repo_b.to_str().unwrap()).unwrap();
+        assert!(rb.exclude_globs.is_empty(), "B 不应读到 A 的规则");
+        assert!(rb.entry_regex.is_none());
+        assert!(!rb.entry_exclude_globs.is_empty(), "B 回落默认入口排除表");
+
+        // 生成端消费仓规则：A 的 *.py 排除把 app.py 挡掉 → 零节点
+        let sum = svc.generate_callchain(repo_a.to_str().unwrap(), &|_| {}).unwrap();
+        assert_eq!(sum.nodes, 0, "仓规则 exclude_globs 必须作用于生成");
     }
 
     /// #1 滞后检测：生成时 HEAD 与实时 HEAD 不一致 → overview.lagging
