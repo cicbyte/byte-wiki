@@ -1348,7 +1348,7 @@ let srcDecorations: { clear(): void } | null = null;
       title="本项目调用链规则"
       width="52%"
       placement="right"
-      :body-style="{ padding: '4px 24px 24px' }"
+      :body-style="{ padding: '4px 24px 0' }"
     >
       <CallchainRulesPage v-if="rulesOpen" :repo-path="repoPath" />
     </a-drawer>
