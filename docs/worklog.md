@@ -204,3 +204,19 @@
 - **P3 LSP 精确化**：`crates/core/src/lsp.rs` 自研极简 stdio JSON-RPC client（~300 行无 LSP 框架依赖），对 heuristic/receiver 边按 (line,col) 发 `textDocument/definition`，命中图内节点升级 `kind=precise` 并可改写目标；local 边调用点作就绪探针（语义真值，`documentSymbol` 句法早出会误判就绪）、byte→UTF-16 列换算、瞬态错误重试、工具缺失 fail-fast。接线 `bw callchain <repo> --refine` 与画布工具条 ⚡ 按钮。
 
 **验收结果**：引擎 28 测、core 107 测全绿，workspace 编译零错，vue-tsc 零错误。真机端到端：temp cargo 工程 heuristic 边升级 precise 通过；真仓 byte-code-cli 综合验收——增量第二次生成解析 0/复用 36 文件，LSP 精化 345 候选中 228 条升级 precise（其中 32 条原启发边连错人被改写目标）、117 条诚实保留 heuristic。real_repos_e2e 三仓照常通过。
+
+## 2026-09-26 调用链可视化演进路线图（#737）
+
+基于 GitNexus 图浏览器拆解（Sigma/WebGL + 自研 tree/circles 布局 + 动效 + 面板），整理 byte-wiki 调用链画布演进路线图，入 bcode 文档中枢 `docs/design/callgraph-visualization-roadmap.md`。核心判断：tree/circles 的视觉冲击是布局数学而非渲染引擎魔法，确定性布局可不换引擎移植（自算坐标 + vis preset）。
+
+**路线图内容**：阶段 A 确定性布局（tree 分层：模块→文件→函数；circles 同心环按类型分圈、同模块扇区相邻）；阶段 B 交互手感（深度滑块/镜头飞行/爆炸半径脉冲）；阶段 C Sigma.js 迁移（暂缓，触发条件=全图卡顿成为实际痛点）；另列邻接借鉴方向（epistemic 下界自报/解析缓存版本台账/预计算成答工具面/wiki 生成补强）。实施顺序：A+B 一批做，C 按触发另行立项。
+
+**验收结果**：文档已发布 bcode 文档中枢（6.4KB）。
+
+## 2026-09-26 调用链画布可视化阶段 A+B（#738，路线图 docs/design/callgraph-visualization-roadmap.md）
+
+**变更内容**
+- **A 确定性布局**：新增 `graph-layouts.ts`——tree（架构分层：入口→导出→其他，层内按模块→文件→行号摊开、超宽换行）与 circles（角色三环、同模块连续扇区、环半径随节点数外扩）纯坐标布局（Map<id,{x,y}>，与渲染引擎解耦）；画布侧 tree/circles 用 preset 一次性建网，flow（现有有向分层冻结）不动；工具条加布局切换弹层（ClusterOutlined，三态，激活只变色）。
+- **B 交互手感**：详情栏「视觉深度」分段控件（全部/1-4 跳，选中节点双向 BFS 邻域外走 opacity 淡出管线，换锚点重算）；jumpTo 镜头飞行（500ms easeInOutQuad）；选中爆炸半径一次性脉冲（1 跳邻域边框呼吸 900ms；>3k 节点与 prefers-reduced-motion 自动关闭）；resetView 连带清深度。
+
+**验收结果**：vue-tsc 零错误；布局数学实证通过（tree 层序/36 换行、circles 环序递增/同模块扇区连续仅边界回绕跳变）。

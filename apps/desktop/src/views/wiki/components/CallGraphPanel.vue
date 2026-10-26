@@ -33,10 +33,13 @@ import {
   ReadOutlined,
   SettingOutlined,
   ThunderboltOutlined,
+  ApartmentOutlined,
+  PieChartOutlined,
 } from "@ant-design/icons-vue";
 import { DataSet, Network } from "vis-network/standalone";
 import { api } from "@/api";
 import { callchainApi } from "@/api/callchain";
+import { computeLayout, type LayoutMode } from "./graph-layouts";
 import type { CallgraphData, CallGraphNode, CallgraphEdge, CallgraphOverview } from "@/api/callchain";
 import { useThemeStore } from "@/stores/theme";
 import { useAiStore } from "@/stores/ai";
@@ -169,6 +172,11 @@ function onZenEsc(e: KeyboardEvent) {
   if (e.key === "Escape" && canvasZen.value) exitImmersive();
 }
 const selectedId = ref<string | null>(null);
+/** 布局模式（路线图阶段 A）：flow=现有有向分层冻结 / tree=架构分层 / circles=同心环 */
+const layoutMode = ref<LayoutMode>("flow");
+const layoutPopOpen = ref(false);
+/** 视觉深度（阶段 B）：以选中节点为中心 N 跳双向邻域外淡出；0=关 */
+const focusDepth = ref(0);
 const focusNote = ref("");
 const sourceState = reactive({
   open: false,
@@ -581,6 +589,8 @@ function buildGraph() {
     net.on("click", (params: any) => {
       if (params.nodes.length) {
         selectedId.value = params.nodes[0];
+        if (focusDepth.value) applyFilter(); // 深度过滤换锚点重算
+        pulseAround(params.nodes[0]);
       }
     });
     net.on("doubleClick", (params: any) => {
@@ -600,12 +610,29 @@ function buildGraph() {
     edges: { smooth: { enabled: true, type: "cubicBezier", roundness: 0.5 } },
   });
 
+  // 建图后恢复筛选态（切子图/重建后淡出不丢；opacity 更新不触发层级重排）
+  const restoreFilter = () => {
+    if (filterCount.value || focusDepth.value) applyFilter();
+  };
+
+  // 阶段 A：tree/circles 用自研坐标一次性建网（preset + physics 关）；
+  // flow 走下方两段式（hierarchical 布局 → 600ms 坐标固化重建）
+  const layoutPos = computeLayout(layoutMode.value, d.nodes);
+  if (layoutPos) {
+    vnodes.update([...layoutPos].map(([id, p]) => ({ id, x: p.x, y: p.y })));
+    network?.destroy();
+    network = new Network(canvasEl.value, { nodes: vnodes, edges: vedges }, buildOptions(false));
+    attachEvents(network);
+    network.fit({ animation: false });
+    restoreFilter();
+    return;
+  }
+
   // 第一段：hierarchical 初次布局
   network?.destroy();
   network = new Network(canvasEl.value, { nodes: vnodes, edges: vedges }, buildOptions(true));
   attachEvents(network);
-  // 建图后恢复筛选态（切子图/重建后淡出不丢；opacity 更新不触发层级重排）
-  if (filterCount.value) applyFilter();
+  restoreFilter();
 
   // 第二段（坐标固化）：初次布局完成后取坐标种入 DataSet，
   // 销毁并以 hierarchical:false 重建——出生即固化。不再用「运行时 setOptions 关
@@ -638,6 +665,8 @@ function applyFilter() {
   const q = search.value.trim().toLowerCase();
   const mv = moduleFilter.value;
   const ev = viewFilter.value;
+  // 视觉深度（阶段 B）：选中节点 N 跳双向邻域外淡出，与模块/视图筛选叠加
+  const depthKeep = depthKeepSet();
   // 筛选可感知：被过滤的节点/边淡出保结构感（而不是消失）——一眼看出
   // 当前被什么筛着，清除后图恢复
   const match = new Map<string, boolean>();
@@ -646,6 +675,7 @@ function applyFilter() {
     if (mv && n.module !== mv) show = false;
     if (ev === "entry" && !n.is_entry) show = false;
     if (ev === "hub" && n.callers < 10) show = false;
+    if (depthKeep && !depthKeep.has(n.id)) show = false;
     if (q) {
       const hay = (n.qualname + " " + n.module + " " + n.routes.join(" ")).toLowerCase();
       if (!hay.includes(q)) show = false;
@@ -666,6 +696,81 @@ function applyFilter() {
       },
     })),
   );
+}
+
+// ===== 交互手感（路线图阶段 B） =====
+
+function reducedMotion(): boolean {
+  return !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+}
+
+/** 深度过滤邻域：选中节点 N 跳双向 BFS（0 跳/未选中 = 不启用） */
+function depthKeepSet(): Set<string> | null {
+  if (!focusDepth.value || !selectedId.value || !data.value) return null;
+  const keep = new Set<string>([selectedId.value]);
+  let frontier = [selectedId.value];
+  for (let d = 0; d < focusDepth.value; d++) {
+    const next: string[] = [];
+    for (const id of frontier) {
+      for (const e of outEdges.get(id) ?? []) {
+        if (!keep.has(e.dst)) {
+          keep.add(e.dst);
+          next.push(e.dst);
+        }
+      }
+      for (const e of inEdges.get(id) ?? []) {
+        if (!keep.has(e.src)) {
+          keep.add(e.src);
+          next.push(e.src);
+        }
+      }
+    }
+    frontier = next;
+  }
+  return keep;
+}
+
+function setDepth(d: number) {
+  focusDepth.value = d;
+  applyFilter();
+}
+
+function baseBorder(id: string): number {
+  return nodeById.get(id)?.is_entry ? 2 : 1;
+}
+
+let pulseRaf = 0;
+/** 爆炸半径一次性脉冲：选中节点 1 跳邻域边框呼吸一圈（大图/减动效偏好自动关） */
+function pulseAround(id: string) {
+  if (pulseRaf) cancelAnimationFrame(pulseRaf);
+  if (!vnodes || !data.value) return;
+  // 脉冲是逐帧批量更新——只在子图规模启用（全图会掉帧），减动效偏好是逃生门
+  if (data.value.nodes.length > 3000 || reducedMotion()) return;
+  const ring = new Set<string>([id]);
+  for (const e of outEdges.get(id) ?? []) ring.add(e.dst);
+  for (const e of inEdges.get(id) ?? []) ring.add(e.src);
+  const ids = [...ring];
+  const t0 = performance.now();
+  const DUR = 900;
+  const step = () => {
+    const t = (performance.now() - t0) / DUR;
+    const amp = t >= 1 ? 0 : Math.sin(Math.PI * t) * 3;
+    vnodes!.update(ids.map((nid) => ({ id: nid, borderWidth: baseBorder(nid) + amp })));
+    pulseRaf = t >= 1 ? 0 : requestAnimationFrame(step);
+  };
+  pulseRaf = requestAnimationFrame(step);
+}
+
+/** 布局切换：整图重建（DataSet/网络全量重走 buildGraph；O(n) 重建可接受） */
+function setLayoutMode(mode: LayoutMode) {
+  if (mode === layoutMode.value) {
+    layoutPopOpen.value = false;
+    return;
+  }
+  layoutMode.value = mode;
+  layoutPopOpen.value = false;
+  if (freezeTimer) clearTimeout(freezeTimer);
+  buildGraph();
 }
 
 function onSearchInput() {
@@ -756,6 +861,7 @@ function resetView() {
   search.value = "";
   moduleFilter.value = "";
   viewFilter.value = "";
+  focusDepth.value = 0;
   focusNote.value = "";
   applyFilter();
   network?.fit({ animation: false });
@@ -764,7 +870,13 @@ function resetView() {
 function jumpTo(id: string) {
   selectedId.value = id;
   network?.selectNodes([id]);
-  network?.focus(id, { scale: 1.1, animation: false });
+  // 阶段 B：镜头飞行（减动效偏好时瞬切）；深度过滤开启时选中换锚点需重算
+  network?.focus(id, {
+    scale: 1.1,
+    animation: reducedMotion() ? false : { duration: 500, easingFunction: "easeInOutQuad" },
+  });
+  if (focusDepth.value) applyFilter();
+  pulseAround(id);
 }
 
 // ===== 链路走读入口 =====
@@ -1255,6 +1367,32 @@ let srcDecorations: { clear(): void } | null = null;
 
         <!-- 右下垂直工具条（图谱查看器经典位：视图操作 + 管理操作） -->
         <div v-if="data && !missing" class="cg-tools-rail">
+          <a-popover
+            v-model:open="layoutPopOpen"
+            trigger="click"
+            placement="left"
+            overlay-class-name="bw-layout-pop"
+          >
+            <template #content>
+              <div class="bw-layout-list">
+                <button class="bw-layout-row" :class="{ on: layoutMode === 'flow' }" @click="setLayoutMode('flow')">
+                  <NodeIndexOutlined /> 有向分层（默认）
+                </button>
+                <button class="bw-layout-row" :class="{ on: layoutMode === 'tree' }" @click="setLayoutMode('tree')">
+                  <ApartmentOutlined /> 架构分层（入口/导出/其他）
+                </button>
+                <button class="bw-layout-row" :class="{ on: layoutMode === 'circles' }" @click="setLayoutMode('circles')">
+                  <PieChartOutlined /> 同心环（同模块成扇区）
+                </button>
+              </div>
+            </template>
+            <button
+              class="fb-btn"
+              :title="`布局模式（当前：${layoutMode === 'flow' ? '有向分层' : layoutMode === 'tree' ? '架构分层' : '同心环'}）`"
+            >
+              <ClusterOutlined />
+            </button>
+          </a-popover>
           <button class="fb-btn" title="重置视图" @click="resetView"><ClearOutlined /></button>
           <button class="fb-btn" title="画布全屏（Esc 退出）" @click="toggleCanvasFullscreen">
             <ExpandOutlined />
@@ -1340,6 +1478,19 @@ let srcDecorations: { clear(): void } | null = null;
               </button>
               <button class="btn sm" @click="openSource(selected)">
                 <FileOutlined /> 整个文件
+              </button>
+            </div>
+            <!-- 视觉深度（阶段 B）：以选中节点为中心 N 跳双向外淡出 -->
+            <div class="cg-depth-row" title="以选中节点为中心，N 跳双向邻域外淡出">
+              <span class="cg-depth-label">视觉深度</span>
+              <button
+                v-for="d in [0, 1, 2, 3, 4]"
+                :key="d"
+                class="cg-depth-btn"
+                :class="{ on: focusDepth === d }"
+                @click="setDepth(d)"
+              >
+                {{ d === 0 ? "全部" : d + " 跳" }}
               </button>
             </div>
           </div>
@@ -2210,5 +2361,60 @@ let srcDecorations: { clear(): void } | null = null;
 }
 .bw-filter-pop .bw-filter-clear:hover {
   background: var(--color-primary-bg);
+}
+/* 布局切换弹层（激活态只变色） */
+.bw-layout-pop .bw-layout-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.bw-layout-pop .bw-layout-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 4px;
+  text-align: left;
+}
+.bw-layout-pop .bw-layout-row:hover {
+  color: var(--color-primary);
+}
+.bw-layout-pop .bw-layout-row.on {
+  color: var(--color-primary);
+}
+/* 视觉深度（详情栏；全局块：类名唯一，避免 scoped 锚点漂移） */
+.cg-depth-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 10px;
+}
+.cg-depth-label {
+  font-size: 11.5px;
+  color: var(--text-tertiary);
+  margin-right: 2px;
+}
+.cg-depth-btn {
+  border: 1px solid var(--border-base);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 11px;
+  border-radius: 4px;
+  padding: 1px 8px;
+  cursor: pointer;
+  transition: color var(--transition-fast), border-color var(--transition-fast);
+}
+.cg-depth-btn:hover {
+  color: var(--color-primary);
+  border-color: var(--color-primary-border);
+}
+.cg-depth-btn.on {
+  color: var(--color-primary);
+  border-color: var(--color-primary);
 }
 </style>
