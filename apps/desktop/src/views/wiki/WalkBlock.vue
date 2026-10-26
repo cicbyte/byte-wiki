@@ -12,7 +12,16 @@ export interface WalkCallLink {
   targetNum: string;
   targetName: string;
   line: number; // 源文件行号（1-based）
+  /** 边类型：local/heuristic/receiver/event（~ = 同名启发，ev = 事件合成） */
   kind: string;
+}
+
+/** 断点（边界报告）：本块内未连边的调用点 */
+export interface WalkBreak {
+  name: string;
+  recv: string | null;
+  line: number;
+  candidates: string[];
 }
 
 const props = defineProps<{
@@ -26,6 +35,7 @@ const props = defineProps<{
   truncated: boolean;
   routes: string[];
   callLinks: WalkCallLink[];
+  breaks: WalkBreak[];
   expanded: boolean;
   index: number;
 }>();
@@ -168,7 +178,23 @@ const ext = () => props.file.split(".").pop() ?? "";
       >
         <span class="wk-link-line">L{{ l.line }}</span> → {{ l.targetNum }} {{ l.targetName }}
         <em v-if="l.kind === 'heuristic'">~</em>
+        <em v-else-if="l.kind === 'event'">ev</em>
       </button>
+    </div>
+
+    <!-- 断链边界报告：本块内没连上边的调用点（断在哪、可能到哪） -->
+    <div v-if="breaks.length" class="wk-breaks">
+      <span class="wk-breaks-title">断点</span>
+      <span
+        v-for="(b, i) in breaks"
+        :key="i"
+        class="wk-break"
+        :title="b.candidates.length ? `候选目标：${b.candidates.join('、')}` : '无候选（动态分派/外部符号）'"
+      >
+        <span class="wk-link-line">L{{ b.line }}</span> {{ b.name
+        }}{{ b.recv ? ` @ ${b.recv}` : "" }}
+        <em v-if="b.candidates.length">{{ b.candidates.length }} 候选</em>
+      </span>
     </div>
 
     <!-- v-show 而非 v-if：折叠只隐藏不销毁——v-if 重建编辑器后会跳过单次守卫的 ensureEditor，高度同步丢失导致代码区塌成 0 高 -->
@@ -293,6 +319,32 @@ const ext = () => props.file.split(".").pop() ?? "";
 }
 .wk-link-line {
   color: var(--text-tertiary);
+}
+.wk-breaks {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 12px;
+  border-bottom: 1px dashed var(--border-light);
+  background: var(--bg-input);
+}
+.wk-breaks-title {
+  font-size: 10.5px;
+  color: var(--text-tertiary);
+  flex-shrink: 0;
+}
+.wk-break {
+  border: 1px dashed color-mix(in srgb, var(--color-warning) 55%, transparent);
+  color: var(--color-warning);
+  font-size: 11px;
+  border-radius: 999px;
+  padding: 1px 8px;
+  font-family: "JetBrains Mono", monospace;
+}
+.wk-break em {
+  font-style: normal;
+  opacity: 0.75;
 }
 .wk-code {
   position: relative;

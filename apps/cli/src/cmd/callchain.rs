@@ -8,10 +8,32 @@ use super::open_service;
 pub struct CallchainArgs {
     /// 仓库路径（需已在 bs/桌面端打开登记）
     pub repo: String,
+
+    /// LSP 精确化：不重新生成，把既有产物的 heuristic/receiver 边经
+    /// rust-analyzer definition 升级为 precise（需本机 rust-analyzer）
+    #[arg(long)]
+    pub refine: bool,
 }
 
 pub async fn run_callchain(args: CallchainArgs, json: bool) -> anyhow::Result<()> {
     let svc = open_service(json)?;
+
+    // LSP 精确化（P3）
+    if args.refine {
+        let s = svc.refine_callgraph_lsp(&args.repo, &|done, total| {
+            tracing::info!("LSP 精确化：{done}/{total}");
+        })?;
+        if json {
+            println!("{}", serde_json::to_value(&s)?);
+        } else {
+            println!(
+                "🎯 LSP 精确化完成：候选 {} · 解析 {} · 升级 precise {}（改写目标 {}）· 未解析 {}（{}ms）",
+                s.targets, s.resolved, s.upgraded, s.retargeted, s.unresolved, s.duration_ms
+            );
+        }
+        return Ok(());
+    }
+
     let summary = svc.generate_callchain(&args.repo, &|n| {
         tracing::info!("调用链：已解析 {n} 个源文件");
     })?;
@@ -25,6 +47,8 @@ pub async fn run_callchain(args: CallchainArgs, json: bool) -> anyhow::Result<()
                 "entries": summary.entries,
                 "modules": summary.modules,
                 "langs": summary.langs,
+                "parsed_files": summary.parsed_files,
+                "reused_files": summary.reused_files,
                 "duration_ms": summary.duration_ms,
             })
         );
@@ -36,8 +60,9 @@ pub async fn run_callchain(args: CallchainArgs, json: bool) -> anyhow::Result<()
             .collect::<Vec<_>>()
             .join(" ");
         println!(
-            "✅ 调用链已生成：函数 {} · 调用边 {} · 入口 {} · 模块 {} · 语言 {}（{}ms）",
-            summary.nodes, summary.edges, summary.entries, summary.modules, langs, summary.duration_ms
+            "✅ 调用链已生成：函数 {} · 调用边 {} · 入口 {} · 模块 {} · 语言 {}（{}ms，解析 {} 文件 / 缓存复用 {}）",
+            summary.nodes, summary.edges, summary.entries, summary.modules, langs,
+            summary.duration_ms, summary.parsed_files, summary.reused_files
         );
         println!("   产物：{}", summary.out_path);
     }

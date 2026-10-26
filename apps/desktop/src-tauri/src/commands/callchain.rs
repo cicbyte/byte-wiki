@@ -270,3 +270,17 @@ pub fn callgraph_chain(
     svc.callgraph_chain(&path, branch.as_deref(), &root, cap.unwrap_or(400))
         .map_err(|e| e.to_string())
 }
+
+/// LSP 精确化（P3）：heuristic/receiver 边经 rust-analyzer definition 升级为
+/// precise（秒级 LSP 握手 + 批量请求，走 spawn_blocking 不阻塞主线程）
+#[tauri::command]
+pub async fn refine_callgraph_lsp(
+    state: tauri::State<'_, AppState>,
+    path: String,
+) -> Result<byte_wiki_core::lsp::LspRefineSummary, String> {
+    let svc = Arc::clone(&state.svc);
+    tauri::async_runtime::spawn_blocking(move || svc.refine_callgraph_lsp(&path, &|_, _| {}))
+        .await
+        .map_err(|e| format!("精化任务执行失败：{e}"))?
+        .map_err(|e| e.to_string())
+}

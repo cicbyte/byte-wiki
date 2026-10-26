@@ -193,3 +193,14 @@
 **跟进（09-25）**：规则抽屉内容重设计（去「抽屉套弹窗」感）——拆独立页壳（760px 居中 / h2 大标题 / rule-card 卡片 / 页尾按钮区），改为原生抽屉表单：intro 一行 + 三分节轻排版（节标题 + 右侧 hint + 说明 + 输入区，分隔线）+ 吸底操作条（恢复默认/保存）。另修筛选模块下拉长路径截断：`popupMatchSelectWidth=false` 弹层自适应（上限 520px）+ 框加宽 220px。vue-tsc 零错误。
 
 **再跟进（同日）**：规则抽屉改 **tab + 表格**形态——a-tabs 分三类（入口排除 / 文件排除页签带计数角标、自定义入口正则独立页签），两个 glob 规则改 a-table 行内管理（模式列内联输入、行删除、虚线「添加」、空态引导文案），正则为单值表单；数据结构由 textarea 多行字符串改为 string[] 数组（保存时空行过滤）。vue-tsc 零错误。
+
+## 2026-09-25 调用链能力升级三部曲（#734：增量更新 / 事件合成边+断链边界报告 / LSP 精确化）
+
+按 reference 双 codegraph 分析结论依次落地三阶段。
+
+**变更内容**
+- **P1 增量更新**：引擎拆「单文件提取 + 全局消解」两段，`extract_with_cache` 以 FNV 指纹判真变更——未变文件整条复用提取结果免 tree-sitter，消解始终全量重放（新符号自动「复活」老文件里原先连不上边的调用点）。callgraph.db v2 新增 `file_recs`（增量缓存）/`unresolved_refs`（未连边调用点含候选目标）表与 `edges.col` 列（LSP 定位坐标），老库 ALTER 自愈；`generate_callchain` 接增量路径，summary 带 parsed/reused。
+- **P2 事件合成边 + 边界报告**：提取事件通道使用点（`emit('x')`/`on('x',fn)`，仅字面量事件名 + 具名 handler），消解期配对合成 `kind=event` 边（双向 ≤6 端扇出护栏）；走读链每函数带 `breaks`（断点行/recv/候选目标）、出边带 kind。前端：走读块断点琥珀 chip（候选悬浮提示）、event 边淡紫虚线 ev 标注，图例/边列表/Markdown 导出同步。
+- **P3 LSP 精确化**：`crates/core/src/lsp.rs` 自研极简 stdio JSON-RPC client（~300 行无 LSP 框架依赖），对 heuristic/receiver 边按 (line,col) 发 `textDocument/definition`，命中图内节点升级 `kind=precise` 并可改写目标；local 边调用点作就绪探针（语义真值，`documentSymbol` 句法早出会误判就绪）、byte→UTF-16 列换算、瞬态错误重试、工具缺失 fail-fast。接线 `bw callchain <repo> --refine` 与画布工具条 ⚡ 按钮。
+
+**验收结果**：引擎 28 测、core 107 测全绿，workspace 编译零错，vue-tsc 零错误。真机端到端：temp cargo 工程 heuristic 边升级 precise 通过；真仓 byte-code-cli 综合验收——增量第二次生成解析 0/复用 36 文件，LSP 精化 345 候选中 228 条升级 precise（其中 32 条原启发边连错人被改写目标）、117 条诚实保留 heuristic。real_repos_e2e 三仓照常通过。

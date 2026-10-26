@@ -57,12 +57,35 @@ pub struct GEdge {
     pub src: String,
     pub dst: String,
     pub line: u64,
+    /// 调用点被调名 token 的 0-based 字节列（LSP definition 定位用；老产物为 0）
+    pub col: u64,
     pub kind: String,
 }
 
 impl GEdge {
     pub fn to_json(&self) -> serde_json::Value {
-        serde_json::json!({"src": self.src, "dst": self.dst, "line": self.line, "kind": self.kind})
+        serde_json::json!({"src": self.src, "dst": self.dst, "line": self.line, "col": self.col, "kind": self.kind})
+    }
+}
+
+/// 未连边的调用点（边界报告素材）：断在哪（src/line/col）、叫什么（name/recv）、
+/// 可能到哪（candidates——消歧失败的候选 qualname）
+#[derive(Debug, Clone, PartialEq)]
+pub struct GUnresolved {
+    pub src: String,
+    pub name: String,
+    pub recv: Option<String>,
+    pub line: u64,
+    pub col: u64,
+    pub candidates: Vec<String>,
+}
+
+impl GUnresolved {
+    pub fn to_json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "src": self.src, "name": self.name, "recv": self.recv,
+            "line": self.line, "col": self.col, "candidates": self.candidates,
+        })
     }
 }
 
@@ -72,6 +95,8 @@ pub struct GraphData {
     pub root: String,
     pub nodes: Vec<GNode>,
     pub edges: Vec<GEdge>,
+    /// 未连边调用点（边界报告素材）
+    pub unresolved: Vec<GUnresolved>,
     /// module -> (代表 file, 函数数)；同 module 多文件后者覆盖（与引擎 json Map 语义一致）
     pub modules: BTreeMap<String, (String, usize)>,
     pub langs: BTreeMap<String, usize>,
@@ -93,6 +118,7 @@ impl GraphData {
             "edges": self.edges.iter().map(|e| e.to_json()).collect::<Vec<_>>(),
             "modules": modules,
             "langs": self.langs,
+            "unresolved_refs": self.unresolved.iter().map(|u| u.to_json()).collect::<Vec<_>>(),
         })
     }
 
@@ -107,6 +133,9 @@ impl GraphData {
         if !self.edges.is_sorted_by(|a, b| (&a.src, &a.dst) <= (&b.src, &b.dst)) {
             self.edges.sort_by(|a, b| (&a.src, &a.dst).cmp(&(&b.src, &b.dst)));
         }
+        self.unresolved.sort_by(|a, b| {
+            (&a.src, &a.name, a.line, a.col).cmp(&(&b.src, &b.name, b.line, b.col))
+        });
         self.recompute_degrees();
     }
 
@@ -128,25 +157,26 @@ impl GraphData {
 /// 边归一化：同 (src,dst) 多边取最早调用行（引擎按 (callee,recv) 去重，
 /// 不同 callee/recv 仍可能连到同一目标；json 原样保留，加载进索引时归并——
 /// db 主键 (src,dst) 落库时同规则，双后端语义一致）
-fn normalize_edges(raw: impl Iterator<Item = (String, String, u64, String)>) -> Vec<GEdge> {
-    let mut merged: HashMap<(String, String), (u64, String)> = HashMap::new();
-    for (src, dst, line, kind) in raw {
+fn normalize_edges(raw: impl Iterator<Item = (String, String, u64, u64, String)>) -> Vec<GEdge> {
+    let mut merged: HashMap<(String, String), (u64, u64, String)> = HashMap::new();
+    for (src, dst, line, col, kind) in raw {
         match merged.entry((src, dst)) {
             std::collections::hash_map::Entry::Occupied(mut o) => {
-                let (l, _) = o.get_mut();
+                let (l, c, _) = o.get_mut();
                 if line < *l {
                     *l = line;
+                    *c = col;
                 }
             }
             std::collections::hash_map::Entry::Vacant(v) => {
-                v.insert((line, kind));
+                v.insert((line, col, kind));
             }
         }
     }
     // 插入序无关：加载完成后 finalize 统一按 (src,dst) 排序
     merged
         .into_iter()
-        .map(|((src, dst), (line, kind))| GEdge { src, dst, line, kind })
+        .map(|((src, dst), (line, col, kind))| GEdge { src, dst, line, col, kind })
         .collect()
 }
 
@@ -184,10 +214,27 @@ pub fn graph_from_doc_json(doc: &serde_json::Value) -> GraphData {
                     e["src"].as_str().unwrap_or_default().to_string(),
                     e["dst"].as_str().unwrap_or_default().to_string(),
                     e["line"].as_u64().unwrap_or(0),
+                    e["col"].as_u64().unwrap_or(0),
                     e["kind"].as_str().unwrap_or("local").to_string(),
                 )
             }),
     );
+    let unresolved: Vec<GUnresolved> = doc["unresolved_refs"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|u| GUnresolved {
+            src: u["src"].as_str().unwrap_or_default().to_string(),
+            name: u["name"].as_str().unwrap_or_default().to_string(),
+            recv: u["recv"].as_str().map(String::from),
+            line: u["line"].as_u64().unwrap_or(0),
+            col: u["col"].as_u64().unwrap_or(0),
+            candidates: u["candidates"]
+                .as_array()
+                .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                .unwrap_or_default(),
+        })
+        .collect();
     let modules = doc["modules"]
         .as_object()
         .map(|m| {
@@ -212,6 +259,7 @@ pub fn graph_from_doc_json(doc: &serde_json::Value) -> GraphData {
         root: doc["root"].as_str().unwrap_or_default().to_string(),
         nodes,
         edges,
+        unresolved,
         modules,
         langs,
         head_commit: String::new(), // json 产物无 meta（db 才有滞后检测）
@@ -245,16 +293,44 @@ CREATE TABLE IF NOT EXISTS edges (
   src  TEXT NOT NULL,
   dst  TEXT NOT NULL,
   line INTEGER NOT NULL,
+  col  INTEGER NOT NULL DEFAULT 0,
   kind TEXT NOT NULL,
   PRIMARY KEY (src, dst)
 ) WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS idx_edges_dst ON edges(dst, src);
+
+CREATE TABLE IF NOT EXISTS unresolved_refs (
+  src        TEXT NOT NULL,
+  name       TEXT NOT NULL,
+  recv       TEXT,
+  line       INTEGER NOT NULL,
+  col        INTEGER NOT NULL DEFAULT 0,
+  candidates TEXT NOT NULL DEFAULT '[]',
+  PRIMARY KEY (src, name, line)
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS idx_unres_name ON unresolved_refs(name);
+
+CREATE TABLE IF NOT EXISTS file_recs (
+  path TEXT PRIMARY KEY,
+  hash INTEGER NOT NULL,
+  size INTEGER NOT NULL,
+  rec  TEXT NOT NULL
+) WITHOUT ROWID;
 
 CREATE TABLE IF NOT EXISTS meta (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
 ) WITHOUT ROWID;
 ";
+
+/// 老库自愈：v1 产物的 edges 无 col 列（LSP 精确化定位坐标是后加的）——
+/// CREATE IF NOT EXISTS 不会补列，显式 ALTER；已存在时报重复列，忽略即可。
+/// 读写两侧都调（克隆共享的老 db 只读路径也要能查）。
+fn migrate_conn(conn: &rusqlite::Connection) -> CoreResult<()> {
+    conn.execute_batch(SCHEMA)?;
+    let _ = conn.execute("ALTER TABLE edges ADD COLUMN col INTEGER NOT NULL DEFAULT 0", []);
+    Ok(())
+}
 
 /// 把引擎 json 产物写入 callgraph.db（整图事务替换；INSERT OR REPLACE 容忍重复 (src,dst)）。
 /// head_commit：生成时的 git HEAD（滞后检测用，无 git 传空）
@@ -266,12 +342,13 @@ pub fn write_callgraph_db(db_path: &Path, doc: &serde_json::Value, head_commit: 
     conn.pragma_update(None, "journal_mode", "WAL")
         .map_err(CoreError::Db)?;
     conn.execute_batch(
-        "PRAGMA synchronous = NORMAL; PRAGMA busy_timeout = 5000; PRAGMA user_version = 1;",
+        "PRAGMA synchronous = NORMAL; PRAGMA busy_timeout = 5000; PRAGMA user_version = 2;",
     )?;
-    conn.execute_batch(SCHEMA)?;
+    migrate_conn(&conn)?;
     let tx = conn.transaction().map_err(CoreError::Db)?;
     tx.execute("DELETE FROM nodes", []).map_err(CoreError::Db)?;
     tx.execute("DELETE FROM edges", []).map_err(CoreError::Db)?;
+    tx.execute("DELETE FROM unresolved_refs", []).map_err(CoreError::Db)?;
     tx.execute("DELETE FROM meta", []).map_err(CoreError::Db)?;
     {
         let mut stmt = tx
@@ -315,16 +392,34 @@ pub fn write_callgraph_db(db_path: &Path, doc: &serde_json::Value, head_commit: 
                         e["src"].as_str().unwrap_or_default().to_string(),
                         e["dst"].as_str().unwrap_or_default().to_string(),
                         e["line"].as_u64().unwrap_or(0),
+                        e["col"].as_u64().unwrap_or(0),
                         e["kind"].as_str().unwrap_or("local").to_string(),
                     )
                 }),
         );
         let mut stmt = tx
-            .prepare("INSERT INTO edges (src,dst,line,kind) VALUES (?1,?2,?3,?4)")
+            .prepare("INSERT INTO edges (src,dst,line,col,kind) VALUES (?1,?2,?3,?4,?5)")
             .map_err(CoreError::Db)?;
         for e in edges {
-            stmt.execute(rusqlite::params![e.src, e.dst, e.line as i64, e.kind])
+            stmt.execute(rusqlite::params![e.src, e.dst, e.line as i64, e.col as i64, e.kind])
                 .map_err(CoreError::Db)?;
+        }
+    }
+    {
+        // 未连边调用点（边界报告素材）——同 (src,name,line) 主键 OR IGNORE 容忍重复
+        let mut stmt = tx
+            .prepare("INSERT OR IGNORE INTO unresolved_refs (src,name,recv,line,col,candidates) VALUES (?1,?2,?3,?4,?5,?6)")
+            .map_err(CoreError::Db)?;
+        for u in doc["unresolved_refs"].as_array().into_iter().flatten() {
+            stmt.execute(rusqlite::params![
+                u["src"].as_str().unwrap_or_default(),
+                u["name"].as_str().unwrap_or_default(),
+                u["recv"].as_str(),
+                u["line"].as_u64().unwrap_or(0) as i64,
+                u["col"].as_u64().unwrap_or(0) as i64,
+                serde_json::to_string(&u["candidates"])?,
+            ])
+            .map_err(CoreError::Db)?;
         }
     }
     {
@@ -368,6 +463,7 @@ pub fn load_callgraph_db(db_path: &Path) -> CoreResult<GraphData> {
     let conn = rusqlite::Connection::open(db_path)?;
     // 读侧性能 pragma：mmap 免 read 拷贝、页缓存给足（WITHOUT ROWID 全表扫 = 主键序）
     conn.execute_batch("PRAGMA mmap_size = 268435456; PRAGMA cache_size = -65536;")?;
+    migrate_conn(&conn)?;
     let mut nodes: Vec<GNode> = Vec::new();
     {
         let mut stmt = conn
@@ -398,17 +494,37 @@ pub fn load_callgraph_db(db_path: &Path) -> CoreResult<GraphData> {
     }
     let mut edges: Vec<GEdge> = Vec::new();
     {
-        let mut stmt = conn.prepare("SELECT src,dst,line,kind FROM edges")?;
+        let mut stmt = conn.prepare("SELECT src,dst,line,col,kind FROM edges")?;
         let rows = stmt.query_map([], |r| {
             Ok(GEdge {
                 src: r.get(0)?,
                 dst: r.get(1)?,
                 line: r.get::<_, i64>(2)? as u64,
-                kind: r.get(3)?,
+                col: r.get::<_, i64>(3)? as u64,
+                kind: r.get(4)?,
             })
         })?;
         for row in rows {
             edges.push(row?);
+        }
+    }
+    let mut unresolved: Vec<GUnresolved> = Vec::new();
+    {
+        let mut stmt =
+            conn.prepare("SELECT src,name,recv,line,col,candidates FROM unresolved_refs")?;
+        let rows = stmt.query_map([], |r| {
+            let cands_json: String = r.get(5)?;
+            Ok(GUnresolved {
+                src: r.get(0)?,
+                name: r.get(1)?,
+                recv: r.get(2)?,
+                line: r.get::<_, i64>(3)? as u64,
+                col: r.get::<_, i64>(4)? as u64,
+                candidates: serde_json::from_str(&cands_json).unwrap_or_default(),
+            })
+        })?;
+        for row in rows {
+            unresolved.push(row?);
         }
     }
     let meta: HashMap<String, String> = {
@@ -442,12 +558,68 @@ pub fn load_callgraph_db(db_path: &Path) -> CoreResult<GraphData> {
         root: meta.get("root").cloned().unwrap_or_default(),
         nodes,
         edges,
+        unresolved,
         modules,
         langs,
         head_commit: meta.get("head_commit").cloned().unwrap_or_default(),
     };
     g.finalize();
     Ok(g)
+}
+
+// ============ 增量缓存（file_recs） ============
+
+/// 读增量缓存表：rel_path → (content 指纹, 字节数, rec_json)。无库/无表返回空
+///（首跑或老产物 → 全量解析，属预期路径）
+pub fn load_file_recs(db_path: &Path) -> HashMap<String, (u64, u64, String)> {
+    if !db_path.is_file() {
+        return HashMap::new();
+    }
+    let Ok(conn) = rusqlite::Connection::open(db_path) else {
+        return HashMap::new();
+    };
+    if migrate_conn(&conn).is_err() {
+        return HashMap::new();
+    }
+    let mut out = HashMap::new();
+    let Ok(mut stmt) = conn.prepare("SELECT path,hash,size,rec FROM file_recs") else {
+        return out;
+    };
+    let Ok(rows) = stmt.query_map([], |r| {
+        Ok((
+            r.get::<_, String>(0)?,
+            r.get::<_, i64>(1)? as u64,
+            r.get::<_, i64>(2)? as u64,
+            r.get::<_, String>(3)?,
+        ))
+    }) else {
+        return out;
+    };
+    for row in rows.flatten() {
+        out.insert(row.0, (row.1, row.2, row.3));
+    }
+    out
+}
+
+/// 整体替换增量缓存表（rows 是本次生成的全量 rec 行——含缓存复用项；
+/// 不在表里的文件自然消失，无需单独删）
+pub fn write_file_recs(db_path: &Path, rows: &[(String, u64, u64, String)]) -> CoreResult<()> {
+    let mut conn = rusqlite::Connection::open(db_path)?;
+    migrate_conn(&conn)?;
+    let tx = conn.transaction().map_err(CoreError::Db)?;
+    tx.execute("DELETE FROM file_recs", []).map_err(CoreError::Db)?;
+    {
+        let mut stmt = tx
+            .prepare("INSERT INTO file_recs (path,hash,size,rec) VALUES (?1,?2,?3,?4)")
+            .map_err(CoreError::Db)?;
+        for (p, h, s, rec) in rows {
+            stmt.execute(rusqlite::params![p, *h as i64, *s as i64, rec])
+                .map_err(CoreError::Db)?;
+        }
+    }
+    tx.commit().map_err(CoreError::Db)?;
+    conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")?;
+    Ok(())
 }
 
 // ============ 测试 ============
@@ -568,5 +740,39 @@ mod tests {
             let sz = wal.metadata().unwrap().len();
             assert_eq!(sz, 0, "checkpoint(TRUNCATE) 后 wal 应为空，实际 {sz} 字节");
         }
+    }
+
+    #[test]
+    fn file_recs_roundtrip_and_whole_replace() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join(CALLGRAPH_DB_FILE);
+        write_callgraph_db(&db, &sample_doc(), "aa11").unwrap();
+        write_file_recs(&db, &[("a.py".into(), 11, 22, "{\"module\":\"a\"}".into())]).unwrap();
+        let loaded = load_file_recs(&db);
+        assert_eq!(loaded.get("a.py"), Some(&(11, 22, "{\"module\":\"a\"}".to_string())));
+        // 整体替换语义：不在本次行集里的 key 自然消失（文件删除场景）
+        write_file_recs(&db, &[("b.py".into(), 1, 2, "{}".into())]).unwrap();
+        let loaded = load_file_recs(&db);
+        assert!(!loaded.contains_key("a.py") && loaded.contains_key("b.py"));
+    }
+
+    #[test]
+    fn unresolved_refs_roundtrip_with_candidates() {
+        let mut doc = sample_doc();
+        doc["unresolved_refs"] = serde_json::json!([
+            {"src": "app::main", "name": "run", "recv": "x", "line": 7, "col": 4,
+             "candidates": ["app::A.run", "app::B.run"]}
+        ]);
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join(CALLGRAPH_DB_FILE);
+        write_callgraph_db(&db, &doc, "aa11").unwrap();
+        let from_db = load_callgraph_db(&db).unwrap();
+        let from_json = graph_from_doc_json(&doc);
+        assert_eq!(from_db.unresolved, from_json.unresolved, "unresolved 双后端一致");
+        assert_eq!(from_db.unresolved.len(), 1);
+        let u = &from_db.unresolved[0];
+        assert_eq!(u.name, "run");
+        assert_eq!(u.recv.as_deref(), Some("x"));
+        assert_eq!(u.candidates, vec!["app::A.run".to_string(), "app::B.run".to_string()]);
     }
 }

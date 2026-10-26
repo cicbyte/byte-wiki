@@ -23,7 +23,7 @@ import {
 import { api } from "@/api";
 import { callchainApi } from "@/api/callchain";
 import type { CallgraphData, CallGraphNode, CallgraphEdge } from "@/api/callchain";
-import type { WalkCallLink } from "./WalkBlock.vue";
+import type { WalkCallLink, WalkBreak } from "./WalkBlock.vue";
 import WalkBlock from "./WalkBlock.vue";
 import EmptyState from "@/components/common/EmptyState.vue";
 import { useWikiStore } from "@/stores/wiki";
@@ -44,6 +44,8 @@ interface WalkEntry {
   num: string;
   node: CallGraphNode;
   calls: WalkCallLink[];
+  /** 断链边界报告：本块内未连边的调用点 */
+  breaks: WalkBreak[];
 }
 const entries = ref<WalkEntry[]>([]);
 /** 主路径节点集合（默认展开） */
@@ -98,7 +100,7 @@ function buildChain(graph: CallgraphData, rootId: string) {
         children.push({ edge: e, first: true });
       }
     }
-    order.push({ id, num: myNum, node, calls });
+    order.push({ id, num: myNum, node, calls, breaks: [] });
 
     // 主路径延伸：贪心取子树最深的子节点
     let mainChild: string | null = null;
@@ -175,7 +177,13 @@ async function load() {
         targetNum: c.target_num,
         targetName: c.target_name,
         line: c.line,
-        kind: c.is_ref ? "ref" : "heuristic",
+        kind: c.kind ?? (c.is_ref ? "ref" : "heuristic"),
+      })),
+      breaks: (e.breaks ?? []).map((b) => ({
+        name: b.name,
+        recv: b.recv,
+        line: b.line,
+        candidates: b.candidates ?? [],
       })),
     }));
     chainMainPath.value = chain.main_path;
@@ -313,7 +321,16 @@ function buildMarkdown(includeTitle: boolean): string {
         "",
         "调用：" +
           e.calls
-            .map((c) => `\`${e.node.file}:${c.line}\` → ${c.targetNum} ${c.targetName}${c.kind === "heuristic" ? "（同名启发）" : ""}`)
+            .map((c) => `\`${e.node.file}:${c.line}\` → ${c.targetNum} ${c.targetName}${c.kind === "heuristic" ? "（同名启发）" : c.kind === "event" ? "（事件合成）" : ""}`)
+            .join("；"),
+      );
+    }
+    if (e.breaks.length) {
+      L.push(
+        "",
+        "断点（未连边）：" +
+          e.breaks
+            .map((b) => `\`${e.node.file}:${b.line}\` ${b.name}${b.recv ? ` @ ${b.recv}` : ""}${b.candidates.length ? `（候选：${b.candidates.join("、")}）` : ""}`)
             .join("；"),
       );
     }
@@ -434,6 +451,7 @@ function backToGraph() {
           :truncated="codeMap.get(e.id)?.truncated ?? false"
           :routes="e.node.routes ?? []"
           :call-links="e.calls"
+          :breaks="e.breaks"
           :expanded="expandedIds.has(e.id)"
           :index="i"
           @toggle="toggleBlock(e.id)"

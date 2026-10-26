@@ -16,6 +16,7 @@ pub mod git_read;
 pub mod indexer;
 pub mod lang_ext;
 pub mod llm;
+pub mod lsp;
 pub mod llm_cache;
 pub mod llm_log;
 pub mod model;

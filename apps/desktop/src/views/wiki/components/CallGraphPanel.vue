@@ -32,6 +32,7 @@ import {
   FileOutlined,
   ReadOutlined,
   SettingOutlined,
+  ThunderboltOutlined,
 } from "@ant-design/icons-vue";
 import { DataSet, Network } from "vis-network/standalone";
 import { api } from "@/api";
@@ -562,9 +563,14 @@ function buildGraph() {
     from: e.src,
     to: e.dst,
     arrows: "to",
-    dashes: e.kind === "heuristic",
-    label: e.kind === "heuristic" ? "~" : "",
-    color: { color: canvasColors.value.edge, highlight: "#e8a33d", hover: "#5aa2ff" },
+    dashes: e.kind === "heuristic" || e.kind === "event",
+    label: e.kind === "heuristic" ? "~" : e.kind === "event" ? "ev" : "",
+    color: {
+      // 事件合成边淡紫标注（provenance：合成通道跳数非精确）
+      color: e.kind === "event" ? "#9d8bd8" : canvasColors.value.edge,
+      highlight: "#e8a33d",
+      hover: "#5aa2ff",
+    },
     font: { size: 10, color: canvasColors.value.edgeFont },
   }));
 
@@ -853,6 +859,25 @@ async function generate() {
   } finally {
     generating.value = false;
     progressText.value = "";
+  }
+}
+
+/** LSP 精确化（P3）：rust-analyzer 把 heuristic/receiver 边升级为 precise（当前分支产物） */
+const refining = ref(false);
+async function refineLsp() {
+  if (refining.value) return;
+  refining.value = true;
+  try {
+    const s = await api.refineLsp(props.repoPath);
+    message.success(
+      `LSP 精确化：${s.upgraded} 条边升级为 precise` +
+        `${s.retargeted ? `（改写目标 ${s.retargeted}）` : ""} · 未解析 ${s.unresolved}（${s.duration_ms}ms）`,
+    );
+    await loadData();
+  } catch (e) {
+    message.error(typeof e === "string" ? e : "精化失败（需本机 rust-analyzer）");
+  } finally {
+    refining.value = false;
   }
 }
 
@@ -1246,6 +1271,15 @@ let srcDecorations: { clear(): void } | null = null;
           >
             <ReloadOutlined :spin="generating" :style="overview?.lagging ? 'color: var(--color-warning, #d29922)' : undefined" />
           </button>
+          <button
+            v-if="!branch"
+            class="fb-btn"
+            title="LSP 精确化：rust-analyzer 把启发边升级为精确边（需本机 rust-analyzer）"
+            :disabled="refining"
+            @click="refineLsp"
+          >
+            <ThunderboltOutlined :spin="refining" />
+          </button>
         </div>
 
         <!-- 图例 -->
@@ -1255,7 +1289,7 @@ let srcDecorations: { clear(): void } | null = null;
           </span>
           <span v-if="legendMore" class="cg-legend-item">…共 {{ modulesList.length }} 个</span>
           <span class="cg-legend-item"><i class="cg-swatch entry" />入口</span>
-          <span class="cg-legend-item cg-legend-dash">虚线 = 启发边（同名归约，非精确）</span>
+          <span class="cg-legend-item cg-legend-dash">虚线 = 启发/事件合成边（非精确）</span>
         </div>
       </div>
 
@@ -1332,7 +1366,7 @@ let srcDecorations: { clear(): void } | null = null;
               @click="jumpTo(e.dst)"
             >
               <span class="cg-edge-name">→ {{ nodeById.get(e.dst)?.qualname ?? e.dst }}</span>
-              <em>{{ nodeById.get(e.dst)?.module }} :{{ e.line }}{{ e.kind === "heuristic" ? " ~" : "" }}</em>
+              <em>{{ nodeById.get(e.dst)?.module }} :{{ e.line }}{{ e.kind === "heuristic" ? " ~" : e.kind === "event" ? " ev" : "" }}</em>
             </div>
           </div>
         </template>

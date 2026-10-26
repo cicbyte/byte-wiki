@@ -42,6 +42,9 @@ pub struct CallchainSummary {
     pub modules: usize,
     /// 语言 → 解析文件数
     pub langs: BTreeMap<String, usize>,
+    /// 本次真实解析 / 缓存复用文件数（增量效果可见性；同 commit 复制路径为 0/0）
+    pub parsed_files: usize,
+    pub reused_files: usize,
     pub duration_ms: u128,
 }
 
@@ -56,6 +59,19 @@ pub struct ChainCallLink {
     pub line: u64,
     /// 引用（目标已在前文渲染）vs 新块
     pub is_ref: bool,
+    /// 边类型（local/heuristic/receiver/event）——UI 标注启发式跳数
+    pub kind: String,
+}
+
+/// 走读链断点（边界报告）：链走到某函数，其中的调用点没连上边——
+/// 断在哪（line/col）、叫什么（name/recv）、可能到哪（candidates）
+#[derive(serde::Serialize, Debug, Clone)]
+pub struct BreakSite {
+    pub name: String,
+    pub recv: Option<String>,
+    pub line: u64,
+    pub col: u64,
+    pub candidates: Vec<String>,
 }
 
 #[derive(serde::Serialize)]
@@ -64,6 +80,8 @@ pub struct ChainEntry {
     pub num: String,
     pub node: serde_json::Value,
     pub calls: Vec<ChainCallLink>,
+    /// 该函数内未连边的调用点（空=无断点）
+    pub breaks: Vec<BreakSite>,
 }
 
 #[derive(serde::Serialize)]
@@ -203,6 +221,8 @@ impl AppService {
                     entries: g.nodes.iter().filter(|n| n.is_entry).count(),
                     modules: g.modules.len(),
                     langs: g.langs.clone().into_iter().collect(),
+                    parsed_files: 0,
+                    reused_files: 0,
                     duration_ms: t0.elapsed().as_millis(),
                 };
                 self.finish_generate(repo.id, &branch, summary.nodes, summary.edges)?;
@@ -210,14 +230,20 @@ impl AppService {
             }
         }
 
-        let graph = byte_wiki_callchain::extract(root, &opts, on_progress)
+        // 增量提取：content 指纹未变的文件整条复用上次提取结果（免 tree-sitter），
+        // 消解全量重放——新符号出现后，老文件里原先连不上边的调用点自动复活
+        let stored = crate::callchain_db::load_file_recs(&target_db);
+        let outcome = byte_wiki_callchain::extract_with_cache(root, &opts, &stored, on_progress)
             .map_err(|e| CoreError::Other(anyhow::anyhow!("调用链提取失败：{e}")))?;
+        let graph = &outcome.doc;
 
         let out_path = out_dir.join("callgraph.json");
-        std::fs::write(&out_path, serde_json::to_string_pretty(&graph)?)?;
+        std::fs::write(&out_path, serde_json::to_string_pretty(graph)?)?;
         // #573：SQLite 主存储（查询毫秒级 + 增量更新地基）；
         // meta 记录生成时 HEAD——读取侧与实时值比对做滞后检测
-        write_callgraph_db(&target_db, &graph, &head)?;
+        write_callgraph_db(&target_db, graph, &head)?;
+        // 增量缓存整体替换（本次全量 rec 行：复用项也在内，删除项自然消失）
+        crate::callchain_db::write_file_recs(&target_db, &outcome.rec_rows)?;
 
         // 登记 wiki_docs（kind=graph；upsert——wiki 重新生成的整体替换后由 assemble 重新补登）
         self.finish_generate(repo.id, &branch,
@@ -238,6 +264,8 @@ impl AppService {
                 .unwrap_or(0),
             modules: graph["modules"].as_object().map(|m| m.len()).unwrap_or(0),
             langs,
+            parsed_files: outcome.parsed,
+            reused_files: outcome.reused,
             duration_ms: t0.elapsed().as_millis(),
         })
     }
@@ -545,20 +573,27 @@ fn chain_of(g: &GraphData, root: &str, cap: usize) -> CoreResult<CallgraphChain>
             "is_entry": n.is_entry, "is_exported": n.is_exported,
         })
     };
-    // 出边表：目标 -> 首次调用行（边在加载时已按 (src,dst) 归并取最早行）
-    let mut out: HashMap<&str, Vec<(&str, u64)>> = HashMap::new();
+    // 出边表：目标 -> (首次调用行, 边类型)（边在加载时已按 (src,dst) 归并取最早行）
+    let mut out: HashMap<&str, Vec<(&str, u64, &str)>> = HashMap::new();
     for e in &g.edges {
         if node_by_id.contains_key(e.dst.as_str()) {
-            out.entry(e.src.as_str()).or_default().push((e.dst.as_str(), e.line));
+            out.entry(e.src.as_str())
+                .or_default()
+                .push((e.dst.as_str(), e.line, e.kind.as_str()));
         }
     }
     for v in out.values_mut() {
         v.sort_by(|a, b| (a.1, a.0).cmp(&(b.1, b.0)));
     }
+    // 断链边界报告素材：链上函数的未连边调用点（断在哪、可能到哪）
+    let mut breaks_by: HashMap<&str, Vec<&crate::callchain_db::GUnresolved>> = HashMap::new();
+    for u in &g.unresolved {
+        breaks_by.entry(u.src.as_str()).or_default().push(u);
+    }
     // 子树深度（环防护）
     fn depth_of<'a>(
         id: &'a str,
-        out: &HashMap<&'a str, Vec<(&'a str, u64)>>,
+        out: &HashMap<&'a str, Vec<(&'a str, u64, &'a str)>>,
         cache: &mut HashMap<&'a str, usize>,
     ) -> usize {
         if let Some(&d) = cache.get(id) {
@@ -567,7 +602,7 @@ fn chain_of(g: &GraphData, root: &str, cap: usize) -> CoreResult<CallgraphChain>
         cache.insert(id, 0); // 环防护：进行中按 0
         let mut d = 1;
         if let Some(children) = out.get(id) {
-            for (t, _) in children {
+            for (t, _, _) in children {
                 let c = depth_of(t, out, cache);
                 d = d.max(1 + c);
             }
@@ -593,17 +628,17 @@ fn chain_of(g: &GraphData, root: &str, cap: usize) -> CoreResult<CallgraphChain>
         }
         let Some(node) = node_by_id.get(id) else { continue };
         num.insert(id, prefix.clone());
-        let children: Vec<(&str, u64)> = out.get(id).cloned().unwrap_or_default();
+        let children: Vec<(&str, u64, &str)> = out.get(id).cloned().unwrap_or_default();
         // 主路径贪心：最深子树
         let main_child = if is_main {
             children
                 .iter()
-                .max_by_key(|(t, _)| depth_of(t, &out, &mut depth_cache))
-                .map(|(t, _)| *t)
+                .max_by_key(|(t, _, _)| depth_of(t, &out, &mut depth_cache))
+                .map(|(t, _, _)| *t)
         } else {
             None
         };        let mut calls: Vec<ChainCallLink> = Vec::new();
-        for (t, line) in &children {
+        for (t, line, kind) in &children {
             let target_name = node_by_id
                 .get(t)
                 .map(|n| n.qualname.clone())
@@ -616,6 +651,7 @@ fn chain_of(g: &GraphData, root: &str, cap: usize) -> CoreResult<CallgraphChain>
                     target_name,
                     line: *line,
                     is_ref: true,
+                    kind: (*kind).to_string(),
                 });
             } else {
                 calls.push(ChainCallLink {
@@ -624,18 +660,34 @@ fn chain_of(g: &GraphData, root: &str, cap: usize) -> CoreResult<CallgraphChain>
                     target_name,
                     line: *line,
                     is_ref: false,
+                    kind: (*kind).to_string(),
                 });
             }
         }
+        let breaks = breaks_by
+            .get(id)
+            .map(|us| {
+                us.iter()
+                    .map(|u| BreakSite {
+                        name: u.name.clone(),
+                        recv: u.recv.clone(),
+                        line: u.line,
+                        col: u.col,
+                        candidates: u.candidates.clone(),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
         entries.push(ChainEntry {
             id: id.to_string(),
             num: prefix.clone(),
             node: light(node),
             calls,
+            breaks,
         });
         // 子节点逆序压栈（先序：首个子最先弹出）
         let n_children = children.len();
-        for (i, (t, _)) in children.iter().enumerate().rev() {
+        for (i, (t, _, _)) in children.iter().enumerate().rev() {
             if seen.contains(t) || num.contains_key(t) {
                 continue;
             }
@@ -898,6 +950,69 @@ mod tests {
         let ov = svc.callgraph_overview(repo_str, Some("main")).unwrap().unwrap();
         assert_eq!(ov.total_nodes, main_sum.nodes);
         assert!(!ov.lagging, "指定分支查看时按该分支视角（main 无落后）");
+    }
+
+    /// P1 增量验收：未变文件缓存复用 + 新符号「复活」断链调用点（unresolved 重试语义）
+    #[test]
+    fn incremental_regenerate_revives_unresolved_calls() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = setup_repo(dir.path());
+        let svc = AppService::open_at(dir.path().join("app"), dir.path().join("data")).unwrap();
+        let repo_str = repo.to_str().unwrap();
+
+        // ghost 尚未定义：top 里的调用记为未连边
+        std::fs::write(repo.join("caller.py"), "def top(z):\n    return ghost(z)\n").unwrap();
+        let s1 = svc.generate_callchain(repo_str, &|_| {}).unwrap();
+        assert_eq!(s1.parsed_files, 2, "首跑全量解析：app.py + caller.py");
+        let g1 = svc.read_callgraph(repo_str, None).unwrap().unwrap();
+        assert!(
+            g1["unresolved_refs"].as_array().unwrap().iter().any(|u| u["name"] == "ghost"),
+            "调用点未连边应留档：{g1:?}"
+        );
+
+        // 新文件定义 ghost → 重生成：老文件全复用，断链自动接上
+        std::fs::write(repo.join("ghost.py"), "def ghost(z):\n    return z\n").unwrap();
+        let s2 = svc.generate_callchain(repo_str, &|_| {}).unwrap();
+        assert_eq!(s2.reused_files, 2, "未变文件免解析：{s2:?}");
+        assert_eq!(s2.parsed_files, 1, "只解析新文件");
+        let g2 = svc.read_callgraph(repo_str, None).unwrap().unwrap();
+        assert!(
+            g2["edges"].as_array().unwrap().iter().any(|e| {
+                e["src"].as_str().unwrap().ends_with("top")
+                    && e["dst"].as_str().unwrap().ends_with("ghost")
+            }),
+            "新符号出现后断链调用点应复活成 heuristic 边"
+        );
+        assert!(
+            !g2["unresolved_refs"].as_array().unwrap().iter().any(|u| u["name"] == "ghost"),
+            "连上边后从未连边清单消失"
+        );
+    }
+
+    /// P2 边界报告：走读链带出未连边调用点（断在哪、可能到哪）+ 出边 kind
+    #[test]
+    fn chain_reports_break_sites_and_link_kinds() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = setup_repo(dir.path());
+        std::fs::write(
+            repo.join("amb.py"),
+            "def drive(x):\n    return x.run()\n\nclass A:\n    def run(self):\n        return 1\n\nclass B:\n    def run(self):\n        return 2\n",
+        )
+        .unwrap();
+        let svc = AppService::open_at(dir.path().join("app"), dir.path().join("data")).unwrap();
+        let repo_str = repo.to_str().unwrap();
+        svc.generate_callchain(repo_str, &|_| {}).unwrap();
+
+        let chain = svc.callgraph_chain(repo_str, None, "amb::drive", 50).unwrap().unwrap();
+        let entry = &chain.entries[0];
+        assert_eq!(entry.id, "amb::drive");
+        assert_eq!(entry.breaks.len(), 1, "x.run() 双候选未连边 → 断点：{:?}", entry.breaks);
+        assert_eq!(entry.breaks[0].name, "run");
+        assert_eq!(entry.breaks[0].candidates.len(), 2, "候选目标留档");
+
+        // 出边 kind 随链带出（hi→helper 是 local）
+        let chain2 = svc.callgraph_chain(repo_str, None, "app::hi", 50).unwrap().unwrap();
+        assert_eq!(chain2.entries[0].calls[0].kind, "local");
     }
 
     /// 真实仓库端到端验收（dev-docs 验收标准 2）：git 根走服务层路径。

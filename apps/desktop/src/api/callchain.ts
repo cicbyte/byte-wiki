@@ -12,6 +12,9 @@ export interface CallchainSummary {
   entries: number;
   modules: number;
   langs: Record<string, number>;
+  /** 本次真实解析 / 缓存复用文件数（增量效果可见性） */
+  parsed_files: number;
+  reused_files: number;
   duration_ms: number;
 }
 
@@ -34,12 +37,12 @@ export interface CallGraphNode {
   callees: number;
 }
 
-/** 调用边（kind: local 精确同文件 / heuristic 同名启发） */
+/** 调用边（kind: local 精确同文件 / heuristic 同名启发 / receiver 接收者消歧 / event 事件合成） */
 export interface CallgraphEdge {
   src: string;
   dst: string;
   line: number;
-  kind: "local" | "heuristic" | string;
+  kind: "local" | "heuristic" | "receiver" | "event" | string;
 }
 
 export interface CallgraphData {
@@ -64,10 +67,26 @@ export interface ChainSource {
 
 
 
+/** 走读链断点（边界报告）：函数内未连边的调用点（断在哪、可能到哪） */
+export interface ChainBreak {
+  name: string;
+  recv: string | null;
+  line: number;
+  col: number;
+  /** 消歧失败的候选目标 qualname */
+  candidates: string[];
+}
+
 /** 走读链元数据（服务端 DFS 产物） */
 export interface CallgraphChain {
   root: string;
-  entries: { id: string; num: string; node: CallGraphNode; calls: { target_id: string; target_num: string; target_name: string; line: number; is_ref: boolean }[] }[];
+  entries: {
+    id: string;
+    num: string;
+    node: CallGraphNode;
+    calls: { target_id: string; target_num: string; target_name: string; line: number; is_ref: boolean; kind: string }[];
+    breaks: ChainBreak[];
+  }[];
   main_path: string[];
   truncated: boolean;
 }
@@ -85,6 +104,19 @@ export interface CallgraphOverview {
   generated_commit: string | null;
   /** 滞后：生成后 HEAD 已前进 */
   lagging: boolean;
+}
+
+/** LSP 精确化结果（与 Rust `LspRefineSummary` 对应） */
+export interface LspRefineSummary {
+  /** 参与精化的候选边（heuristic/receiver + Rust 文件） */
+  targets: number;
+  resolved: number;
+  /** 升级为 precise 的边数（含目标改写） */
+  upgraded: number;
+  /** 其中目标被 LSP 改写的条数（原启发边连错人） */
+  retargeted: number;
+  unresolved: number;
+  duration_ms: number;
 }
 
 /** 调用链规则（config preferences.callchain） */
@@ -154,6 +186,10 @@ export const callchainApi = {
 
   /** 读取调用链规则（按仓库；未自定义时后端回落全局/默认） */
   getRules: (repoPath: string) => invoke<CallchainRules>("get_callchain_rules", { repoPath }),
+
+  /** LSP 精确化：heuristic/receiver 边经 rust-analyzer definition 升级为 precise */
+  refineLsp: (repoPath: string) =>
+    invoke<LspRefineSummary>("refine_callgraph_lsp", { path: repoPath }),
 
   /** 保存调用链规则（**按仓库持久化**；重新生成调用链后生效） */
   setRules: (repoPath: string, rules: CallchainRules) =>

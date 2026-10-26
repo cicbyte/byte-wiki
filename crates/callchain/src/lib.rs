@@ -118,7 +118,22 @@ const MAX_PARSE_SIZE: u64 = 1024 * 1024;
 // 提取
 // ----------------------------------------------------------------------------
 
-#[derive(Debug, Clone)]
+/// 事件通道使用点：`emit('x')` / `on('x', fn)`。只认**字符串字面量事件名**——
+/// 变量事件名无法跨文件配对，认了只会产出挂空的通道。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct EventUse {
+    /// "emit" | "on"
+    kind: String,
+    /// 事件名（字面量去引号）
+    name: String,
+    /// on 侧的具名处理函数引用（末段标识符；匿名回调不记）
+    handler: Option<String>,
+    line: usize,
+    col: usize,
+}
+
+// serde 往返是增量缓存（file_recs）整条复用的前提——字段增删注意 #[serde(default)] 兼容老缓存
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 struct FuncRec {
     qualname: String,
     name: String,
@@ -133,12 +148,17 @@ struct FuncRec {
     /// 公共 API（库的入口面）：Rust pub / Go 首字母大写 / JS-TS export /
     /// Python 顶层无下划线 / Java public
     is_exported: bool,
-    calls: Vec<(String, Option<String>, usize)>, // (被调名, 接收者文本, 1-based 行号)
+    /// (被调名, 接收者文本, 1-based 行号, 名字 token 0-based 字节列)
+    /// 列坐标供 LSP definition 精确化定位被调名（byte 偏移；UTF-16 换算在消费侧）
+    calls: Vec<(String, Option<String>, usize, usize)>,
+    /// 事件通道使用点（emit/on 配对 → 合成边素材）
+    #[serde(default)]
+    events: Vec<EventUse>,
 }
 
 /// 路由注册调用（框架在运行时把处理函数挂到路由——跨函数边界的入口来源），
 /// 如 js `router.get("/p", h)`、go gin `r.GET("/p", h)`、rust `.route("/p", get(h))`
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 struct RouteReg {
     label: String,   // "GET /api/x"（GoFrame Bind 无 path 时占位 "GF xxx"，解析时经 Req tag 反查升级）
     handler: String, // 注册处引用的函数名（解析时取末段标识符）
@@ -146,15 +166,18 @@ struct RouteReg {
     qual_hint: Option<String>,
 }
 
-#[derive(Debug, Clone)]
+/// 单文件提取结果——增量缓存的复用单位（content 指纹相同即整条免解析）
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 struct FileRec {
     module: String,
     file: String,
-    lang: &'static str,
+    lang: String,
     funcs: Vec<FuncRec>,
     registrations: Vec<RouteReg>,
     /// go/GoFrame：本文件 Req struct 的路由元数据 (struct名, path, method)
     req_tags: Vec<(String, String, String)>,
+    /// 源码行（embed_source 用）：不进缓存（#[serde(skip)]）——复用时按需从磁盘补
+    #[serde(skip)]
     source_lines: Vec<String>,
 }
 
@@ -250,7 +273,9 @@ fn is_std_like_method(name: &str) -> bool {
     STDLIB.contains(&name)
 }
 
-fn callee_of(node: Node, src: &str) -> Option<(String, Option<String>)> {
+/// 提取（被调名, 接收者, 名字 token 的 0-based 字节列）。列坐标对准**被调名 token**
+///（member/selector 形态对准成员名而非接收者）——LSP definition 用它定位。
+fn callee_of(node: Node, src: &str) -> Option<(String, Option<String>, usize)> {
     let f = node
         .child_by_field_name("function")
         .or_else(|| node.child_by_field_name("name")) // java method_invocation
@@ -263,31 +288,31 @@ fn callee_of(node: Node, src: &str) -> Option<(String, Option<String>)> {
             .map(|o| text_of(o, src).to_string())
     };
     match f.kind() {
-        "identifier" => Some((text_of(f, src).to_string(), None)),
+        "identifier" => Some((text_of(f, src).to_string(), None, f.start_position().column)),
         // python: obj.attr(...)
         "attribute" => f
             .child_by_field_name("attribute")
-            .map(|a| (text_of(a, src).to_string(), Some(text_of(f, src).to_string()))),
+            .map(|a| (text_of(a, src).to_string(), Some(text_of(f, src).to_string()), a.start_position().column)),
         // js/ts: obj.member(...) / obj[...](...)
         "member_expression" => f
             .child_by_field_name("property")
             .filter(|p| p.kind() == "identifier" || p.kind() == "property_identifier")
-            .map(|p| (text_of(p, src).to_string(), Some(text_of(f, src).to_string()))),
+            .map(|p| (text_of(p, src).to_string(), Some(text_of(f, src).to_string()), p.start_position().column)),
         // go: pkg.Fn(...) / obj.Method(...)
         "selector_expression" => f
             .child_by_field_name("field")
-            .map(|p| (text_of(p, src).to_string(), recv_text(f))),
+            .map(|p| (text_of(p, src).to_string(), recv_text(f), p.start_position().column)),
         // rust: obj.method(...)
         "field_expression" => f
             .child_by_field_name("field")
-            .map(|p| (text_of(p, src).to_string(), recv_text(f))),
+            .map(|p| (text_of(p, src).to_string(), recv_text(f), p.start_position().column)),
         // go/js 内层调用链 f()()、rust 路径调用等：取末尾标识符兜底
         _ => {
             let t = text_of(f, src);
             t.rsplit(['.', ':'])
                 .next()
                 .filter(|s| !s.is_empty() && s.chars().all(|c| c.is_alphanumeric() || c == '_'))
-                .map(|s| (s.to_string(), Some(t.to_string())))
+                .map(|s| (s.to_string(), Some(t.to_string()), f.start_position().column))
         }
     }
 }
@@ -298,6 +323,65 @@ fn unquote(t: &str) -> String {
         .trim_start_matches(['"', '\''])
         .trim_end_matches(['"', '\''])
         .to_string()
+}
+
+/// 事件 API 判定（方法名层面的通用集合；`$emit`/`trigger` 各框架同形）
+fn event_api_of(callee: &str) -> Option<&'static str> {
+    Some(match callee {
+        "emit" | "emitEvent" | "emit_event" | "$emit" | "trigger" | "triggerEvent" | "fire"
+        | "dispatch" => "emit",
+        "on" | "once" | "$on" | "addEventListener" | "addListener" => "on",
+        _ => return None,
+    })
+}
+
+/// 从事件 API 调用提取通道使用点：首参必须是字符串字面量（事件名）；
+/// on 侧第二参必须是具名函数引用（匿名回调渲染不出跳数，不进通道）
+fn event_use_of(node: Node, src: &str, kind: &str, line: usize, col: usize) -> Option<EventUse> {
+    let args = node.child_by_field_name("arguments")?;
+    let mut named: Vec<Node> = Vec::new();
+    let mut cur = args.walk();
+    for a in args.children(&mut cur) {
+        if a.is_named() {
+            named.push(a);
+        }
+    }
+    drop(cur);
+    let first = *named.first()?;
+    if !matches!(
+        first.kind(),
+        "string" | "string_literal" | "interpreted_string_literal"
+    ) {
+        return None;
+    }
+    let name = unquote(text_of(first, src));
+    if name.is_empty() {
+        return None;
+    }
+    let handler = if kind == "on" {
+        let h = *named.get(1)?;
+        if !matches!(
+            h.kind(),
+            "identifier"
+                | "member_expression"
+                | "selector_expression"
+                | "field_expression"
+                | "attribute"
+                | "path_expression"
+                | "scoped_identifier"
+        ) {
+            return None;
+        }
+        let t = text_of(h, src);
+        let last = t.rsplit(['.', ':']).next().unwrap_or("");
+        if last.is_empty() {
+            return None;
+        }
+        Some(last.to_string())
+    } else {
+        None
+    };
+    Some(EventUse { kind: kind.to_string(), name, handler, line, col })
 }
 
 /// 文本中首个带引号字符串（路径提取用）
@@ -546,6 +630,7 @@ fn visit(
                 req_type,
                 is_exported: is_exported(node, src, conf, &name, &stack),
                 calls: Vec::new(),
+                events: Vec::new(),
             };
             let idx = funcs.len();
             funcs.push(rec);
@@ -616,8 +701,14 @@ fn visit(
     }
 
     if conf.call_kinds.contains(&kind) {
-        if let (Some((callee, recv)), Some(idx)) = (callee_of(node, src), rec_idx) {
-            funcs[idx].calls.push((callee, recv, node.start_position().row + 1));
+        if let (Some((callee, recv, col)), Some(idx)) = (callee_of(node, src), rec_idx) {
+            let line = node.start_position().row + 1;
+            if let Some(ekind) = event_api_of(&callee) {
+                if let Some(ev) = event_use_of(node, src, ekind, line, col) {
+                    funcs[idx].events.push(ev);
+                }
+            }
+            funcs[idx].calls.push((callee, recv, line, col));
         }
     }
 
@@ -632,9 +723,14 @@ fn extract_file(path: &Path, root: &Path, conf: &LangConf) -> Option<FileRec> {
         return None;
     }
     let src = std::fs::read_to_string(path).ok()?;
+    extract_file_src(path, root, conf, &src)
+}
+
+/// 从已读源码提取（增量路径：同一次 IO 的字节既做指纹又做解析，不重复读盘）
+fn extract_file_src(path: &Path, root: &Path, conf: &LangConf, src: &str) -> Option<FileRec> {
     let mut parser = Parser::new();
     parser.set_language(&conf.lang.into()).ok()?;
-    let tree = parser.parse(&src, None)?;
+    let tree = parser.parse(src, None)?;
     let module = path
         .strip_prefix(root)
         .ok()?
@@ -692,7 +788,7 @@ fn extract_file(path: &Path, root: &Path, conf: &LangConf) -> Option<FileRec> {
     Some(FileRec {
         module,
         file: path.strip_prefix(root).ok()?.to_string_lossy().replace('\\', "/"),
-        lang: conf.name,
+        lang: conf.name.to_string(),
         funcs: deduped,
         registrations,
         req_tags,
@@ -1009,21 +1105,15 @@ fn compile_globs(patterns: &[String]) -> Option<globset::GlobSet> {
     if any { b.build().ok() } else { None }
 }
 
-/// 提取调用图。`on_progress` 在遍历解析阶段回调（已处理文件数，每 20 个一次 + 收尾一次），
-/// 对齐 core 的 `&(dyn Fn(usize) + Send + Sync)` 惯例。
-pub fn extract(
-    root: &Path,
-    opts: &ExtractOptions,
-    on_progress: &(dyn Fn(usize) + Send + Sync),
-) -> Result<Value> {
+/// 遍历源码文件（gitignore 遵循 + 排除目录注入 + 规则 glob）→ (绝对路径, 仓库相对路径)。
+/// 排序保证产物确定性（重复运行 JSON 稳定，便于 diff/基线对照）。
+fn walk_files(root: &Path, opts: &ExtractOptions) -> Vec<(PathBuf, String)> {
     let confs = lang_confs();
     let excludes: HashSet<String> = SKIP_DIRS
         .iter()
         .map(|s| s.to_string())
         .chain(opts.excludes.iter().cloned())
         .collect();
-
-    // 遍历：ignore crate（遵循 .gitignore）+ 排除目录注入
     let walker = ignore::WalkBuilder::new(root)
         .hidden(false)
         .filter_entry(move |e| {
@@ -1035,8 +1125,7 @@ pub fn extract(
         })
         .build();
     let excl_set = compile_globs(&opts.exclude_globs);
-    let entry_excl_set = compile_globs(&opts.entry_exclude_globs);
-    let mut paths: Vec<PathBuf> = Vec::new();
+    let mut out: Vec<(PathBuf, String)> = Vec::new();
     for entry in walker.flatten() {
         if !entry.file_type().map(|t| t.is_file()).unwrap_or(false) {
             continue;
@@ -1045,36 +1134,121 @@ pub fn extract(
         if !confs.iter().any(|c| c.exts.contains(&ext)) {
             continue;
         }
+        let rel = entry
+            .path()
+            .strip_prefix(root)
+            .map(|r| r.to_string_lossy().replace('\\', "/"))
+            .unwrap_or_default();
         // 规则管理：文件级 glob 排除（按仓库相对路径匹配）
         if let Some(set) = &excl_set {
-            let rel = entry
-                .path()
-                .strip_prefix(root)
-                .map(|r| r.to_string_lossy().replace('\\', "/"))
-                .unwrap_or_default();
             if set.is_match(&rel) {
                 continue;
             }
         }
-        paths.push(entry.path().to_path_buf());
+        out.push((entry.path().to_path_buf(), rel));
     }
-    // 排序保证产物确定性（重复运行 JSON 稳定，便于 diff/基线对照）
-    paths.sort();
+    out.sort_by(|a, b| a.0.cmp(&b.0));
+    out
+}
 
+/// 内容指纹（FNV-1a 64 + 字节数）：判「真的变了」——mtime 误触（touch/换行符工具）
+/// 不重解析，只有内容真变才付 tree-sitter 成本
+pub fn content_fingerprint(bytes: &[u8]) -> (u64, u64) {
+    let mut h: u64 = 0xcbf29ce484222325;
+    for &b in bytes {
+        h ^= b as u64;
+        h = h.wrapping_mul(0x100000001b3);
+    }
+    (h, bytes.len() as u64)
+}
+
+/// 增量提取结果
+pub struct CacheOutcome {
+    /// 引擎 json 文档（与 [`extract`] 同构，多一个 `unresolved_refs` 清单）
+    pub doc: Value,
+    /// 全量 rec 行 (rel_path, hash, size, rec_json)——调用方整体替换缓存表
+    pub rec_rows: Vec<(String, u64, u64, String)>,
+    /// 本次真实解析 / 缓存复用的文件数
+    pub parsed: usize,
+    pub reused: usize,
+}
+
+/// 增量提取：`stored` 为 rel_path → (hash, size, rec_json) 的上次提取缓存。
+/// content 指纹未变的文件整条复用 rec（免 tree-sitter 解析），变更/新增才解析；
+/// 消解始终全量重放（符号索引重建是哈希查找，廉价且语义正确）——新符号出现后，
+/// 老文件里原先连不上边的调用点自动「复活」，即 unresolved_refs 的重试语义。
+pub fn extract_with_cache(
+    root: &Path,
+    opts: &ExtractOptions,
+    stored: &HashMap<String, (u64, u64, String)>,
+    on_progress: &(dyn Fn(usize) + Send + Sync),
+) -> Result<CacheOutcome> {
+    let confs = lang_confs();
+    let entries = walk_files(root, opts);
     let mut files: Vec<FileRec> = Vec::new();
-    for (i, path) in paths.iter().enumerate() {
+    let mut rec_rows: Vec<(String, u64, u64, String)> = Vec::new();
+    let mut parsed = 0usize;
+    let mut reused = 0usize;
+    for (i, (path, rel)) in entries.iter().enumerate() {
         let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
         let Some(conf) = confs.iter().find(|c| c.exts.contains(&ext)) else {
             continue;
         };
-        if let Some(rec) = extract_file(path, root, conf) {
-            files.push(rec);
+        if std::fs::metadata(path).map(|m| m.len()).unwrap_or(0) > MAX_PARSE_SIZE {
+            continue;
         }
+        let Ok(bytes) = std::fs::read(path) else { continue };
+        let (hash, size) = content_fingerprint(&bytes);
+        let cached = stored
+            .get(rel)
+            .filter(|(h, s, _)| *h == hash && *s == size)
+            .and_then(|(_, _, json)| serde_json::from_str::<FileRec>(json).ok());
+        let rec = match cached {
+            Some(mut r) => {
+                reused += 1;
+                // 缓存不带源码行（#[serde(skip)]）——embed_source 需要时按需补
+                if opts.embed_source && r.source_lines.is_empty() {
+                    r.source_lines = std::str::from_utf8(&bytes)
+                        .map(|s| s.lines().map(String::from).collect())
+                        .unwrap_or_default();
+                }
+                r
+            }
+            None => {
+                let Ok(src) = std::str::from_utf8(&bytes) else { continue };
+                let Some(r) = extract_file_src(path, root, conf, src) else {
+                    continue;
+                };
+                parsed += 1;
+                r
+            }
+        };
+        rec_rows.push((rel.clone(), hash, size, serde_json::to_string(&rec)?));
+        files.push(rec);
         if (i + 1) % 20 == 0 {
             on_progress(i + 1);
         }
     }
-    on_progress(paths.len());
+    on_progress(entries.len());
+    let doc = resolve_files(root, &mut files, opts)?;
+    Ok(CacheOutcome { doc, rec_rows, parsed, reused })
+}
+
+/// 提取调用图（全量解析；增量场景走 [`extract_with_cache`]）。
+/// `on_progress` 在遍历解析阶段回调（已处理文件数，每 20 个一次 + 收尾一次），
+/// 对齐 core 的 `&(dyn Fn(usize) + Send + Sync)` 惯例。
+pub fn extract(
+    root: &Path,
+    opts: &ExtractOptions,
+    on_progress: &(dyn Fn(usize) + Send + Sync),
+) -> Result<Value> {
+    Ok(extract_with_cache(root, opts, &HashMap::new(), on_progress)?.doc)
+}
+
+/// 全局消解与建图：输入全部文件的提取结果（新解析 + 缓存复用混编、顺序=遍历序），
+/// 输出引擎 json 文档。消解永远全量重放——调用点不因「上次没连上」而永久丢失。
+fn resolve_files(root: &Path, files: &mut [FileRec], opts: &ExtractOptions) -> Result<Value> {
+    let entry_excl_set = compile_globs(&opts.entry_exclude_globs);
 
     // 全局与模块内名字索引（持 String 键：后续注册解析要可变回写 files，
     // 索引不能借住 files 的 &str）
@@ -1092,7 +1266,7 @@ pub fn extract(
 
     // go/GoFrame：Req struct tag 全局表（struct名 → method path），注册解析时跨文件反查
     let mut req_tags: HashMap<String, (String, String)> = HashMap::new();
-    for f in &files {
+    for f in files.iter() {
         for (name, path, method) in &f.req_tags {
             req_tags
                 .entry(name.clone())
@@ -1156,6 +1330,7 @@ pub fn extract(
 
     let mut nodes = Vec::new();
     let mut edges: Vec<Value> = Vec::new();
+    let mut unresolved: Vec<Value> = Vec::new();
     let mut seen: HashSet<(String, String, usize)> = HashSet::new();
 
     for (fi, f) in files.iter().enumerate() {
@@ -1199,11 +1374,13 @@ pub fn extract(
             nodes.push(node);
 
             let mut dedup_call: HashSet<(&str, Option<&str>)> = HashSet::new();
-            for (callee, recv, line) in &g.calls {
+            for (callee, recv, line, col) in &g.calls {
                 if !dedup_call.insert((callee.as_str(), recv.as_deref())) {
                     continue;
                 }
                 let mut targets: Vec<(String, &str)> = Vec::new();
+                // 没连上边时的候选目标（边界报告用；std 噪声名不记）
+                let mut unres_cands: Vec<String> = Vec::new();
                 if recv.is_none() {
                     // 裸调用：local（同文件同名）→ heuristic（全局唯一且非 std 高频名）→ 丢弃
                     if let Some(gis) = local_idx.get(&(fi, callee.clone())) {
@@ -1218,6 +1395,12 @@ pub fn extract(
                                     format!("{}::{}", files[cfi].module, files[cfi].funcs[cgi].qualname),
                                     "heuristic",
                                 ));
+                            } else {
+                                unres_cands = cands
+                                    .iter()
+                                    .take(8)
+                                    .map(|(cfi, cgi)| format!("{}::{}", files[*cfi].module, files[*cfi].funcs[*cgi].qualname))
+                                    .collect();
                             }
                         }
                     }
@@ -1317,13 +1500,84 @@ pub fn extract(
                                     "receiver",
                                 ));
                             }
+                            // 仍不唯一：候选清单留给边界报告（「断在哪、可能到哪」）
+                            if targets.is_empty() {
+                                unres_cands = cands
+                                    .iter()
+                                    .take(8)
+                                    .map(|(cfi, cgi)| format!("{}::{}", files[*cfi].module, files[*cfi].funcs[*cgi].qualname))
+                                    .collect();
+                            }
                         }
                     }
                 }
-                for (dst, kind) in targets {
+                for (dst, kind) in &targets {
                     let key = (id.clone(), dst.clone(), *line);
                     if seen.insert(key) {
-                        edges.push(json!({"src": id, "dst": dst, "line": line, "kind": kind}));
+                        edges.push(json!({"src": id, "dst": dst, "line": line, "col": col, "kind": kind}));
+                    }
+                }
+                // 边界报告素材：没连上边的调用点（含候选目标）——链断处「为什么断、可能到哪」
+                if targets.is_empty() && !is_std_like_method(callee) {
+                    unresolved.push(json!({
+                        "src": id, "name": callee, "recv": recv, "line": line, "col": col,
+                        "candidates": unres_cands,
+                    }));
+                }
+            }
+        }
+    }
+
+    // 事件通道合成边：emit('x') ↔ on('x', fn) 按字面量事件名配对（emit 端行号定边位）。
+    // 双向 ≤6 端才成边——泛化通道（全仓 'change' 之类）扇出即弃，错边比缺边糟；
+    // kind="event" 供渲染层标注启发式跳数（provenance 语义）。
+    {
+        let mut emits: HashMap<&str, Vec<(String, usize)>> = HashMap::new();
+        let mut ons: HashMap<&str, Vec<String>> = HashMap::new();
+        for (fi, f) in files.iter().enumerate() {
+            for g in f.funcs.iter() {
+                let id = format!("{}::{}", f.module, g.qualname);
+                for ev in &g.events {
+                    match ev.kind.as_str() {
+                        "emit" => {
+                            emits.entry(ev.name.as_str()).or_default().push((id.clone(), ev.line));
+                        }
+                        "on" => {
+                            let Some(h) = &ev.handler else { continue };
+                            // handler 引用消解：同文件优先，其次全局唯一（与裸调用同规则）
+                            let hits: Vec<(usize, usize)> = local_idx
+                                .get(&(fi, h.clone()))
+                                .map(|gis| gis.iter().map(|&gi| (fi, gi)).collect())
+                                .or_else(|| {
+                                    global_idx.get(h).and_then(|c| (c.len() == 1).then(|| c.clone()))
+                                })
+                                .unwrap_or_default();
+                            for (tfi, tgi) in hits {
+                                let hid = format!(
+                                    "{}::{}",
+                                    files[tfi].module, files[tfi].funcs[tgi].qualname
+                                );
+                                ons.entry(ev.name.as_str()).or_default().push(hid);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+        for (name, emit_sites) in emits.iter() {
+            let Some(handlers) = ons.get(name) else { continue };
+            if emit_sites.len() > 6 || handlers.len() > 6 {
+                continue;
+            }
+            for (eid, eline) in emit_sites {
+                for hid in handlers {
+                    if eid == hid {
+                        continue;
+                    }
+                    let key = (eid.clone(), hid.clone(), *eline);
+                    if seen.insert(key) {
+                        edges.push(json!({"src": eid, "dst": hid, "line": eline, "col": 0, "kind": "event"}));
                     }
                 }
             }
@@ -1359,8 +1613,8 @@ pub fn extract(
 
     // 语言统计（文件数）
     let mut lang_files: HashMap<&str, usize> = HashMap::new();
-    for f in &files {
-        *lang_files.entry(f.lang).or_insert(0) += 1;
+    for f in files.iter() {
+        *lang_files.entry(f.lang.as_str()).or_insert(0) += 1;
     }
 
     Ok(json!({
@@ -1369,6 +1623,7 @@ pub fn extract(
         "edges": edges,
         "modules": Value::Object(modules),
         "langs": lang_files,
+        "unresolved_refs": unresolved,
     }))
 }
 
@@ -2065,5 +2320,121 @@ public class UserController {
             n["routes"][0], "GET /account/profile",
             "handler 签名 *GetProfileReq 反查 tag 升级标签"
         );
+    }
+
+    // ===== 增量缓存（extract_with_cache） =====
+
+    fn stored_of(out: &CacheOutcome) -> HashMap<String, (u64, u64, String)> {
+        out.rec_rows
+            .iter()
+            .map(|(p, h, s, j)| (p.clone(), (*h, *s, j.clone())))
+            .collect()
+    }
+
+    #[test]
+    fn cache_reuses_unchanged_files_and_reparses_changed() {
+        let (_d, root) = tmp_repo(&[
+            ("a.py", "def fa():\n    return 1\n"),
+            ("b.py", "def fb():\n    return fa()\n"),
+        ]);
+        let first =
+            extract_with_cache(&root, &ExtractOptions::default(), &HashMap::new(), &|_| {}).unwrap();
+        assert_eq!(first.parsed, 2);
+        assert_eq!(first.reused, 0);
+        assert_eq!(first.rec_rows.len(), 2);
+
+        // 全部未变：整批复用、产物与全量解析逐字节一致
+        let stored = stored_of(&first);
+        let second =
+            extract_with_cache(&root, &ExtractOptions::default(), &stored, &|_| {}).unwrap();
+        assert_eq!(second.parsed, 0, "指纹未变不得重解析");
+        assert_eq!(second.reused, 2);
+        assert_eq!(first.doc, second.doc, "缓存复用路径产物必须与全量解析一致");
+
+        // 只改 b.py：一个重解析、一个复用（mtime 无关，认内容指纹）
+        std::fs::write(
+            root.join("b.py"),
+            "def fb():\n    return fa()\n\ndef extra():\n    return 1\n",
+        )
+        .unwrap();
+        let third =
+            extract_with_cache(&root, &ExtractOptions::default(), &stored, &|_| {}).unwrap();
+        assert_eq!(third.parsed, 1);
+        assert_eq!(third.reused, 1);
+    }
+
+    #[test]
+    fn unresolved_refs_carry_candidates_for_boundary_report() {
+        let (_d, root) = tmp_repo(&[
+            ("main.py", "def caller(x):\n    return x.run()\n"),
+            ("a.py", "class A:\n    def run(self):\n        return 1\n"),
+            ("b.py", "class B:\n    def run(self):\n        return 2\n"),
+        ]);
+        let g = extract_default(&root);
+        // run 双候选且 recv 无法收窄 → 不连边（宁缺毋滥），但候选留档
+        assert!(!has_edge(&g, "caller", "A.run", "receiver"));
+        let unres = g["unresolved_refs"].as_array().unwrap();
+        let hit = unres
+            .iter()
+            .find(|u| u["name"] == "run" && u["src"].as_str().unwrap().ends_with("caller"))
+            .expect("未连边调用点应留档");
+        assert_eq!(hit["candidates"].as_array().unwrap().len(), 2, "候选目标清单：{hit}");
+        assert_eq!(hit["recv"], "x.run", "recv 记完整接收者表达式（既有语义）");
+    }
+
+    // ===== 事件通道合成边（emit ↔ on） =====
+
+    #[test]
+    fn event_channel_synthesizes_emit_to_handler_edges() {
+        let (_d, root) = tmp_repo(&[(
+            "app.py",
+            r#"
+def setup(b):
+    b.on('ready', on_ready)
+    b.emit(unknown_name)
+
+def fire(b):
+    b.emit('ready')
+
+def on_ready():
+    return 1
+"#,
+        )]);
+        let g = extract_default(&root);
+        assert!(
+            has_edge(&g, "fire", "on_ready", "event"),
+            "emit('ready') → on('ready') 合成 kind=event 边：{:?}",
+            g["edges"]
+        );
+        // 变量事件名不成通道（setup 里的 b.emit(unknown_name) 不产生任何 event 边）
+        let ev_edges: Vec<&Value> = g["edges"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|e| e["kind"] == "event")
+            .collect();
+        assert_eq!(ev_edges.len(), 1, "只成一对：{ev_edges:?}");
+    }
+
+    #[test]
+    fn event_channel_fanout_guard_skips_generic_events() {
+        // 7 个监听者挂同一事件名：泛化通道扇出超限 → 弃边（错边比缺边糟）
+        let mut src = String::from("def setup(b):\n");
+        for i in 0..7 {
+            src.push_str(&format!("    b.on('change', h{i})\n"));
+        }
+        src.push_str("def fire(b):\n    b.emit('change')\n");
+        for i in 0..7 {
+            src.push_str(&format!("def h{i}():\n    return {i}\n"));
+        }
+        let (_d, root) = tmp_repo(&[("app.py", &src)]);
+        let g = extract_default(&root);
+        let ev = g["edges"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|e| e["kind"] == "event")
+            .count();
+        assert_eq!(ev, 0, "扇出 >6 的事件通道不成边");
     }
 }
