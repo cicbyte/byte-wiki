@@ -96,7 +96,11 @@ function roleOf(n: CallGraphNode): 0 | 1 | 2 {
 
 function buildGraph() {
   const d = data.value;
-  if (!d || !canvasEl.value) return;
+  if (!d || !canvasEl.value) {
+    // 有数据但容器不在 = 挂载时序问题（曾致画布空白），必须留痕不静默
+    if (d && !canvasEl.value) console.warn("[ProjectGraph] 画布容器未挂载，跳过建网（检查 loading 时序）");
+    return;
+  }
   nodeById = new Map(d.nodes.map((n) => [n.id, n]));
   outEdges = new Map();
   inEdges = new Map();
@@ -333,11 +337,13 @@ async function loadData() {
       const text = await api.callchainRead(info.path);
       data.value = JSON.parse(text) as CallgraphData;
     }
+    // 先卸 loading 让画布容器挂载再建网——canvasEl 在 v-else 分支里，
+    // loading=true 时容器不存在，buildGraph 会静默早退（画布空白）
+    loading.value = false;
     await nextTick();
     buildGraph();
   } catch {
     missing.value = true;
-  } finally {
     loading.value = false;
   }
 }
