@@ -1401,7 +1401,6 @@ let srcDecorations: { clear(): void } | null = null;
   backdrop-filter: blur(6px);
   border: 1px solid var(--border-light);
   border-radius: 999px;
-  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.12);
   z-index: 5;
   transition: background var(--transition-fast);
 }
@@ -1788,7 +1787,6 @@ let srcDecorations: { clear(): void } | null = null;
   background: var(--bg-elevated);
   border: 1px solid var(--border-base);
   border-radius: var(--radius-md);
-  box-shadow: var(--shadow-md);
 }
 .cg-ctx-head {
   font-size: 12px;
@@ -2123,7 +2121,6 @@ let srcDecorations: { clear(): void } | null = null;
   background: var(--bg-card);
   border: 1px solid var(--border-card);
   border-radius: var(--radius-md);
-  box-shadow: var(--shadow-dropdown, 0 4px 16px rgba(0, 0, 0, 0.18));
   padding: 4px;
 }
 .cg-bigsearch-item {

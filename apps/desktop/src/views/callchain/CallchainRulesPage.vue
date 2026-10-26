@@ -234,6 +234,23 @@ onMounted(load);
 .row-del:hover {
   color: var(--color-danger, #e5484d);
 }
+/* 表格压平（antd table 默认容器投影在抽屉里浮起感重；留边框分层即可） */
+.rules-form :deep(.ant-table),
+.rules-form :deep(.ant-table-container),
+.rules-form :deep(.ant-table-wrapper) {
+  box-shadow: none !important;
+}
+.rules-form :deep(.ant-table) {
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+}
+.rules-form :deep(.ant-table-container) {
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+.rules-form :deep(.ant-table-thead > tr > th) {
+  background: var(--bg-surface);
+}
 /* 吸底操作条（抽屉滚动时贴底常驻） */
 .rules-foot {
   position: sticky;

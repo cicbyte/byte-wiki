@@ -842,7 +842,6 @@ function fmtSource(p: string) {
   background: var(--bg-elevated, var(--bg-card));
   border: 1px solid var(--border-light);
   border-radius: var(--radius-sm);
-  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.16);
   padding: 4px;
   display: flex;
   flex-direction: column;
