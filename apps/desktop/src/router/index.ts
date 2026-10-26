@@ -38,6 +38,12 @@ const routes = [
     meta: { title: "调用链", tab: "callgraph", fullsize: true },
   },
   {
+    path: "/repo/:id/graph",
+    name: "repo-graph",
+    component: () => import("@/views/graph/ProjectGraph.vue"),
+    meta: { title: "项目图谱", fullsize: true },
+  },
+  {
     path: "/repo/:id/walkthrough",
     name: "repo-walkthrough",
     component: () => import("@/views/wiki/Walkthrough.vue"),
