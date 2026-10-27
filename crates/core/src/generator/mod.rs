@@ -406,8 +406,14 @@ impl AppService {
         let on_event: &(dyn Fn(GenerateEvent) + Send + Sync) = &wrapped;
 
         // ---- 3）大纲：优先复用（保持文档结构稳定），无则全量重建 ----
+        // outline_reused：大纲复用时总览也沿用（总览输入只有大纲+模块清单，
+        // 不含页面内容——页面内容更新不影响总览语义，省一次 LLM）
+        let mut outline_reused = false;
         let outline = match read_outline(&wiki_dir) {
-            Some(o) if !o.pages.is_empty() => o,
+            Some(o) if !o.pages.is_empty() => {
+                outline_reused = true;
+                o
+            }
             _ => {
                 on_event(ev("outlining", 0, 0, "未找到既有大纲，重新设计"));
                 self.design_outline_auto(&client, repo.id, &repo.name, &branch, &modules, &known_files, repo_path, on_event)
@@ -448,16 +454,25 @@ impl AppService {
         let regen = jobs.iter().filter(|j| matches!(j.action, PageAction::Generate)).count();
 
         // ---- 5）总览（提前：仅依赖大纲与路径）+ 逐页 + 组装 ----
-        on_event(ev("generating", 0, total, "重新生成总览页"));
         let rel_paths: Vec<String> = jobs.iter().map(|j| j.rel_path.clone()).collect();
-        let (overview, out) = match self
-            .generate_overview(&client, repo.id, &repo.name, &branch, &outline, &rel_paths, &modules, repo_path, on_event)
-            .await
-        {
-            Ok(v) => v,
-            Err(e) => {
-                tracing::warn!("总览页生成失败（用占位替代）：{e}");
-                ("# Wiki 总览\n\n> 总览页生成失败，可稍后重新生成。\n".to_string(), Default::default())
+        let (overview, out) = match std::fs::read_to_string(wiki_dir.join("overview.md")) {
+            // 大纲复用 + 磁盘有既有总览 → 沿用（增量更新不再每次重生成总览）
+            Ok(s) if outline_reused && !s.trim().is_empty() => {
+                on_event(ev("generating", 0, total, "大纲未变，总览沿用既有内容"));
+                (s, Default::default())
+            }
+            _ => {
+                on_event(ev("generating", 0, total, "重新生成总览页"));
+                match self
+                    .generate_overview(&client, repo.id, &repo.name, &branch, &outline, &rel_paths, &modules, repo_path, on_event)
+                    .await
+                {
+                    Ok(v) => v,
+                    Err(e) => {
+                        tracing::warn!("总览页生成失败（用占位替代）：{e}");
+                        ("# Wiki 总览\n\n> 总览页生成失败，可稍后重新生成。\n".to_string(), Default::default())
+                    }
+                }
             }
         };
         let mut tokens = (out.prompt_tokens, out.completion_tokens);
@@ -651,24 +666,38 @@ impl AppService {
             })
             .collect();
 
+        // 沿用页一次性批量置 done——进度只「走」真实重生成的页。此前逐页推
+        // done 事件，每次更新进度条都是 0/N→N/N 全量走一遍，观感等同全量重新
+        // 生成（批量事件同时解决「骨架里恒灰」：沿用页开局即 done）
+        let kept_pages: Vec<PageProgress> = jobs
+            .iter()
+            .filter(|j| matches!(j.action, PageAction::Keep(_)))
+            .map(|j| {
+                let chain = outline.section_chain(&j.page).join(" / ");
+                page_progress(&j.page, &chain, "done", Some(j.rel_path.clone()))
+            })
+            .collect();
+        let kept = kept_pages.len();
+        if kept > 0 {
+            on_event(GenerateEvent {
+                phase: "generating".into(),
+                current: kept,
+                total,
+                message: format!("沿用 {kept} 个未变页面"),
+                prompt_tokens: 0,
+                completion_tokens: 0,
+                pages: Some(kept_pages),
+                stream: None,
+                repo_id: None,
+                branch: None,
+            });
+        }
+
         for job in jobs {
             let page = &job.page;
             let chain = outline.section_chain(page).join(" / ");
             if let PageAction::Keep(content) = &job.action {
-                done += 1;
-                // 沿用页也推状态（否则骨架里恒灰，用户无法分辨「没轮到」与「跳过」）
-                on_event(GenerateEvent {
-                    phase: "generating".into(),
-                    current: done,
-                    total,
-                    message: format!("沿用页面：{}", page.title),
-                    prompt_tokens: 0,
-                    completion_tokens: 0,
-                    pages: Some(vec![page_progress(page, &chain, "done", Some(job.rel_path.clone()))]),
-                    stream: None,
-                    repo_id: None,
-                    branch: None,
-                });
+                done += 1; // 批量事件已置 done，这里只收集结果不推事件
                 results.push(PageOutcome {
                     rel_path: job.rel_path.clone(),
                     title: page.title.clone(),

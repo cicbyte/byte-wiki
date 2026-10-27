@@ -369,10 +369,11 @@ async fn incremental_update_touches_only_affected_pages() {
     let outline_before = std::fs::read_to_string(wiki.join("outline.json")).unwrap();
     assert!(outline_json_pages(&outline_before) >= 1);
 
-    // LLM 调用：只多 1 次页面（p2）+ 1 次总览；大纲不重设计
+    // LLM 调用：只多 1 次页面（p2）；大纲不重设计；总览在大纲复用时沿用
+    //（总览输入只有大纲+模块清单，不含页面内容——增量更新不再重生成总览）
     assert_eq!(mock_counts(&state, "page"), page_calls_before + 1);
     assert_eq!(mock_counts(&state, "outline"), 1);
-    assert_eq!(mock_counts(&state, "overview"), 2);
+    assert_eq!(mock_counts(&state, "overview"), 1);
 
     // 无变更再更新 → no-op
     let s2 = svc.update_wiki(repo.to_str().unwrap(), &|_| {}).await.unwrap();
