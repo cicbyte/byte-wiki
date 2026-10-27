@@ -99,10 +99,63 @@ export const readTools: ToolDef[] = [
       { name: "branch", type: "string", required: false, desc: "分支（缺省=当前分支）" },
     ],
   },
+  {
+    name: "git_status",
+    desc: "git 工作区状态：暂存/修改/未跟踪文件清单。",
+    params: [
+      { name: "repo", type: "string", required: true, desc: "仓库绝对路径" },
+    ],
+  },
+  {
+    name: "git_diff",
+    desc: "git 差异文本：base 给 rev 看区间差异；缺省工作区 vs HEAD；path 可过滤。",
+    params: [
+      { name: "repo", type: "string", required: true, desc: "仓库绝对路径" },
+      { name: "base", type: "string", required: false, desc: "基准 rev（如 HEAD~3）；缺省=工作区" },
+      { name: "path", type: "string", required: false, desc: "只看某路径" },
+    ],
+  },
+  {
+    name: "git_log",
+    desc: "git 提交历史（sha/作者/日期/主题），可按路径过滤。",
+    params: [
+      { name: "repo", type: "string", required: true, desc: "仓库绝对路径" },
+      { name: "n", type: "number", required: false, desc: "条数（缺省 20）" },
+      { name: "path", type: "string", required: false, desc: "只看某路径" },
+    ],
+  },
+  {
+    name: "git_show",
+    desc: "某次提交的明细（stat + 补丁）。",
+    params: [
+      { name: "repo", type: "string", required: true, desc: "仓库绝对路径" },
+      { name: "rev", type: "string", required: true, desc: "提交 rev" },
+      { name: "path", type: "string", required: false, desc: "只看某路径" },
+    ],
+  },
 ];
 
-/** 修改类工具（当前无——写入类工具随 M3 开放） */
-export const writeTools: ToolDef[] = [];
+/** 写入工具（阶段 2：AI 的手） */
+export const writeTools: ToolDef[] = [
+  {
+    name: "create_card",
+    desc: "创建知识卡（人工知识区，生成永不覆盖、可被问答检索）。",
+    params: [
+      { name: "repo", type: "string", required: true, desc: "仓库绝对路径" },
+      { name: "title", type: "string", required: true, desc: "卡片标题" },
+      { name: "content", type: "string", required: true, desc: "正文 Markdown" },
+    ],
+  },
+  {
+    name: "edit_wiki_doc",
+    desc: "定向编辑 wiki 文档/知识卡：search/replace 块全有或全无（每块恰好命中一次）。",
+    params: [
+      { name: "repo", type: "string", required: true, desc: "仓库绝对路径" },
+      { name: "doc_path", type: "string", required: true, desc: "文档路径" },
+      { name: "replacements", type: "string", required: true, desc: '[{search, replace}] 数组' },
+    ],
+  },
+];
 
 /** stdio / HTTP 接入说明（配置 tab，MdPreview 渲染） */
 export const mcpGuide = `## stdio 接入（Claude Desktop / Cursor 等）

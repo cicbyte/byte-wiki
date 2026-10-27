@@ -1,8 +1,9 @@
 //! MCP server：rmcp 工具定义 + 双 transport 启动
 //!
-//! 工具面（9 个，全部只读）：status / list_repos / wiki_outline / read_wiki_doc /
-//! ask_repo / callgraph_overview / callgraph_focus / callgraph_chain / symbol_search
-//! —— Wiki 阅读、RAG 问答、调用链三查询一站暴露给 AI agent；写入类工具随 M3 开放。
+//! 工具面（15 个）：读 9 个（status / list_repos / wiki_outline / read_wiki_doc /
+//! ask_repo / callgraph_overview / callgraph_focus / callgraph_chain / symbol_search）
+//! + git 4 个（git_status / git_diff / git_log / git_show）+ 写入 2 个
+//! （create_card / edit_wiki_doc，全有或全无的定向编辑）。
 //! rmcp 2.x 参数用 `Parameters<T>` 聚合（字段 doc 注释进 JSON Schema 描述）。
 
 use std::sync::Arc;
@@ -115,6 +116,73 @@ struct SymbolSearchParams {
     branch: Option<String>,
 }
 
+// ---- git 工具（阶段 1：AI 了解项目差异） ----
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct GitDiffParams {
+    /// 仓库绝对路径
+    repo: String,
+    /// 基准 rev（如 HEAD~3、短 sha）；缺省 = 工作区 vs HEAD
+    #[serde(default)]
+    base: Option<String>,
+    /// 只看某路径（可选）
+    #[serde(default)]
+    path: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct GitLogParams {
+    /// 仓库绝对路径
+    repo: String,
+    /// 条数（1-200，缺省 20）
+    #[serde(default)]
+    n: Option<usize>,
+    /// 只看某路径的历史（可选）
+    #[serde(default)]
+    path: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct GitShowParams {
+    /// 仓库绝对路径
+    repo: String,
+    /// 提交 rev（sha / HEAD^ 等）
+    rev: String,
+    /// 只看某路径（可选）
+    #[serde(default)]
+    path: Option<String>,
+}
+
+// ---- 写入工具（阶段 2：AI 的手） ----
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct CreateCardParams {
+    /// 仓库绝对路径
+    repo: String,
+    /// 卡片标题（唯一 H1，自动 front-matter）
+    title: String,
+    /// 卡片正文（Markdown）
+    content: String,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct EditDocParams {
+    /// 仓库绝对路径
+    repo: String,
+    /// 文档路径（wiki_outline 可查；cards/ 前缀编辑知识卡）
+    doc_path: String,
+    /// search/replace 块（全有或全无：每块 search 须恰好命中一次）
+    replacements: Vec<SearchReplace>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct SearchReplace {
+    /// 查找文本（原文精确匹配）
+    search: String,
+    /// 替换文本
+    replace: String,
+}
+
 // ============ 辅助 ============
 
 /// CoreError/anyhow → MCP 错误（INTERNAL_ERROR：agent 侧能读到中文语义）
@@ -198,29 +266,8 @@ impl ByteWikiMcpServer {
         &self,
         Parameters(ReadDocParams { repo, doc_path, branch }): Parameters<ReadDocParams>,
     ) -> Result<CallToolResult, McpError> {
-        let root = std::path::Path::new(&repo)
-            .canonicalize()
-            .map_err(|e| err(format!("仓库路径无效：{repo}（{e}）")))?;
-        // 与桌面端 read_wiki_doc 同口径：cards 跨分支共享，其余产物按分支
-        let branch = branch.unwrap_or_else(|| crate::branch::current_branch(&root));
-        let (wiki, rel) = if let Some(card) = doc_path.strip_prefix("cards/") {
-            (crate::branch::cards_root(&root), card)
-        } else {
-            (crate::branch::wiki_root(&root, &branch), doc_path.as_str())
-        };
-        let full = wiki
-            .join(rel)
-            .canonicalize()
-            .map_err(|_| err(format!("文档不存在：{doc_path}（用 wiki_outline 查有效路径）")))?;
-        if !full.starts_with(&wiki) {
-            return Err(err(format!("非法路径：{doc_path}")));
-        }
-        let meta = std::fs::metadata(&full).map_err(err)?;
-        if meta.len() > 2 * 1024 * 1024 {
-            return Err(err(format!("文档过大（{}KB，上限 2MB）", meta.len() / 1024)));
-        }
-        let text = std::fs::read_to_string(&full).map_err(err)?;
-        Ok(text_result(text))
+        // 与桌面端同口径的服务层实现（CLI 亦复用）
+        Ok(text_result(self.svc.read_wiki_doc(&repo, &doc_path, branch.as_deref()).map_err(err)?))
     }
 
     /// RAG 问答
@@ -316,6 +363,85 @@ impl ByteWikiMcpServer {
         }
         Ok(json_result(hits))
     }
+
+    // ---- git 工具 ----
+
+    /// git 状态
+    #[tool(description = "git 工作区状态：暂存/修改/未跟踪文件清单（porcelain XY 状态）。")]
+    async fn git_status(
+        &self,
+        Parameters(RepoBranchParams { repo, .. }): Parameters<RepoBranchParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let root = std::path::PathBuf::from(&repo).canonicalize().map_err(err)?;
+        let st = crate::git::status(&root).map_err(err)?;
+        if st.is_empty() {
+            return Ok(text_result("工作区干净（无暂存/修改/未跟踪）".into()));
+        }
+        let mut out = format!("{} 个变更：\n", st.len());
+        for s in st {
+            out.push_str(&format!("- [{}{}] {}\n", s.x, s.y, s.path));
+        }
+        Ok(text_result(out))
+    }
+
+    /// git 差异
+    #[tool(description = "git 差异文本：base 给 rev（如 HEAD~3、短 sha）看区间差异；缺省看工作区 vs HEAD；path 可过滤单文件。")]
+    async fn git_diff(
+        &self,
+        Parameters(GitDiffParams { repo, base, path }): Parameters<GitDiffParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let root = std::path::PathBuf::from(&repo).canonicalize().map_err(err)?;
+        Ok(text_result(crate::git::diff(&root, base.as_deref(), path.as_deref()).map_err(err)?))
+    }
+
+    /// git 历史
+    #[tool(description = "git 提交历史（sha/作者/日期/主题），可按路径过滤。了解演进用。")]
+    async fn git_log(
+        &self,
+        Parameters(GitLogParams { repo, n, path }): Parameters<GitLogParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let root = std::path::PathBuf::from(&repo).canonicalize().map_err(err)?;
+        let logs = crate::git::log(&root, n.unwrap_or(20), path.as_deref()).map_err(err)?;
+        let mut out = String::new();
+        for l in logs {
+            out.push_str(&format!("{} {} {} {}\n", l.sha, l.date, l.author, l.subject));
+        }
+        Ok(text_result(out))
+    }
+
+    /// git 提交明细
+    #[tool(description = "某次提交的明细（stat + 补丁）：改了哪些文件、具体 diff。")]
+    async fn git_show(
+        &self,
+        Parameters(GitShowParams { repo, rev, path }): Parameters<GitShowParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let root = std::path::PathBuf::from(&repo).canonicalize().map_err(err)?;
+        Ok(text_result(crate::git::show(&root, &rev, path.as_deref()).map_err(err)?))
+    }
+
+    // ---- 写入工具 ----
+
+    /// 创建知识卡
+    #[tool(description = "创建知识卡（人工知识区，生成永不覆盖、可被问答检索）：沉淀结论/决策/备忘。返回卡片路径。")]
+    async fn create_card(
+        &self,
+        Parameters(CreateCardParams { repo, title, content }): Parameters<CreateCardParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let rel = self.svc.create_card(&repo, &title, &content).map_err(err)?;
+        Ok(text_result(format!("已创建知识卡：{rel}（检索需重建向量索引后生效）")))
+    }
+
+    /// 定向编辑文档
+    #[tool(description = "定向编辑 wiki 文档/知识卡：search/replace 块全有或全无（每块 search 须恰好命中一次，任一失败整体不变、可修后重试）。适合基于 git diff 的精确修订。")]
+    async fn edit_wiki_doc(
+        &self,
+        Parameters(EditDocParams { repo, doc_path, replacements }): Parameters<EditDocParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let reps: Vec<(String, String)> =
+            replacements.into_iter().map(|r| (r.search, r.replace)).collect();
+        self.svc.edit_wiki_doc(&repo, &doc_path, &reps).map_err(err)?;
+        Ok(text_result(format!("已编辑：{doc_path}（{} 块替换；RAG 检索需重建向量索引后刷新）", reps.len())))
+    }
 }
 
 /// ServerHandler：声明能力并挂上工具路由
@@ -332,10 +458,11 @@ impl ServerHandler for ByteWikiMcpServer {
         .with_protocol_version(ProtocolVersion::V_2024_11_05)
         .with_instructions(
             "byte-wiki — 本地优先的仓库级知识引擎。\n\
-             工具：status（服务状态）/ list_repos（仓库清单）→ wiki_outline + read_wiki_doc（读 Wiki）\
-             / ask_repo（RAG 问答）/ callgraph_overview + symbol_search + callgraph_focus + \
-             callgraph_chain（调用链查询）。repo 参数为仓库绝对路径（list_repos 可查）；\
-             branch 缺省 = 当前分支。"
+             读：list_repos（仓库清单）→ wiki_outline + read_wiki_doc（读 Wiki）/ ask_repo（RAG 问答）\
+             / callgraph_overview + symbol_search + callgraph_focus + callgraph_chain（调用链）。\n\
+             项目差异：git_status / git_diff / git_log / git_show。\n\
+             写：create_card（知识卡沉淀）/ edit_wiki_doc（search/replace 定向编辑，全有或全无）。\n\
+             repo 参数为仓库绝对路径（list_repos 可查）；branch 缺省 = 当前分支。"
                 .to_string(),
         )
     }

@@ -40,6 +40,10 @@ enum Commands {
     Export(cmd::ExportArgs),
     /// 查询既有调用链产物（节点/上下游/入口；测试用）
     CallchainQuery(cmd::CallchainQueryArgs),
+    /// git 只读封装（status/diff/log/show）——AI/脚本了解项目差异
+    Git(cmd::GitArgs),
+    /// 读写项目知识（outline/read/edit/card）——AI/脚本操作 Wiki 与知识卡
+    Wiki(cmd::WikiArgs),
     /// 运行 MCP 服务器（供 Claude Desktop / Cursor 等 AI 工具检索）
     #[command(name = "mcp")]
     Mcp(cmd::McpArgs),
@@ -70,6 +74,8 @@ fn main() -> anyhow::Result<()> {
             Commands::Callchain(a) => cmd::run_callchain(a, cli.json).await,
             Commands::Export(a) => cmd::run_export(a, cli.json).await,
             Commands::CallchainQuery(a) => cmd::run_callchain_query(a, cli.json).await,
+            Commands::Git(a) => cmd::run_git(a, cli.json).await,
+            Commands::Wiki(a) => cmd::run_wiki(a, cli.json).await,
             Commands::Mcp(a) => cmd::run_mcp(a).await,
             Commands::Api(a) => {
                 cmd::run_api(cmd::ApiArgs { action: a }).await

@@ -6,8 +6,10 @@
 mod backup;
 mod callchain;
 mod export;
+mod git;
 mod repo;
 mod server;
+mod wiki;
 
 // ---- 备份 / 恢复 ----
 pub use backup::{BackupArgs, RestoreArgs, run_backup, run_restore};
@@ -18,6 +20,8 @@ pub use repo::{OpenArgs, ReposArgs, run_open, run_repos};
 // ---- 调用链 ----
 pub use callchain::{CallchainArgs, CallchainQueryArgs, run_callchain, run_callchain_query};
 pub use export::{ExportArgs, run_export};
+pub use git::{GitArgs, run_git};
+pub use wiki::{WikiArgs, run_wiki};
 
 // ---- MCP / REST API 服务 ----
 // McpAction / Transport 是 McpArgs 的内部字段类型（server 模块内已用），main 不直接引用，故不重导出

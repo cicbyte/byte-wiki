@@ -13,6 +13,7 @@ pub mod db;
 pub mod error;
 pub mod generator;
 pub mod git_read;
+pub mod git;
 pub mod indexer;
 pub mod lang_ext;
 pub mod llm;
