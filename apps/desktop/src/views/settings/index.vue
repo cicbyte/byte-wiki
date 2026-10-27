@@ -8,14 +8,12 @@
  * 各分区拆分为独立子组件（自管状态 + 自带样式）：
  * - 数据 / 偏好 / 关于 → ./components/*
  * - 外观（主题/壁纸/动画）→ ./components/AppearanceForm 等既有子组件
- * - 帮助 → @/components/settings/HelpPane
  */
 import { ref, onMounted } from "vue";
 import {
   DatabaseOutlined,
   BgColorsOutlined,
   InfoCircleOutlined,
-  QuestionCircleOutlined,
   SettingOutlined,
   ApiOutlined,
 } from "@ant-design/icons-vue";
@@ -26,10 +24,7 @@ import StorageSection from "./components/StorageSection.vue";
 import PreferencesSection from "./components/PreferencesSection.vue";
 import ModelSection from "./components/ModelSection.vue";
 import AboutSection from "./components/AboutSection.vue";
-import HelpPane from "@/components/settings/HelpPane.vue";
 import { useLayoutStore } from "@/stores/layout";
-// HelpPane 内部使用 MdPreview，其样式需在此引入（与原页面级行为一致）
-import "md-editor-v3/lib/style.css";
 
 const layout = useLayoutStore();
 
@@ -38,7 +33,6 @@ const tabs = [
   { key: "preferences", icon: SettingOutlined, label: "偏好" },
   { key: "model", icon: ApiOutlined, label: "模型" },
   { key: "appearance", icon: BgColorsOutlined, label: "外观" },
-  { key: "help", icon: QuestionCircleOutlined, label: "帮助" },
   { key: "about", icon: InfoCircleOutlined, label: "关于" },
 ];
 const activeTab = ref("storage");
@@ -91,11 +85,6 @@ onMounted(() => {
         <AppearanceForm v-show="appearanceSub === 'theme'" />
         <WallpaperSection v-if="appearanceSub === 'wallpaper'" />
         <AnimationForm v-if="appearanceSub === 'animation'" />
-      </section>
-
-      <!-- 帮助 -->
-      <section v-else-if="activeTab === 'help'" class="pane" style="height: 100%; padding: 0;">
-        <HelpPane />
       </section>
 
       <AboutSection v-else-if="activeTab === 'about'" />
