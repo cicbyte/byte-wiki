@@ -344,7 +344,7 @@ function onImportFile(e: Event) {
   padding: 4px 12px; border: 1px solid var(--border-base); border-radius: 4px;
   background: transparent; color: var(--text-tertiary); font-size: 12px; cursor: pointer;
 }
-.mode-tab.active { background: var(--color-primary); color: #fff; border-color: var(--color-primary); }
+.mode-tab.active { background: var(--btn-primary-bg); color: var(--btn-primary-ink); border-color: var(--btn-primary-bg); }
 
 .visual-subhead { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; flex-wrap: wrap; }
 .editor-tabs { display: flex; gap: 2px; }
@@ -352,7 +352,7 @@ function onImportFile(e: Event) {
   padding: 4px 12px; border: 1px solid var(--border-base); border-radius: 4px;
   background: transparent; color: var(--text-tertiary); font-size: 12px; cursor: pointer;
 }
-.editor-tab.active { background: var(--color-primary); color: #fff; border-color: var(--color-primary); }
+.editor-tab.active { background: var(--btn-primary-bg); color: var(--btn-primary-ink); border-color: var(--btn-primary-bg); }
 .editor-hint { font-size: 11px; color: var(--text-tertiary); }
 .subhead-actions { display: flex; gap: 8px; margin-left: auto; }
 

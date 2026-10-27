@@ -185,11 +185,12 @@ function copyText(text: string) {
   transition: all var(--transition-fast);
   flex-shrink: 0;
 }
+/* 主钮底/墨走主题互斥令牌（明暗各配）——写死 #fff 在暗色浅主色下白上白看不清 */
 .toggle-btn.start {
-  background: var(--color-primary);
-  color: #fff;
+  background: var(--btn-primary-bg);
+  color: var(--btn-primary-ink);
 }
-.toggle-btn.start:hover:not(:disabled) { background: var(--color-primary-hover); }
+.toggle-btn.start:hover:not(:disabled) { background: color-mix(in srgb, var(--btn-primary-ink) 12%, var(--btn-primary-bg)); }
 .toggle-btn.stop {
   background: var(--danger-bg);
   color: var(--color-danger);

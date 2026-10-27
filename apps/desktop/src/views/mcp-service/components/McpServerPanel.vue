@@ -169,8 +169,10 @@ function copyText(text: string) {
   transition: all var(--transition-fast);
   flex-shrink: 0;
 }
-.toggle-btn.start { background: var(--color-primary); color: #fff; }
-.toggle-btn.start:hover:not(:disabled) { background: var(--color-primary-hover); }
+/* 主钮底/墨走主题互斥令牌（--btn-primary-bg/--btn-primary-ink 明暗各配）——
+   原写死 #fff 白字，暗色主题的浅主色下白上白看不清 */
+.toggle-btn.start { background: var(--btn-primary-bg); color: var(--btn-primary-ink); }
+.toggle-btn.start:hover:not(:disabled) { background: color-mix(in srgb, var(--btn-primary-ink) 12%, var(--btn-primary-bg)); }
 .toggle-btn.stop { background: var(--danger-bg); color: var(--color-danger); border: 1px solid var(--color-danger); }
 .toggle-btn.stop:hover:not(:disabled) { background: var(--color-danger); color: #fff; }
 .toggle-btn:disabled { opacity: 0.5; cursor: not-allowed; }
