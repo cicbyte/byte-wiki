@@ -68,6 +68,7 @@ export const menuGroups: MenuGroup[] = [
     icon: SettingOutlined,
     children: [
       // 调用链规则已按项目管理（跟随仓库），入口在调用链画布浮动条 ⚙
+      { key: "/docs", icon: FileTextOutlined, label: "文档" },
       { key: "/settings", icon: SettingOutlined, label: "设置" },
     ],
   },

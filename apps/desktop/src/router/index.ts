@@ -44,6 +44,12 @@ const routes = [
     meta: { title: "项目图谱", fullsize: true },
   },
   {
+    path: "/docs",
+    name: "docs",
+    component: () => import("@/views/docs/index.vue"),
+    meta: { title: "文档", fullsize: true },
+  },
+  {
     path: "/repo/:id/walkthrough",
     name: "repo-walkthrough",
     component: () => import("@/views/wiki/Walkthrough.vue"),
