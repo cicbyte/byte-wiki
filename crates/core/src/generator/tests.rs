@@ -387,6 +387,54 @@ fn outline_json_pages(raw: &str) -> usize {
         .unwrap_or(0)
 }
 
+/// 阶段 3：受影响页走「差异修订」路径——LLM 收到现有页面全文 + git diff，
+/// 而不是绑定文件全文；.gen-meta 记录 head_commit 作为下次 diff 基线
+#[tokio::test]
+async fn incremental_update_uses_diff_revision_prompt() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path().join("repo");
+    std::fs::create_dir_all(repo.join(".git")).unwrap();
+    // 真 git 仓（差异修订依赖 git diff 可用）
+    let g = |args: &[&str]| std::process::Command::new("git").arg("-C").arg(&repo).args(args).output();
+    let _ = g(&["init", "-q", "-b", "main"]);
+    let _ = g(&["config", "user.email", "t@t"]);
+    let _ = g(&["config", "user.name", "t"]);
+    std::fs::create_dir_all(repo.join("apps/cli")).unwrap();
+    std::fs::write(repo.join("apps/cli/main.rs"), "fn main() {}\n").unwrap();
+    std::fs::write(repo.join("README.md"), "# demo\n").unwrap();
+    let _ = g(&["add", "."]);
+    let _ = g(&["commit", "-q", "-m", "base"]);
+
+    let (base, state) = start_mock_llm().await;
+    let svc = svc_with_llm(dir.path(), &base);
+    svc.set_llm_cache_enabled(false);
+    svc.open_repo(repo.to_str().unwrap()).unwrap();
+    svc.generate_wiki(repo.to_str().unwrap(), &|_| {}).await.unwrap();
+
+    let wiki = repo.join(".bytewiki/branches/main");
+    // 生成成功 → gen-meta 记录 head_commit 基线
+    let meta_raw = std::fs::read_to_string(wiki.join(".gen-meta.json")).unwrap();
+    let meta: serde_json::Value = serde_json::from_str(&meta_raw).unwrap();
+    let baseline = meta["head_commit"].as_str().unwrap_or_default().to_string();
+    assert!(!baseline.is_empty(), "gen-meta 应记录 head_commit：{meta_raw}");
+
+    // 提交一个绑定文件变更（受影响页 p2 命令行入口）
+    std::fs::write(repo.join("apps/cli/main.rs"), "fn main() { /* v2 */ }\n").unwrap();
+    let _ = g(&["add", "."]);
+    let _ = g(&["commit", "-q", "-m", "v2"]);
+
+    let page_calls = mock_counts(&state, "page");
+    svc.update_wiki(repo.to_str().unwrap(), &|_| {}).await.unwrap();
+
+    // LLM 收到的是「差异修订」prompt：含 git diff 证据而非全文件重写
+    let logs = svc.list_llm_logs(repo.to_str().unwrap()).unwrap().0;
+    let last_page = logs.iter().rev().find(|l| l.stage == "page").expect("应有 page 调用");
+    let detail = crate::llm_log::read_detail(&svc.data_dir().to_path_buf(), 1, last_page.line).unwrap();
+    assert!(detail.user.contains("差异修订"), "应走差异修订 prompt");
+    assert!(detail.user.contains("v2"), "prompt 应含 diff 证据");
+    assert!(mock_counts(&state, "page") == page_calls + 1);
+}
+
 // ============ 克隆加载 ============
 
 #[test]

@@ -152,12 +152,16 @@ async fn backoff_on_rate_limit(
 /// 生成代次：prompt 结构发生实质变化时 bump，旧代页面不再沿用（整批重生成）
 const GEN_VERSION: u32 = 1;
 
-/// 生成元数据（断点续跑的兼容性判定：同供应商+同模型+同代次才沿用旧页面）
+/// 生成元数据（断点续跑的兼容性判定：同供应商+同模型+同代次才沿用旧页面；
+/// head_commit 是下次增量「差异修订」的 diff 基线——生成成功的时刻记下 HEAD）
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default)]
 struct GenMeta {
     provider: String,
     model: String,
     gen_version: u32,
+    /// 生成时 git HEAD（空 = 旧产物/无 git，增量回退全文件重生成）
+    #[serde(default)]
+    head_commit: String,
 }
 
 fn gen_meta_path(root: &Path, branch: &str) -> std::path::PathBuf {
@@ -174,6 +178,7 @@ fn write_gen_meta(root: &Path, branch: &str, provider_id: &str, model: &str) {
         provider: provider_id.to_string(),
         model: model.to_string(),
         gen_version: GEN_VERSION,
+        head_commit: crate::branch::head_commit(root),
     };
     let _ = std::fs::create_dir_all(crate::branch::wiki_root(root, branch));
     if let Ok(text) = serde_json::to_string_pretty(&meta) {
@@ -207,6 +212,41 @@ struct PageJob {
     /// .bytewiki/ 内相对路径（pages/…/x.md）
     rel_path: String,
     action: PageAction,
+    /// 差异修订素材（增量更新阶段 3）：(现有页面全文, 绑定文件自上次生成的 diff)。
+    /// None = 全量生成路径（首次生成 / 无基线 commit / diff 不可得回退）
+    revision: Option<(String, String)>,
+}
+
+/// 受影响页的差异上下文：绑定文件 ∩ 变更集逐个取 `git diff <基线> -- <file>`
+///（含未提交改动）。总量上限 120KB（超限截断并标注——修订依据太长反而稀释注意力）；
+/// 任一 diff 失败 → None（该页回退全文件重生成，宁稳勿猜）。
+fn build_diff_ctx(
+    root: &Path,
+    baseline: &str,
+    page_files: &[String],
+    changed: &HashSet<String>,
+) -> Option<String> {
+    const CAP: usize = 120 * 1024;
+    let mut out = String::new();
+    for f in page_files {
+        if !changed.contains(f) {
+            continue;
+        }
+        let d = crate::git::diff(root, Some(baseline), Some(f)).ok()?;
+        if d.trim().is_empty() {
+            continue;
+        }
+        if out.len() + d.len() > CAP {
+            out.push_str(&format!("\n\n（其余差异已截断：上下文超 {CAP} 字节上限）\n"));
+            break;
+        }
+        out.push_str(&format!("=== {f} ===\n{d}\n\n"));
+    }
+    if out.is_empty() {
+        None
+    } else {
+        Some(out)
+    }
 }
 
 /// 页面产物（顺序与 outline.pages 一致）
@@ -438,9 +478,16 @@ impl AppService {
             branch: None,
         });
         persist_outline(root, &branch, &outline);
-        write_gen_meta(root, &branch, &provider.id, &provider.chat_model);
+        // 不在此写 gen-meta：它刷新 head_commit 基线，而差异修订要读旧基线；
+        // 组装成功后再落新基线（更新中断则保留旧基线，重跑差异仍完整）
 
         // ---- 4）页任务：绑定文件 ∩ 变更 → 重生成；其余从磁盘沿用 ----
+        // 差异修订素材（阶段 3）：基线 = 上次生成时记录的 HEAD；受影响页带上
+        // 现有全文 + 绑定文件的 git diff（vs 基线，含未提交改动）。基线缺失
+        // （旧产物）或 diff 不可得 → 回退全文件重生成。
+        let baseline_commit = read_gen_meta(root, &branch)
+            .map(|m| m.head_commit)
+            .filter(|c| !c.is_empty());
         for job in &mut jobs {
             let untouched = !job.page.files.iter().any(|f| changed.contains(f));
             if untouched {
@@ -448,6 +495,16 @@ impl AppService {
                     if !old.trim().is_empty() && !old.contains("本页生成失败") {
                         job.action = PageAction::Keep(old);
                     }
+                }
+                continue;
+            }
+            // 受影响页：现有内容 + 变更文件的 diff
+            let existing = std::fs::read_to_string(wiki_dir.join(&job.rel_path))
+                .ok()
+                .filter(|s| !s.trim().is_empty() && !s.contains("本页生成失败"));
+            if let (Some(base), Some(existing)) = (baseline_commit.as_deref(), existing) {
+                if let Some(diff_ctx) = build_diff_ctx(root, base, &job.page.files, &changed) {
+                    job.revision = Some((existing, diff_ctx));
                 }
             }
         }
@@ -482,6 +539,9 @@ impl AppService {
 
         on_event(ev("assembling", 0, 0, "写入 .bytewiki/"));
         self.assemble_wiki(&canon, repo.id, &branch, &outline, &results, &overview, &modules, &provider.chat_model)?;
+        // 组装成功才落新基线（head_commit）——下一次增量的 diff 从这里算起；
+        // 更新中断则保留旧基线，重跑时差异仍完整
+        write_gen_meta(root, &branch, &provider.id, &provider.chat_model);
 
         let detail = format!(
             "files={} pages_regenerated={} failed={} prompt_tok={} completion_tok={}",
@@ -631,7 +691,7 @@ impl AppService {
                 let root_taken = dir_taken.entry("pages".into()).or_default();
                 format!("pages/{}.md", unique_name(&safe_name(&page.title), root_taken))
             });
-            jobs.push(PageJob { page: page.clone(), rel_path: rel, action: PageAction::Generate });
+            jobs.push(PageJob { page: page.clone(), rel_path: rel, action: PageAction::Generate, revision: None });
         }
         jobs
     }
@@ -727,7 +787,7 @@ impl AppService {
                 if attempt > 0 {
                     tracing::warn!("页面「{}」第 {attempt} 次重试", page.title);
                 }
-                match self.generate_one_page(client, repo_id, repo_name, branch, repo_path, root, outline, page, known_files, file_module, modules, &edges, done, total, attempt as u32 + 1, on_event).await {
+                match self.generate_one_page(client, repo_id, repo_name, branch, repo_path, root, outline, page, job.revision.as_ref(), known_files, file_module, modules, &edges, done, total, attempt as u32 + 1, on_event).await {
                     Ok((c, out)) => {
                         tokens.0 += out.prompt_tokens;
                         tokens.1 += out.completion_tokens;
@@ -800,6 +860,7 @@ impl AppService {
         root: &Path,
         outline: &WikiOutline,
         page: &OutlinePage,
+        revision: Option<&(String, String)>,
         known_files: &HashSet<String>,
         file_module: &HashMap<String, String>,
         modules: &[ModuleCtx],
@@ -848,9 +909,17 @@ impl AppService {
         let rag_ctx = String::new();
 
         let min_files = page.files.len().min(5);
-        let messages = page_messages(
-            &page.title, &page.brief, &page.description, &related, &module_ctx, &file_ctx, &rag_ctx, min_files,
-        );
+        // 差异修订路径（增量更新）：现有全文 + 绑定文件 diff 定向修订；
+        // 素材缺失（首次生成/回退）走全文件重生成
+        let messages = match revision {
+            Some((existing, diff_ctx)) => crate::generator::pages::revision_messages(
+                &page.title, &page.brief, &page.description, &related, &module_ctx,
+                existing, diff_ctx,
+            ),
+            None => page_messages(
+                &page.title, &page.brief, &page.description, &related, &module_ctx, &file_ctx, &rag_ctx, min_files,
+            ),
+        };
         let out = self
             .llm_call_logged(client, repo_id, repo_name, branch, "page", &page.title, attempt,
                 &messages, "generating", current, total,

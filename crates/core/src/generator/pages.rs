@@ -213,6 +213,37 @@ pub fn page_messages(
     ]
 }
 
+/// 差异修订 prompt（增量更新阶段 3）：输入 = 现有页面全文 + 绑定文件自上次
+/// 生成的 git diff，指令 = 只改差异触及的部分——比全文件重写省 token，且
+/// 未触及内容的结构/措辞零漂移
+pub fn revision_messages(
+    page_title: &str,
+    brief: &str,
+    description: &str,
+    related: &[String],
+    module_ctx: &str,
+    existing_page: &str,
+    diff_ctx: &str,
+) -> Vec<ChatMessage> {
+    let system = "你是资深技术作家，正在**修订**一份既有的仓库 Wiki 页面。\
+只输出修订后的完整页面 Markdown（`# 标题` 开头），不臆造，不做前置说明，不输出 diff。\
+修订原则：差异未触及的内容**一律原样保留**（标题层级/代码示例/表格/链接都不要重写润色）；\
+仅针对给定差异更新受影响的部分；代码示例以差异后的最新代码为准；\
+页内 .md 相对链接保持有效。";
+    let related_list = if related.is_empty() { "（无）".to_string() } else { related.join("；") };
+    let user = format!(
+        "【Wiki 页面差异修订】\n\n<页面标题>{page_title}</页面标题>\n\
+<页面定位>{description}</页面定位>\n\
+<写作要点（大纲阶段的指令，仍需满足）>{brief}</写作要点>\n\n\
+<相关页面>{related_list}</相关页面>\n\n\
+<模块统计（A 依赖 B）>\n{module_ctx}</模块统计>\n\n\
+<现有页面全文（修订基底；未受差异影响的部分保持原样）>\n{existing_page}</现有页面全文>\n\n\
+<绑定文件自上次生成以来的差异（git diff，修订依据）>\n{diff_ctx}</绑定文件差异>\n\n\
+输出修订后的完整页面 Markdown 全文。"
+    );
+    vec![ChatMessage::system(system), ChatMessage::user(user)]
+}
+
 /// 总览页 prompt（生成 wiki 的入口 overview.md；页面目录带真实相对链接，
 /// 前端拦截 .md 链接实现文档间跳转）
 #[allow(clippy::too_many_arguments)]
