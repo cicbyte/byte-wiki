@@ -6,7 +6,22 @@ import { fileURLToPath, URL } from "node:url";
 const host = process.env.TAURI_DEV_HOST;
 
 export default defineConfig(async () => ({
-  plugins: [vue()],
+  plugins: [
+    vue(),
+    // dev 下 /docs/（目录）会被 SPA fallback 加载成应用壳（VitePress 站内
+    // 首页链接即指向它）——重写到真实产物文件，行为与生产静态服务一致
+    {
+      name: "docs-index-rewrite",
+      configureServer(server) {
+        server.middlewares.use((req, _res, next) => {
+          if (req.url === "/docs/" || req.url === "/docs") {
+            req.url = "/docs/index.html";
+          }
+          next();
+        });
+      },
+    },
+  ],
   resolve: {
     alias: {
       "@": fileURLToPath(new URL("./src", import.meta.url)),

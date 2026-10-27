@@ -1,0 +1,14 @@
+/**
+ * VitePress 默认主题在 <1280px 会把明暗切换收进 VPNavBarExtra（⋯ 更多），
+ * 文档页 iframe 宽度常低于该阈值——用户得点「更多」才能切主题。
+ * 覆盖：≥768px（非手机布局）直接显示明暗按钮、隐藏 extra flyout
+ * （extra 里只有主题项，二选一等价）；<768px 保持手机汉堡菜单原生行为。
+ */
+@media (min-width: 768px) {
+  .VPNavBar .VPNavBarAppearance {
+    display: flex;
+  }
+  .VPNavBar .VPNavBarExtra {
+    display: none;
+  }
+}

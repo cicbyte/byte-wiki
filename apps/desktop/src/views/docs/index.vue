@@ -2,9 +2,11 @@
   <div class="docs-view">
     <iframe
       v-if="ready"
+      ref="frameEl"
       :src="frameSrc"
       class="docs-frame"
       title="byte-wiki 文档"
+      @load="syncTheme"
     />
     <div v-else class="docs-empty">
       <EmptyState :text="hint" />
@@ -13,14 +15,34 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from "vue";
+import { ref, onMounted, watch } from "vue";
 import EmptyState from "@/components/common/EmptyState.vue";
+import { useThemeStore } from "@/stores/theme";
 
 // VitePress 构建产物部署在 public/docs/（vite build 拷到 dist/docs/），同源加载。
 // base 配置为 /docs/，iframe 指向 /docs/ 即加载 index.html。
 const ready = ref(false);
 const frameSrc = ref("about:blank");
 const hint = ref("文档加载中…");
+const frameEl = ref<HTMLIFrameElement>();
+const theme = useThemeStore();
+
+/** 主题同步：文档站跟随应用明暗——同源 iframe 直接改 documentElement 的
+ * dark 类，并写 VitePress 记忆键（'dark'/'light'，冷启动也保持一致） */
+function syncTheme() {
+  const frame = frameEl.value;
+  const win = frame?.contentWindow;
+  if (!frame || !win) return;
+  try {
+    frame.contentDocument?.documentElement.classList.toggle("dark", theme.isDark);
+    win.localStorage.setItem("vitepress-theme-appearance", theme.isDark ? "dark" : "light");
+  } catch {
+    // 跨源兜底：不打断展示（同源部署理论上不走这里）
+  }
+}
+
+// 应用切主题 → 文档跟着切（iframe 内 VitePress 自己的开关仍可用，下次同步会覆盖）
+watch(() => theme.isDark, () => syncTheme());
 
 onMounted(async () => {
   // 探测 /docs/index.html 是否为 VitePress 产物。dev 模式下产物缺失时
